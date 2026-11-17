@@ -1,0 +1,1208 @@
+function doGet(e) {
+  return HtmlService.createHtmlOutputFromFile('Index')
+    .setTitle('PINTAR PUTRI & PUTRA - Presensi Sekolah')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no');
+}
+function onEdit(e) {
+  if (!e || !e.range) return;
+  let sheetName = e.range.getSheet().getName();
+  let triggerSheets = ["Jadwal_Putra", "Jadwal_Putri", "Master_Guru", "Master_Kamar_Putra", "Master_Kamar_Putri"];
+  if (triggerSheets.includes(sheetName)) {
+    clearCacheSystem();
+  }
+}
+function getFastData(sheet) {
+  if (!sheet) return [];
+  let lr = sheet.getLastRow();
+  let lc = sheet.getLastColumn();
+  if (lr < 1 || lc < 1) return [];
+  return sheet.getRange(1, 1, lr, lc).getValues();
+}
+function getFastDateStr(d) {
+  if (!d) return "";
+  let dateObj = (d.constructor === Date) ? d : new Date(d);
+  if (!isNaN(dateObj.getTime())) {
+    let m = dateObj.getMonth() + 1, day = dateObj.getDate();
+    return dateObj.getFullYear() + "-" + (m < 10 ? '0' + m : m) + "-" + (day < 10 ? '0' + day : day);
+  }
+  return String(d);
+}
+function getFastDateIndo(d) {
+  if (!d) return "";
+  let dateObj = (d.constructor === Date) ? d : new Date(d);
+  if (!isNaN(dateObj.getTime())) {
+    let m = dateObj.getMonth() + 1, day = dateObj.getDate();
+    return (day < 10 ? '0' + day : day) + "/" + (m < 10 ? '0' + m : m) + "/" + dateObj.getFullYear();
+  }
+  return String(d);
+}
+function formatKelas(val) {
+  if (val instanceof Date) {
+    let d = val.getDate(), m = val.getMonth() + 1;
+    return (d < 10 ? '0' + d : d) + "-" + (m < 10 ? '0' + m : m);
+  }
+  let strVal = String(val || "").trim();
+  if (strVal.includes('T') && strVal.endsWith('Z')) {
+    let t = new Date(strVal);
+    if (!isNaN(t.getTime())) {
+      let d = t.getDate(), m = t.getMonth() + 1;
+      return (d < 10 ? '0' + d : d) + "-" + (m < 10 ? '0' + m : m);
+    }
+  }
+  return strVal.toUpperCase();
+}
+function getRecentData(sheet, limit = 4000) {
+  if (!sheet) return [];
+  let lr = sheet.getLastRow();
+  let lc = sheet.getLastColumn();
+  if (lr < 1 || lc < 1) return [];
+  if (lr <= limit) return sheet.getRange(1, 1, lr, lc).getValues();
+  let header = sheet.getRange(1, 1, 1, lc).getValues();
+  let body = sheet.getRange(lr - limit + 1, 1, limit, lc).getValues();
+  return header.concat(body);
+}
+function getMasterDataCached(sheetName) {
+  const cache = CacheService.getScriptCache();
+  const cachedData = cache.get(sheetName);
+  if (cachedData) { try { return JSON.parse(cachedData); } catch(e) { } }
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+  if (!sheet) return [];
+  const data = getFastData(sheet);
+  try { if (data.length < 5000) { cache.put(sheetName, JSON.stringify(data), 3600); } } catch(e) {}
+  return data;
+}
+function clearCacheSystem() {
+  const cache = CacheService.getScriptCache();
+  cache.removeAll(["Master_Siswa_Putra", "Master_Siswa_Putri", "Jadwal_Putra", "Jadwal_Putri", "Master_Kamar_Putra", "Master_Kamar_Putri", "Master_Guru"]);
+  return "Memori Cache Berhasil Dibersihkan! Sistem siap dengan data terbaru.";
+}
+function getListGuru(jenis, gender) {
+  const data = getMasterDataCached("Master_Guru");
+  let res = [];
+  let targetJabatan = "Guru";
+  if (jenis === "Asrama") targetJabatan = (gender === "Putra" ? "Musyrif" : "Musyrifah");
+  else if (jenis === "Al-Quran") targetJabatan = "Qur'an";
+  for(let i=1, len=data.length; i<len; i++) {
+    if(data[i][1]) {
+      let jabatan = String(data[i][2] || "").trim();
+      if(jabatan === "" || jabatan.toLowerCase().includes(targetJabatan.toLowerCase()) || jenis === "Al-Quran" || jenis === "Semua") {
+        res.push(String(data[i][1]).trim());
+      }
+    }
+  }
+  return res.sort((a, b) => a.localeCompare(b));
+}
+function getKamarMusyrif(namaGuru, gender) {
+  let data = getMasterDataCached("Master_Kamar_" + gender);
+  let reqGuru = String(namaGuru).trim().toLowerCase().replace(/["']/g, "").replace(/\s+/g, " ");
+  let rooms = [];
+  for(let i=1; i<data.length; i++) {
+    let col0 = String(data[i][0]).trim();
+    let col1 = String(data[i][1]).trim().toLowerCase().replace(/["']/g, "").replace(/\s+/g, " ");
+    if (col1 && (col1.includes(reqGuru) || reqGuru.includes(col1))) { if (col0) rooms.push(col0); } 
+    else if (col0 && (col0.includes(reqGuru) || reqGuru.includes(col0))) { if (String(data[i][1]).trim()) rooms.push(String(data[i][1]).trim()); }
+  }
+  return rooms.sort((a, b) => a.localeCompare(b));
+}
+function getJadwal(hari, namaGuru, gender) {
+  const data = getMasterDataCached("Jadwal_" + gender);
+  let hasil = [];
+  let jadwalUnik = new Set();
+  let reqHari = String(hari).trim().toLowerCase();
+  let reqGuru = String(namaGuru).trim().toLowerCase().replace(/["']/g, "").replace(/\s+/g, " ");
+  if (!reqGuru) return [];
+  for (let i = 1, len = data.length; i < len; i++) {
+    if (String(data[i][1]).trim().toLowerCase() !== reqHari) continue;
+    let rowGuru = String(data[i][0]).trim().toLowerCase().replace(/["']/g, "").replace(/\s+/g, " ");
+    if (rowGuru && (rowGuru.includes(reqGuru) || reqGuru.includes(rowGuru))) {
+      let kls = formatKelas(data[i][2]);
+      let mpl = String(data[i][3]).trim().toUpperCase();
+      let gabungan = kls + "|" + mpl;
+      if(!jadwalUnik.has(gabungan)) {
+        jadwalUnik.add(gabungan);
+        hasil.push({ kelas: kls, mapel: mpl, jamKe: String(data[i][4]).trim() });
+      }
+    }
+  }
+  hasil.sort((a, b) => a.kelas.localeCompare(b.kelas) || a.mapel.localeCompare(b.mapel));
+  return hasil;
+}
+function getSiswaForm(tanggal, guru, targetGrup, mapelAtauKeperluan, jenisPresensi, gender) {
+  const dataSiswa = getMasterDataCached("Master_Siswa_" + gender);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheetLogName = (jenisPresensi === "Al-Quran") ? ("Log_AlQuran_" + gender) : ("Log_" + jenisPresensi + "_" + gender);
+  const sheetLog = ss.getSheetByName(sheetLogName);
+  if (!sheetLog) return { error: "Sheet " + sheetLogName + " tidak ada!" };
+  const dataAbsen = getRecentData(sheetLog, 4000);
+  let dataAsramaPagi = [];
+  
+  if (jenisPresensi !== "Asrama") {
+    let sheetAsrama = ss.getSheetByName("Log_Asrama_" + gender);
+    if (sheetAsrama) dataAsramaPagi = getRecentData(sheetAsrama, 4000);
+  }
+  
+  let reqMapel = String(mapelAtauKeperluan).trim();
+  let reqGuru = String(guru).trim().toLowerCase().replace(/["']/g, "").replace(/\s+/g, " ");
+  let reqGrupStr = String(targetGrup).trim();
+  let targetGrupArray = reqGrupStr.split(",").map(item => item.trim().toUpperCase());
+  
+  let mapSiswa = new Map();
+  let indexNamaSiswa = 1;
+  let indexPencarian = 2; 
+  if (jenisPresensi === "Asrama") indexPencarian = 3;
+  else if (jenisPresensi === "Al-Quran") indexPencarian = 4;
+  
+  for (let i = 1, len = dataSiswa.length; i < len; i++) {
+    let valSiswa = formatKelas(dataSiswa[i][indexPencarian]);
+    let kelasAsliSiswa = formatKelas(dataSiswa[i][indexPencarian]);
+    let isMatch = false;
+    for(let t=0; t<targetGrupArray.length; t++) {
+      let target = targetGrupArray[t];
+      if (target !== "" && valSiswa !== "" && (valSiswa === target || valSiswa.includes(target) || target.includes(valSiswa))) { isMatch = true; break; }
+    }
+    if (isMatch) {
+      let nama = String(dataSiswa[i][indexNamaSiswa]).trim();
+      let defaultStatus = 'H', defaultKet = '';
+      if (jenisPresensi !== "Asrama" && dataAsramaPagi.length > 0) {
+        for (let a = 1; a < dataAsramaPagi.length; a++) {
+          if (getFastDateStr(dataAsramaPagi[a][1]) === tanggal && String(dataAsramaPagi[a][5]).trim() === nama) {
+            let statusAsrama = String(dataAsramaPagi[a][6]).toUpperCase();
+            if (statusAsrama === 'S' || statusAsrama === 'I' || statusAsrama === 'A') { defaultStatus = statusAsrama; defaultKet = "Otomatis Asrama: " + String(dataAsramaPagi[a][7]); }
+            break;
+          }
+        }
+      }
+      mapSiswa.set(nama, { nama: nama, status: defaultStatus, keterangan: defaultKet, tilawah: '', murajaah: '', setoran: '', kelasAsli: kelasAsliSiswa });
+    }
+  }
+  
+  let materi = "", isEdit = false;
+  for (let i = dataAbsen.length - 1; i >= 1; i--) {
+    if (getFastDateStr(dataAbsen[i][1]) !== tanggal) continue;
+    let rowGuru = String(dataAbsen[i][2]).trim().toLowerCase().replace(/["']/g, "").replace(/\s+/g, " ");
+    
+    if (!rowGuru.includes(reqGuru) && !reqGuru.includes(rowGuru)) continue;
+    
+    if (jenisPresensi === "Al-Quran") {
+      if (formatKelas(dataAbsen[i][3]) !== reqGrupStr) continue;
+      isEdit = true;
+      let s = mapSiswa.get(String(dataAbsen[i][4]).trim());
+      if (s) { s.status = dataAbsen[i][5]; s.keterangan = dataAbsen[i][6]; s.tilawah = dataAbsen[i][7] || ''; s.murajaah = dataAbsen[i][8] || ''; s.setoran = dataAbsen[i][9] || ''; }
+    } else {
+      if (formatKelas(dataAbsen[i][4]) !== reqGrupStr) continue;
+      if (String(dataAbsen[i][3]).trim() !== reqMapel) continue;
+      isEdit = true;
+      materi = String(dataAbsen[i][8] || '');
+      let s = mapSiswa.get(String(dataAbsen[i][5]).trim());
+      if (s) { s.status = dataAbsen[i][6]; s.keterangan = dataAbsen[i][7]; }
+    }
+  }
+  let arrSiswaSorted = Array.from(mapSiswa.values()).sort((a, b) => a.nama.localeCompare(b.nama));
+  return { siswa: arrSiswaSorted, materi: materi, isEdit: isEdit, grupAktif: reqGrupStr };
+}
+function simpanAbsen(dataAbsen) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let targetSheetName = (dataAbsen.jenisPresensi === "Al-Quran") ? ("Log_AlQuran_" + dataAbsen.gender) : ("Log_" + dataAbsen.jenisPresensi + "_" + dataAbsen.gender);
+  const sheet = ss.getSheetByName(targetSheetName);
+  if (!sheet) return "Gagal: Sheet " + targetSheetName + " tidak ada!";
+  const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  
+  let reqGuruRaw = String(dataAbsen.guru).trim();
+  let reqGuru = reqGuruRaw.toLowerCase().replace(/["']/g, "").replace(/\s+/g, " ");
+  
+  let reqGrup = dataAbsen.kelas.trim();
+  let reqGrupArray = reqGrup.split(",").map(x => x.trim().toUpperCase());
+  let reqMapel = dataAbsen.mapel.trim();
+  let reqTgl = dataAbsen.tanggal;
+  let rowsToDelete = [];
+  let lr = sheet.getLastRow();
+  let lc = sheet.getLastColumn();
+  
+  if (lr > 1) {
+     let limit = 4000;
+     let startRow = (lr > limit) ? (lr - limit + 1) : 2;
+     let numRows = lr - startRow + 1;
+     let data = sheet.getRange(startRow, 1, numRows, lc).getValues();
+     let offset = startRow - 1; 
+     for (let i = data.length - 1; i >= 0; i--) {
+        if (getFastDateStr(data[i][1]) !== reqTgl) continue;
+        let rowGuru = String(data[i][2]).trim().toLowerCase().replace(/["']/g, "").replace(/\s+/g, " ");
+        if (!rowGuru.includes(reqGuru) && !reqGuru.includes(rowGuru)) continue;
+        if (dataAbsen.jenisPresensi === "Al-Quran") { 
+            let rowGrp = formatKelas(data[i][3]);
+            if (!reqGrupArray.includes(rowGrp) && rowGrp !== reqGrup.toUpperCase()) continue; 
+        } else { 
+            let rowGrp = formatKelas(data[i][4]);
+            if (!reqGrupArray.includes(rowGrp) && rowGrp !== reqGrup.toUpperCase()) continue; 
+            if (String(data[i][3]).trim() !== reqMapel) continue; 
+        }
+        rowsToDelete.push(i + 1 + offset);
+     }
+  }
+  
+  if (rowsToDelete.length > 0) {
+    let currentStart = rowsToDelete[0], count = 1;
+    for (let i = 1, len = rowsToDelete.length; i < len; i++) {
+      if (rowsToDelete[i] === currentStart - 1) { currentStart = rowsToDelete[i]; count++; }
+      else { sheet.deleteRows(currentStart, count); currentStart = rowsToDelete[i]; count = 1; }
+    }
+    sheet.deleteRows(currentStart, count);
+  }
+  
+  let rowsToAppend = [];
+  let siswaArr = dataAbsen.siswa;
+  for(let i=0, len=siswaArr.length; i<len; i++) {
+    let s = siswaArr[i];
+    let finalGrup = (s.kelasAsli && s.kelasAsli !== "") ? s.kelasAsli : reqGrup; 
+    if (dataAbsen.jenisPresensi === "Al-Quran") {
+      rowsToAppend.push([ timestamp, reqTgl, reqGuruRaw.toUpperCase(), finalGrup, s.nama, s.status, s.keterangan, s.tilawah || '', s.murajaah || '', s.setoran || '' ]);
+    } else {
+      rowsToAppend.push([ timestamp, reqTgl, reqGuruRaw.toUpperCase(), reqMapel, finalGrup, s.nama, s.status, s.keterangan, dataAbsen.materi || '' ]);
+    }
+  }
+  
+  if(rowsToAppend.length > 0) {
+     sheet.getRange(sheet.getLastRow() + 1, 1, rowsToAppend.length, rowsToAppend[0].length).setValues(rowsToAppend);
+  }
+  CacheService.getScriptCache().remove(targetSheetName);
+  return rowsToDelete.length > 0 ? "Data Diperbarui!" : "Data Tersimpan!";
+}
+function simpanGuruAbsen(req) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName("Log_Guru_Absen");
+  if (!sheet) return "ERROR: Sheet 'Log_Guru_Absen' tidak ditemukan. Harap buat terlebih dahulu!";
+  const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  let lr = sheet.getLastRow();
+  let lc = sheet.getLastColumn();
+  let barisUpdate = -1;
+  if (lr > 1) {
+     let limit = 2000;
+     let startRow = (lr > limit) ? (lr - limit + 1) : 2;
+     let data = sheet.getRange(startRow, 1, lr - startRow + 1, lc).getValues();
+     let offset = startRow - 1;
+     for(let i=0; i<data.length; i++) {
+        if(getFastDateStr(data[i][1]) === req.tanggal && String(data[i][2]).trim().toUpperCase() === String(req.namaGuru).trim().toUpperCase()) {
+           barisUpdate = i + 1 + offset; break;
+        }
+     }
+  }
+  if(barisUpdate > -1) { 
+      sheet.getRange(barisUpdate, 1, 1, 5).setValues([[timestamp, req.tanggal, req.namaGuru.toUpperCase(), req.status, req.keterangan]]); 
+      CacheService.getScriptCache().remove("Log_Guru_Absen");
+      return "Data Guru berhasil diperbarui!"; 
+  } else { 
+      sheet.appendRow([timestamp, req.tanggal, req.namaGuru.toUpperCase(), req.status, req.keterangan]); 
+      CacheService.getScriptCache().remove("Log_Guru_Absen");
+      return "Data Guru Tidak Hadir Berhasil Disimpan!"; 
+  }
+}
+function getGuruAbsenHariIni(tgl) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName("Log_Guru_Absen");
+  if (!sheet) return [];
+  let data = getRecentData(sheet, 2000);
+  let res = [];
+  for(let i=1; i<data.length; i++) {
+    if(getFastDateStr(data[i][1]) === tgl) { res.push({ nama: data[i][2], status: data[i][3], ket: data[i][4] }); }
+  }
+  return res;
+}
+function getGuruKosong(tanggal, jamStr, filterGender, filterJenjang) {
+  let dateObj = new Date(tanggal);
+  let hari = ["MINGGU", "SENIN", "SELASA", "RABU", "KAMIS", "JUMAT", "SABTU"][dateObj.getDay()];
+  let jp = getMasterDataCached("Jadwal_Putra");
+  let jpi = getMasterDataCached("Jadwal_Putri");
+  let dataJadwalAll = [];
+  if(jp.length > 1) { let d = jp.slice(1); d.forEach(r => { r.push("PUTRA"); dataJadwalAll.push(r); }); }
+  if(jpi.length > 1) { let d = jpi.slice(1); d.forEach(r => { r.push("PUTRI"); dataJadwalAll.push(r); }); }
+  
+  let guruMengajar = new Set();
+  let targetJams = jamStr.split(",").map(x => parseInt(x.trim()));
+  let teacherProfile = {};
+  
+  for(let i=0; i<dataJadwalAll.length; i++) {
+      let r = dataJadwalAll[i];
+      let g = String(r[0]).trim().toUpperCase();
+      let hariJadwal = String(r[1]).trim().toUpperCase();
+      let kls = formatKelas(r[2]);
+      let jam = String(r[4]).trim();
+      let genderJadwal = r[r.length-1];
+      if(!teacherProfile[g]) teacherProfile[g] = { genders: new Set(), jenjangs: new Set() };
+      teacherProfile[g].genders.add(genderJadwal);
+      if(kls.includes("10") || kls.includes("X") || kls.includes("T-01") || kls.includes("T-02")) teacherProfile[g].jenjangs.add("10");
+      else if(kls.includes("11") || kls.includes("XI") || kls.includes("T-03") || kls.includes("T-04")) teacherProfile[g].jenjangs.add("11");
+      else teacherProfile[g].jenjangs.add("12");
+      if(hariJadwal === hari) {
+          let parts = jam.split("-");
+          let start = parseInt(parts[0]);
+          let end = parts.length > 1 ? parseInt(parts[1]) : start;
+          for(let t=0; t<targetJams.length; t++) {
+              if(targetJams[t] >= start && targetJams[t] <= end) { guruMengajar.add(g); break; }
+          }
+      }
+  }
+  
+  let guruAbsen = new Set();
+  let dga = getMasterDataCached("Log_Guru_Absen");
+  let tglStr = getFastDateStr(dateObj);
+  for(let i=1; i<dga.length; i++) {
+      if(getFastDateStr(dga[i][1]) === tglStr) { guruAbsen.add(String(dga[i][2]).trim().toUpperCase()); }
+  }
+  
+  let guruKosong = [];
+  let masterGuru = getMasterDataCached("Master_Guru");
+  for(let i=1; i<masterGuru.length; i++) {
+      let g = String(masterGuru[i][1]).trim().toUpperCase();
+      let jabatan = String(masterGuru[i][2] || "").trim().toUpperCase();
+      if(g && !guruMengajar.has(g) && !guruAbsen.has(g) && (jabatan === '' || jabatan.includes('GURU') || jabatan.includes('QUR'))) {
+          let prof = teacherProfile[g] || { genders: new Set(), jenjangs: new Set() };
+          let matchGender = true;
+          if(filterGender !== "SEMUA") { matchGender = prof.genders.has(filterGender); }
+          let matchJenjang = true;
+          if(filterJenjang !== "SEMUA") { matchJenjang = prof.jenjangs.has(filterJenjang); }
+          if(matchGender && matchJenjang) { guruKosong.push(g); }
+      }
+  }
+  return guruKosong.sort();
+}
+function getBroadcastHarian(tanggal, gender) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheetAsrama = ss.getSheetByName("Log_Asrama_" + gender);
+  let tglIndo = getFastDateIndo(new Date(tanggal));
+  let result = `📢 *INFORMASI HARIAN SEKOLAH (${gender.toUpperCase()})*\n📅 Tanggal: ${tglIndo}\n\n`;
+  result += `*🛏️ INFO KEHADIRAN (BERDASARKAN KELAS AKADEMIK):*\n`;
+  
+  let asramaCount = 0;
+  let mapKelas = new Map();
+  let dataSiswa = getMasterDataCached("Master_Siswa_" + gender);
+  if(dataSiswa.length > 0) {
+    for(let i = 1; i < dataSiswa.length; i++) {
+       let nama = String(dataSiswa[i][1]).trim();
+       let kls = formatKelas(dataSiswa[i][2]);
+       if(kls === "") kls = "TANPA KELAS";
+       mapKelas.set(nama, kls);
+    }
+  }
+  
+  if (sheetAsrama) {
+    let dAsrama = getRecentData(sheetAsrama, 4000);
+    let listAbsenSiswa = [];
+    for(let i=1; i<dAsrama.length; i++) {
+      if(getFastDateStr(dAsrama[i][1]) === tanggal) {
+        let status = String(dAsrama[i][6]).trim().toUpperCase();
+        if(status === 'S' || status === 'I' || status === 'A') {
+          let namaSiswa = String(dAsrama[i][5]).trim();
+          let kelasAkademik = mapKelas.get(namaSiswa) || "TANPA KELAS";
+          listAbsenSiswa.push({ nama: namaSiswa, kamar: String(dAsrama[i][4]).trim(), kelas: kelasAkademik, status: status, ket: String(dAsrama[i][7]).trim() });
+        }
+      }
+    }
+    listAbsenSiswa.sort((a,b) => a.kelas.localeCompare(b.kelas) || a.nama.localeCompare(b.nama));
+    let kelasSaatIni = "";
+    listAbsenSiswa.forEach(s => {
+       if(s.kelas !== kelasSaatIni) { result += `\n🏷️ *KELAS ${s.kelas}*\n`; kelasSaatIni = s.kelas; }
+       let emoji = s.status === 'S' ? '🤒' : (s.status === 'I' ? 'ℹ️' : '❌');
+       result += `${emoji} ${s.nama} (${s.kelas})\n   Status: *${s.status}* - [Kamar: ${s.kamar}] ${s.ket}\n`;
+       asramaCount++;
+    });
+  }
+  
+  if(asramaCount === 0) result += `- ✅ Seluruh santri/wati dilaporkan HADIR.\n`;
+  result += `\n_Terima kasih atas perhatian Bapak/Ibu Wali Murid. Semoga proses belajar mengajar hari ini berjalan lancar dan penuh berkah._`;
+  return result;
+}
+function getDashboardStats() {
+  let sheets = ['Log_Belajar_Putra', 'Log_Belajar_Putri', 'Log_Asrama_Putra', 'Log_Asrama_Putri', 'Log_AlQuran_Putra', 'Log_AlQuran_Putri'];
+  let stats = { hari: {H:0, T:0, S:0, I:0, A:0}, bulan: {H:0, T:0, S:0, I:0, A:0}, semester: {H:0, T:0, S:0, I:0, A:0} };
+  let today = new Date(), currMonth = today.getMonth() + 1, currYear = today.getFullYear(), currDate = today.getDate();
+  let isGanjil = (currMonth >= 7);
+  
+  sheets.forEach(sh => {
+     let data = getMasterDataCached(sh);
+     for(let i = data.length-1; i >= 1; i--) {
+        let rawDate = data[i][1];
+        if(!rawDate) continue;
+        let rowDate = (rawDate.constructor === Date) ? rawDate : new Date(rawDate);
+        if(isNaN(rowDate.getTime())) continue;
+        let rMonth = rowDate.getMonth() + 1, rYear = rowDate.getFullYear();
+        if(rYear === currYear) {
+           let statCol = (sh.includes("AlQuran")) ? 5 : 6;
+           let status = String(data[i][statCol]).trim().toUpperCase();
+           if(status !== "H" && status !== "T" && status !== "S" && status !== "I" && status !== "A") continue;
+           if((rMonth >= 7) === isGanjil) stats.semester[status]++;
+           if(rMonth === currMonth) {
+               stats.bulan[status]++;
+               if(rowDate.getDate() === currDate) stats.hari[status]++;
+           }
+        }
+     }
+  });
+  return stats;
+}
+function getOptionsLaporan() {
+  let opt = { akademik: { kelas: new Set(), mapel: new Set() }, asrama: { kamar: new Set(), musyrif: new Set() }, alquran: { kelompok: new Set() } };
+  
+  ['Master_Siswa_Putra', 'Master_Siswa_Putri'].forEach(sh => {
+    let d = getMasterDataCached(sh);
+    for(let i=1; i<d.length; i++) {
+        if(d[i][2] && String(d[i][2]).trim() !== "") opt.akademik.kelas.add(formatKelas(d[i][2]));
+        if(d[i][4] && String(d[i][4]).trim() !== "") opt.alquran.kelompok.add(formatKelas(d[i][4])); 
+    }
+  });
+  
+  ['Jadwal_Putra', 'Jadwal_Putri'].forEach(sh => {
+    let d = getMasterDataCached(sh);
+    for(let i=1; i<d.length; i++) {
+        if(d[i][3] && String(d[i][3]).trim() !== "") {
+            let mpl = String(d[i][3]).trim().toUpperCase();
+            if(!mpl.includes("QUR")) { opt.akademik.mapel.add(mpl); }
+        }
+    }
+  });
+  
+  ['Master_Kamar_Putra', 'Master_Kamar_Putri'].forEach(sh => {
+    let d = getMasterDataCached(sh);
+    for(let i=1; i<d.length; i++) {
+       if(d[i][0] && String(d[i][0]).trim() !== "") opt.asrama.kamar.add(String(d[i][0]).trim().toUpperCase());
+       if(d[i][1] && String(d[i][1]).trim() !== "") opt.asrama.musyrif.add(String(d[i][1]).trim().toUpperCase());
+    }
+  });
+  
+  return {
+    akademik: { kelas: Array.from(opt.akademik.kelas).sort(), mapel: Array.from(opt.akademik.mapel).sort() },
+    asrama: { kamar: Array.from(opt.asrama.kamar).sort(), musyrif: Array.from(opt.asrama.musyrif).sort() },
+    alquran: { kelompok: Array.from(opt.alquran.kelompok).sort() }
+  };
+}
+function getSiswaByGroup(groupName, divisi) {
+  let res = [];
+  let sheets = ['Master_Siswa_Putra', 'Master_Siswa_Putri'];
+  let reqGrp = String(groupName).trim().toUpperCase();
+  
+  if (divisi === 'Asrama') {
+     let kamarList = new Set();
+     kamarList.add(reqGrp);
+     ['Master_Kamar_Putra', 'Master_Kamar_Putri'].forEach(sh => {
+        let d = getMasterDataCached(sh);
+        for(let i=1; i<d.length; i++) {
+           if(String(d[i][1]).trim().toUpperCase() === reqGrp) { kamarList.add(String(d[i][0]).trim().toUpperCase()); }
+        }
+     });
+     sheets.forEach(sh => {
+        let d = getMasterDataCached(sh);
+        for(let i=1; i<d.length; i++) {
+           let kamarSiswa = String(d[i][3]).trim().toUpperCase();
+           let match = false;
+           kamarList.forEach(k => { if (kamarSiswa === k || kamarSiswa.includes(k) || k.includes(kamarSiswa)) match = true; });
+           if (match) res.push(String(d[i][1]).trim());
+        }
+     });
+  } else {
+     let idxSearch = (divisi === 'Al-Quran') ? 4 : 2; 
+     sheets.forEach(sh => {
+        let d = getMasterDataCached(sh);
+        for(let i=1; i<d.length; i++) {
+           let val = formatKelas(d[i][idxSearch]);
+           if(val === reqGrp || val.includes(reqGrp)) { res.push(String(d[i][1]).trim()); }
+        }
+     });
+  }
+  return res.sort((a,b) => a.localeCompare(b));
+}
+function getReportData(jenisRep, param1, param2, semester, divisi) {
+  if (jenisRep === 'guru_alpha') return getGuruAlphaData(semester, divisi);
+  if (jenisRep === 'penanganan_khusus') return getPenangananKhususData(semester);
+  if (jenisRep === 'rekap_musyrif') return getRekapMusyrifData(param1, semester);
+  if (jenisRep === 'susulan_ujian') return getSusulanUjianData(param1, semester, divisi);
+  if (divisi === 'Terpadu') return getRekapTerpaduData(jenisRep, param1, param2, semester);
+  
+  let reqKelas = String(param1).trim().toUpperCase();
+  let listSiswa = (jenisRep === 'individu') ? [reqKelas] : getSiswaByGroup(reqKelas, divisi);
+  let filteredAbsen = [];
+  let materiMap = new Map();
+  let isReqGanjil = semester.includes("Ganjil"), isReqMonth = semester.includes("Bulan");
+  let reqMonthIdx = isReqMonth ? parseInt(semester.split(" ")[1]) : 0;
+  
+  let sheetsToRead = [];
+  if(divisi === 'Asrama') sheetsToRead = ['Log_Asrama_Putra', 'Log_Asrama_Putri'];
+  else if(divisi === 'Al-Quran') sheetsToRead = ['Log_AlQuran_Putra', 'Log_AlQuran_Putri'];
+  else sheetsToRead = ['Log_Belajar_Putra', 'Log_Belajar_Putri'];
+  
+  let absenData = [];
+  sheetsToRead.forEach(shName => {
+      let shData = getMasterDataCached(shName);
+      if(shData.length > 1) absenData = absenData.concat(shData.slice(1));
+  });
+  
+  for(let i=0; i<absenData.length; i++){
+    let d = absenData[i];
+    let rawDate = d[1];
+    if(!rawDate) continue;
+    let rowDate = (rawDate.constructor === Date) ? rawDate : new Date(rawDate);
+    if(isNaN(rowDate.getTime())) continue;
+    let month = rowDate.getMonth() + 1;
+    if (isReqMonth) { if(month !== reqMonthIdx) continue; } else { if((month >= 7) !== isReqGanjil) continue; }
+    
+    let guruVal  = String(d[2]).trim().toUpperCase();
+    let mapelVal = (divisi === 'Al-Quran') ? "AL-QURAN" : String(d[3]).trim().toUpperCase();
+    let kelasVal = (divisi === 'Al-Quran') ? formatKelas(d[3]) : formatKelas(d[4]);
+    let namaVal  = (divisi === 'Al-Quran') ? String(d[4]).trim() : String(d[5]).trim();
+    let statVal  = (divisi === 'Al-Quran') ? String(d[5]).trim() : String(d[6]).trim();
+    let ketVal   = (divisi === 'Al-Quran') ? String(d[6]).trim() : String(d[7]).trim();
+    
+    if(jenisRep !== 'blacklist') {
+        if(jenisRep === 'individu') {
+            if(namaVal.toUpperCase() !== reqKelas) continue;
+        } else {
+            if (divisi === 'Asrama') {
+                if (kelasVal !== reqKelas && guruVal !== reqKelas) continue; 
+            } else {
+                if (kelasVal !== reqKelas) continue;
+            }
+            if(jenisRep === 'matrix' && divisi === 'Akademik' && param2 !== 'SEMUA MAPEL' && mapelVal !== String(param2).trim().toUpperCase()) continue;
+        }
+    } else {
+        if (divisi === 'Akademik') {
+            let angkatan = reqKelas.replace("KELAS ", "").trim();
+            if(!kelasVal.startsWith(angkatan)) continue;
+        }
+    }
+    
+    let tglStr = getFastDateIndo(rowDate);
+    let extra = {};
+    if(divisi === 'Al-Quran') {
+        extra.tilawah = String(d[7] || '').trim();
+        extra.murajaah = String(d[8] || '').trim();
+        extra.setoran = String(d[9] || '').trim();
+    } else { extra.materi = String(d[8] || '').trim(); }
+    
+    filteredAbsen.push({ tanggal: tglStr, mapel: mapelVal, siswa: namaVal, kelasAsli: kelasVal, status: statVal, keterangan: ketVal, rawDate: rowDate.getTime(), extra: extra });
+    
+    if(jenisRep === 'matrix' || jenisRep === 'social') {
+       if(extra.materi) {
+           let key = tglStr + "|" + mapelVal;
+           if(!materiMap.has(key)) materiMap.set(key, { tanggal: tglStr, mapel: mapelVal, materi: extra.materi, raw: rowDate.getTime() });
+       }
+    }
+  }
+  
+  let result = [];
+  if(jenisRep === 'social') {
+    result.push(["No", "Nama Siswa", "Hadir", "Telat", "Sakit", "Izin", "Alfa", "Total Pertemuan", "% Hadir (H+T)"]);
+    for(let idx=0, len=listSiswa.length; idx<len; idx++) {
+      let nama = listSiswa[idx], h=0, t=0, s=0, i=0, a=0;
+      for(let j=0, flen=filteredAbsen.length; j<flen; j++){
+        if(filteredAbsen[j].siswa === nama) { let st = filteredAbsen[j].status; if(st==='H') h++; else if(st==='T') t++; else if(st==='S') s++; else if(st==='I') i++; else if(st==='A') a++; }
+      }
+      let tot = h+t+s+i+a;
+      result.push([idx+1, nama, h, t, s, i, a, tot, tot===0 ? "0%" : Math.round(((h+t)/tot)*100)+"%"]);
+    }
+  } else if (jenisRep === 'matrix') {
+    let dateSet = new Set();
+    for(let j=0, len=filteredAbsen.length; j<len; j++) dateSet.add(filteredAbsen[j].tanggal);
+    let uniqueDates = Array.from(dateSet).sort((a,b) => { let pA = a.split('/'), pB = b.split('/'); return new Date(pA[2], pA[1]-1, pA[0]) - new Date(pB[2], pB[1]-1, pB[0]); });
+    result.push(["No", "Nama Siswa", ...uniqueDates, "H", "T", "S", "I", "A"]);
+    let mapMatrix = new Map();
+    for(let j=0, len=filteredAbsen.length; j<len; j++) mapMatrix.set(filteredAbsen[j].siswa + "|" + filteredAbsen[j].tanggal, filteredAbsen[j].status);
+    for(let idx=0, len=listSiswa.length; idx<len; idx++) {
+      let nama = listSiswa[idx], row = [idx+1, nama], h=0, t=0, s=0, i=0, a=0;
+      for(let d=0, dlen=uniqueDates.length; d<dlen; d++){
+        let stat = mapMatrix.get(nama + "|" + uniqueDates[d]) || "-";
+        row.push(stat);
+        if(stat==='H') h++; else if(stat==='T') t++; else if(stat==='S') s++; else if(stat==='I') i++; else if(stat==='A') a++;
+      }
+      row.push(h, t, s, i, a); result.push(row);
+    }
+  } else if (jenisRep === 'individu') {
+    if (divisi === 'Al-Quran') result.push(["No", "Tanggal", "Kelompok", "Status", "Alasan", "Tilawah", "Murajaah", "Setoran"]);
+    else if (divisi === 'Asrama') result.push(["No", "Tanggal", "Kamar", "Status", "Alasan", "Catatan Asrama"]);
+    else result.push(["No", "Tanggal", "Mata Pelajaran", "Status", "Alasan", "Materi"]);
+    filteredAbsen.sort((a,b) => a.rawDate - b.rawDate);
+    let no = 1;
+    for(let j=0, len=filteredAbsen.length; j<len; j++) {
+      let r = filteredAbsen[j];
+      if (divisi === 'Al-Quran') result.push([no++, r.tanggal, r.kelasAsli, r.status, r.keterangan, r.extra.tilawah, r.extra.murajaah, r.extra.setoran]);
+      else if (divisi === 'Asrama') result.push([no++, r.tanggal, r.kelasAsli, r.status, r.keterangan, r.extra.materi]);
+      else result.push([no++, r.tanggal, r.mapel, r.status, r.keterangan, r.extra.materi]);
+    }
+    if(result.length === 1) result.push(["-", "-", "SISWA INI SELALU HADIR / TIDAK ADA CATATAN ABSEN", "-", "-"]);
+  } else if (jenisRep === 'blacklist') {
+    result.push(["No", "Nama Siswa", (divisi==='Asrama'?'Kamar':(divisi==='Al-Quran'?'Kelompok':'Kelas')), "S", "I", "A", "Total Absen", "Rincian (Tanggal)"]);
+    let absenMap = new Map();
+    for(let j=0, len=filteredAbsen.length; j<len; j++) {
+      let r = filteredAbsen[j];
+      if(r.status === 'S' || r.status === 'I' || r.status === 'A') {
+        let key = r.siswa + "|||" + r.kelasAsli;
+        let obj = absenMap.get(key) || { S: 0, I: 0, A: 0, Total: 0, rincian: [] };
+        obj[r.status]++; obj.Total++;
+        let mapelTeks = (divisi === 'Akademik') ? ` ${r.mapel}` : '';
+        obj.rincian.push(`[${r.status}] ${r.tanggal.substring(0,5)}${mapelTeks}`);
+        absenMap.set(key, obj);
+      }
+    }
+    let sortedList = Array.from(absenMap.entries()).map(([k, v]) => {
+      let parts = k.split("|||");
+      return { nama: parts[0], kls: parts[1], S: v.S, I: v.I, A: v.A, Total: v.Total, rincianText: v.rincian.join("<br>") };
+    }).sort((a,b) => (b.Total === a.Total) ? (b.A - a.A) : (b.Total - a.Total)).slice(0, 25);
+    let no = 1;
+    for(let j=0, len=sortedList.length; j<len; j++) { let it = sortedList[j]; result.push([no++, it.nama, it.kls, it.S, it.I, it.A, it.Total, it.rincianText]); }
+    if(result.length === 1) result.push(["-", "TIDAK ADA DATA KETIDAKHADIRAN", "-", "-", "-", "-", "-", "-"]);
+  }
+  let sortedMateri = Array.from(materiMap.values()).sort((a,b) => a.raw - b.raw);
+  for(let j=0, len=sortedMateri.length; j<len; j++) sortedMateri[j].no = j + 1;
+  return { laporan: result, materi: sortedMateri };
+}
+function getSusulanUjianData(kelasTarget, semester, divisi) {
+    let isReqGanjil = semester.includes("Ganjil"), isReqMonth = semester.includes("Bulan");
+    let reqMonthIdx = isReqMonth ? parseInt(semester.split(" ")[1]) : 0;
+    let logSemua = [];
+    let reqKelas = String(kelasTarget).trim().toUpperCase();
+    ['Log_Ujian_Putra', 'Log_Ujian_Putri'].forEach(sh => {
+        let data = getMasterDataCached(sh);
+        for(let i=1; i<data.length; i++) {
+            let rawDate = data[i][1];
+            if(!rawDate) continue;
+            let rowDate = (rawDate.constructor === Date) ? rawDate : new Date(rawDate);
+            if(isNaN(rowDate.getTime())) continue;
+            let month = rowDate.getMonth() + 1;
+            if (isReqMonth) { if(month !== reqMonthIdx) continue; } else { if((month >= 7) !== isReqGanjil) continue; }
+            let status = String(data[i][9]).trim().toUpperCase();
+            if(status === 'S' || status === 'I' || status === 'A') {
+                let kelasVal = formatKelas(data[i][6]);
+                if(reqKelas !== '' && reqKelas !== 'SEMUA' && !kelasVal.includes(reqKelas) && !reqKelas.includes(kelasVal)) continue;
+                logSemua.push([
+                    getFastDateIndo(rowDate),
+                    String(data[i][2]).trim(),
+                    String(data[i][7]).trim(), 
+                    kelasVal, 
+                    String(data[i][8]).trim(), 
+                    `[${status}] ${data[i][10]}` 
+                ]);
+            }
+        }
+    });
+    logSemua.sort((a,b) => {
+        let pA = a[0].split('/'), pB = b[0].split('/');
+        let dateA = new Date(pA[2], pA[1]-1, pA[0]);
+        let dateB = new Date(pB[2], pB[1]-1, pB[0]);
+        return dateB - dateA || a[3].localeCompare(b[3]) || a[4].localeCompare(b[4]); 
+    });
+    let result = [["No", "Tanggal Ujian", "Jenis Ujian", "Mata Pelajaran", "Kelas", "Nama Siswa", "Keterangan Terakhir"]];
+    let no = 1;
+    logSemua.forEach(r => {
+        result.push([no++, r[0], r[1], r[2], r[3], r[4], r[5]]);
+    });
+    if(result.length === 1) result.push(["-", "-", "-", "TIDAK ADA DATA SUSULAN", "-", "-", "-"]);
+    return { laporan: result, materi: [] };
+}
+function getGuruAlphaData(semester, divisi) {
+  let isReqGanjil = semester.includes("Ganjil"), today = new Date();
+  let isReqMonth = semester.includes("Bulan");
+  let reqMonthIdx = isReqMonth ? parseInt(semester.split(" ")[1]) : 0;
+  today.setHours(0,0,0,0);
+  let todayTime = today.getTime();
+  let activeDates = new Map(), absenSet = new Set();
+  let daysArr = ["MINGGU", "SENIN", "SELASA", "RABU", "KAMIS", "JUMAT", "SABTU"];
+  let guruAbsenMap = new Map();
+  let dga = getMasterDataCached("Log_Guru_Absen");
+  
+  for(let i=1; i<dga.length; i++) {
+     let rawD = dga[i][1];
+     if(!rawD) continue;
+     let d = (rawD.constructor === Date) ? rawD : new Date(rawD);
+     if(!isNaN(d.getTime())) {
+        let tglStr = getFastDateStr(d);
+        guruAbsenMap.set(tglStr + "|" + String(dga[i][2]).trim().toUpperCase(), String(dga[i][3]) + " - " + String(dga[i][4]));
+     }
+  }
+  
+  let logData = [];
+  if (divisi === 'Asrama') logData = getMasterDataCached('Log_Asrama_Putra').concat(getMasterDataCached('Log_Asrama_Putri'));
+  else if (divisi === 'Al-Quran') logData = getMasterDataCached('Log_AlQuran_Putra').concat(getMasterDataCached('Log_AlQuran_Putri'));
+  else logData = getMasterDataCached('Log_Belajar_Putra').concat(getMasterDataCached('Log_Belajar_Putri'));
+  
+  for(let i=1, len=logData.length; i<len; i++) {
+    let rawD = logData[i][1];
+    if(!rawD) continue;
+    let d = (rawD.constructor === Date) ? rawD : new Date(rawD);
+    if(isNaN(d.getTime()) || d.getTime() > todayTime) continue;
+    let month = d.getMonth() + 1;
+    if (isReqMonth) { if(month !== reqMonthIdx) continue; } else { if((month >= 7) !== isReqGanjil) continue; }
+    
+    let tglStr = d.getFullYear() + "-" + ((month < 10) ? '0'+month : month) + "-" + ((d.getDate() < 10) ? '0'+d.getDate() : d.getDate());
+    if(!activeDates.has(tglStr)) {
+      let tglIndo = (d.getDate() < 10 ? '0'+d.getDate() : d.getDate()) + "/" + (month < 10 ? '0'+month : month) + "/" + d.getFullYear();
+      activeDates.set(tglStr, { hari: daysArr[d.getDay()], tglIndo: tglIndo, raw: d.getTime() });
+    }
+    if(divisi === 'Asrama') absenSet.add(tglStr + "|" + formatKelas(logData[i][4]));
+    else if(divisi === 'Al-Quran') { absenSet.add(tglStr + "|" + formatKelas(logData[i][3]) + "|AL-QURAN"); absenSet.add(tglStr + "|" + formatKelas(logData[i][3]) + "|AL-QUR'AN"); }
+    else absenSet.add(tglStr + "|" + formatKelas(logData[i][4]) + "|" + String(logData[i][3]).trim().toUpperCase());
+  }
+  
+  let result = [];
+  let sortedDates = Array.from(activeDates.entries()).sort((a,b) => a[1].raw - b[1].raw);
+  let no = 1;
+  
+  if(divisi === 'Asrama') {
+      result.push(["No", "Tanggal", "Hari", "Nama Musyrif/ah", "-", "Kamar", "Status Kehadiran Guru"]);
+      let kamarData = getMasterDataCached("Master_Kamar_Putra").concat(getMasterDataCached("Master_Kamar_Putri"));
+      let allKamar = [];
+      for(let i=1; i<kamarData.length; i++) {
+         if(kamarData[i][0] && kamarData[i][1]) allKamar.push({ kamar: formatKelas(kamarData[i][0]), musyrif: String(kamarData[i][1]).trim().toUpperCase() });
+      }
+      for(let dIdx=0; dIdx<sortedDates.length; dIdx++) {
+        let tglStr = sortedDates[dIdx][0], dateInfo = sortedDates[dIdx][1];
+        for(let kIdx=0; kIdx<allKamar.length; kIdx++) {
+          let k = allKamar[kIdx]; let key = tglStr + "|" + k.kamar;
+          if(!absenSet.has(key)) {
+            let alasanAbsen = guruAbsenMap.get(tglStr + "|" + k.musyrif);
+            if (alasanAbsen) result.push([ no++, dateInfo.tglIndo, dateInfo.hari, k.musyrif, "-", k.kamar, `TIDAK HADIR: ${alasanAbsen.toUpperCase()}` ]);
+            else result.push([ no++, dateInfo.tglIndo, dateInfo.hari, k.musyrif, "-", k.kamar, `BELUM PRESENSI (ALPHA)` ]);
+          }
+        }
+      }
+  } else {
+      result.push(["No", "Tanggal", "Hari", "Nama Guru", "Mata Pelajaran", "Kelas", "Status Kehadiran Guru"]);
+      let dataJadwal = getMasterDataCached("Jadwal_Putra").concat(getMasterDataCached("Jadwal_Putri"));
+      let jadwalPerHari = {"SENIN": [], "SELASA": [], "RABU": [], "KAMIS": [], "JUMAT": [], "SABTU": [], "MINGGU": []};
+      for(let i=1; i<dataJadwal.length; i++) {
+         let hari = String(dataJadwal[i][1]).trim().toUpperCase(); let mpl = String(dataJadwal[i][3]).trim().toUpperCase(); let isQur = mpl.includes("QUR");
+         if(jadwalPerHari[hari]) {
+            if((divisi === 'Al-Quran' && isQur) || (divisi === 'Akademik' && !isQur)) {
+               jadwalPerHari[hari].push({ guru: String(dataJadwal[i][0]).trim().toUpperCase(), kelas: formatKelas(dataJadwal[i][2]), mapel: mpl, jam: String(dataJadwal[i][4]).trim() });
+            }
+         }
+      }
+      for(let dIdx=0; dIdx<sortedDates.length; dIdx++) {
+        let tglStr = sortedDates[dIdx][0], dateInfo = sortedDates[dIdx][1]; let jadwalHariIni = jadwalPerHari[dateInfo.hari] || [];
+        for(let jIdx=0; jIdx<jadwalHariIni.length; jIdx++) {
+          let j = jadwalHariIni[jIdx]; let key1 = tglStr + "|" + j.kelas + "|" + j.mapel; let key2 = tglStr + "|" + j.kelas + "|" + j.mapel.replace("'", "");
+          if(!absenSet.has(key1) && !absenSet.has(key2)) {
+            let alasanAbsen = guruAbsenMap.get(tglStr + "|" + j.guru);
+            if (alasanAbsen) result.push([ no++, dateInfo.tglIndo, dateInfo.hari, j.guru, j.mapel, j.kelas, `TIDAK HADIR: ${alasanAbsen.toUpperCase()}` ]);
+            else result.push([ no++, dateInfo.tglIndo, dateInfo.hari, j.guru, j.mapel, j.kelas, `BELUM PRESENSI (ALPHA)` ]);
+          }
+        }
+      }
+  }
+  if(result.length === 1) result.push(["-", "-", "-", "TIDAK ADA DATA / SEMUA HADIR", "-", "-", "-"]);
+  return { laporan: result, materi: [] };
+}
+function getMonitoringData(tanggalStr) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let dataJadwal = [];
+  let jPutra = ss.getSheetByName("Jadwal_Putra"); if(jPutra) { let d = getFastData(jPutra).slice(1); d.forEach(r => r.push("PUTRA")); dataJadwal = dataJadwal.concat(d); }
+  let jPutri = ss.getSheetByName("Jadwal_Putri"); if(jPutri) { let d = getFastData(jPutri).slice(1); d.forEach(r => r.push("PUTRI")); dataJadwal = dataJadwal.concat(d); }
+  let dataAbsen = getMasterDataCached("Log_Belajar_Putra").concat(getMasterDataCached("Log_Belajar_Putri"));
+  let dataQ = getMasterDataCached("Log_AlQuran_Putra").concat(getMasterDataCached("Log_AlQuran_Putri"));
+  let dataAsrama = getMasterDataCached("Log_Asrama_Putra").concat(getMasterDataCached("Log_Asrama_Putri"));
+  let kamarPutra = getMasterDataCached("Master_Kamar_Putra"), kamarPutri = getMasterDataCached("Master_Kamar_Putri");
+  let guruAbsenHariIni = new Set();
+  let dga = getMasterDataCached("Log_Guru_Absen");
+  
+  for(let i=1; i<dga.length; i++) { if(getFastDateStr(dga[i][1]) === tanggalStr) guruAbsenHariIni.add(String(dga[i][2]).trim().toUpperCase()); }
+  let dateObj = new Date(tanggalStr), hariReq = ["MINGGU", "SENIN", "SELASA", "RABU", "KAMIS", "JUMAT", "SABTU"][dateObj.getDay()];
+  let absenHariIni = [], absenAsramaHariIni = new Set();
+  
+  for(let i=1, len=dataAbsen.length; i<len; i++) {
+    if(getFastDateStr(dataAbsen[i][1]) === tanggalStr) absenHariIni.push({ guru: String(dataAbsen[i][2]).trim().toUpperCase(), kelas: formatKelas(dataAbsen[i][4]), mapel: String(dataAbsen[i][3]).trim().toUpperCase() });
+  }
+  for(let i=1; i<dataQ.length; i++) {
+    if(getFastDateStr(dataQ[i][1]) === tanggalStr) {
+      absenHariIni.push({ guru: String(dataQ[i][2]).trim().toUpperCase(), kelas: formatKelas(dataQ[i][3]), mapel: "AL-QURAN" });
+      absenHariIni.push({ guru: String(dataQ[i][2]).trim().toUpperCase(), kelas: formatKelas(dataQ[i][3]), mapel: "AL-QUR'AN" });
+    }
+  }
+  for(let i=1; i<dataAsrama.length; i++) {
+    if(getFastDateStr(dataAsrama[i][1]) === tanggalStr) absenAsramaHariIni.add(formatKelas(dataAsrama[i][4]));
+  }
+  
+  let result = { 
+     putra: { akademik: { kelas10: [], kelas11: [], kelas12: [] }, alquran: { kelas10: [], kelas11: [], kelas12: [] }, asrama: [] },
+     putri: { akademik: { kelas10: [], kelas11: [], kelas12: [] }, alquran: { kelas10: [], kelas11: [], kelas12: [] }, asrama: [] }
+  };
+  
+  for(let i=0, len=dataJadwal.length; i<len; i++) {
+    if(String(dataJadwal[i][1]).trim().toUpperCase() === hariReq) {
+      let kls = formatKelas(dataJadwal[i][2]), mpl = String(dataJadwal[i][3]).trim().toUpperCase(), namaGuru = String(dataJadwal[i][0]).trim().toUpperCase();
+      let isDiisi = false;
+      for(let a=0; a<absenHariIni.length; a++) {
+         let log = absenHariIni[a]; let matchMapel = (log.mapel === mpl || log.mapel.replace("'", "") === mpl.replace("'", ""));
+         let matchGuru = (log.guru.includes(namaGuru) || namaGuru.includes(log.guru)); let matchKelas = (log.kelas === kls || log.kelas.includes(kls) || kls.includes(log.kelas));
+         if(matchMapel && matchGuru && matchKelas) { isDiisi = true; break; }
+      }
+      let fillStatus = isDiisi ? 'HADIR' : (guruAbsenHariIni.has(namaGuru) ? 'GURU_ABSEN' : 'KOSONG');
+      let item = { guru: namaGuru, kelas: kls, mapel: mpl, jam: String(dataJadwal[i][4]).trim(), status: fillStatus };
+      let genderClass = dataJadwal[i][dataJadwal[i].length - 1]; 
+      let targetObj = (genderClass === "PUTRA") ? result.putra : result.putri;
+      let divObj = mpl.includes("QUR") ? targetObj.alquran : targetObj.akademik;
+      if(kls.includes("10") || kls.includes("X") || kls.includes("T-01") || kls.includes("T-02")) divObj.kelas10.push(item);
+      else if(kls.includes("11") || kls.includes("XI") || kls.includes("T-03") || kls.includes("T-04")) divObj.kelas11.push(item);
+      else divObj.kelas12.push(item);
+    }
+  }
+  
+  let processKamar = (arrKamar, targetArr) => {
+     for(let i=1; i<arrKamar.length; i++) {
+        let kamar = formatKelas(arrKamar[i][0]), musyrif = String(arrKamar[i][1]).trim().toUpperCase();
+        if(kamar && musyrif) {
+            let isDiisi = absenAsramaHariIni.has(kamar), status = isDiisi ? 'HADIR' : (guruAbsenHariIni.has(musyrif) ? 'GURU_ABSEN' : 'KOSONG');
+            targetArr.push({ kamar: kamar, musyrif: musyrif, status: status });
+        }
+     }
+  };
+  
+  processKamar(kamarPutra, result.putra.asrama); processKamar(kamarPutri, result.putri.asrama);
+  let sortJam = (a, b) => a.jam.localeCompare(b.jam, undefined, {numeric: true});
+  ['putra', 'putri'].forEach(g => {
+      result[g].akademik.kelas10.sort(sortJam); result[g].akademik.kelas11.sort(sortJam); result[g].akademik.kelas12.sort(sortJam);
+      result[g].alquran.kelas10.sort(sortJam); result[g].alquran.kelas11.sort(sortJam); result[g].alquran.kelas12.sort(sortJam);
+  });
+  return result;
+}
+function getPenangananKhususData(semester) {
+    let isReqGanjil = semester.includes("Ganjil"), isReqMonth = semester.includes("Bulan");
+    let reqMonthIdx = isReqMonth ? parseInt(semester.split(" ")[1]) : 0;
+    let mapSiswa = new Map();
+    let sheets = [ {n: 'Log_Belajar_Putra', d: 'Akademik'}, {n: 'Log_Belajar_Putri', d: 'Akademik'}, {n: 'Log_Asrama_Putra', d: 'Asrama'}, {n: 'Log_Asrama_Putri', d: 'Asrama'}, {n: 'Log_AlQuran_Putra', d: 'Quran'}, {n: 'Log_AlQuran_Putri', d: 'Quran'} ];
+    
+    sheets.forEach(sh => {
+        let data = getMasterDataCached(sh.n);
+        for(let i=1; i<data.length; i++) {
+            let d = data[i], rawDate = d[1];
+            if(!rawDate) continue;
+            let rowDate = (rawDate.constructor === Date) ? rawDate : new Date(rawDate);
+            if(isNaN(rowDate.getTime())) continue;
+            let month = rowDate.getMonth() + 1;
+            if (isReqMonth) { if(month !== reqMonthIdx) continue; } else { if((month >= 7) !== isReqGanjil) continue; }
+            let isQur = sh.d === 'Quran';
+            let statVal = isQur ? String(d[5]).trim().toUpperCase() : String(d[6]).trim().toUpperCase();
+            let namaVal = isQur ? String(d[4]).trim() : String(d[5]).trim();
+            if(statVal === 'S' || statVal === 'I' || statVal === 'A') {
+                if(!mapSiswa.has(namaVal)) mapSiswa.set(namaVal, {S:0, I:0, A:0, Total:0, rincian:[]});
+                let obj = mapSiswa.get(namaVal);
+                obj[statVal]++; obj.Total++;
+                obj.rincian.push(`[${statVal}] ${sh.d} ${getFastDateIndo(rowDate).substring(0,5)}`);
+            }
+        }
+    });
+    
+    let result = [["No", "Nama Siswa", "Total Sakit", "Total Izin", "Total Alfa", "Total Poin Absen", "Rincian Terpadu"]];
+    let sorted = Array.from(mapSiswa.entries()).map(([k,v]) => ({ nama: k, ...v })).sort((a,b) => b.Total - a.Total);
+    let no = 1;
+    sorted.forEach(s => result.push([no++, s.nama, s.S, s.I, s.A, s.Total, s.rincian.join("<br>")]));
+    if(result.length === 1) result.push(["-", "TIDAK ADA SISWA BERMASALAH", "-", "-", "-", "-", "-"]);
+    return { laporan: result, materi: [] };
+}
+function getRekapMusyrifData(musyrifName, semester) {
+    let isReqGanjil = semester.includes("Ganjil"), isReqMonth = semester.includes("Bulan");
+    let reqMonthIdx = isReqMonth ? parseInt(semester.split(" ")[1]) : 0;
+    let target = String(musyrifName).trim().toUpperCase();
+    let kamarBinaan = new Set();
+    
+    ['Master_Kamar_Putra', 'Master_Kamar_Putri'].forEach(sh => {
+        let d = getMasterDataCached(sh);
+        for(let i=1; i<d.length; i++) { if(String(d[i][1]).trim().toUpperCase() === target) kamarBinaan.add(String(d[i][0]).trim().toUpperCase()); }
+    });
+    
+    let filtered = [];
+    ['Log_Asrama_Putra', 'Log_Asrama_Putri'].forEach(sh => {
+        let data = getMasterDataCached(sh);
+        for(let i=1; i<data.length; i++) {
+            let d = data[i], rawDate = d[1];
+            if(!rawDate) continue;
+            let rowDate = (rawDate.constructor === Date) ? rawDate : new Date(rawDate);
+            if(isNaN(rowDate.getTime())) continue;
+            let month = rowDate.getMonth() + 1;
+            if (isReqMonth) { if(month !== reqMonthIdx) continue; } else { if((month >= 7) !== isReqGanjil) continue; }
+            let kamarVal = formatKelas(d[4]).toUpperCase();
+            let matchKamar = false;
+            kamarBinaan.forEach(k => { if(kamarVal === k || kamarVal.includes(k) || k.includes(kamarVal)) matchKamar = true; });
+            if(matchKamar || String(d[2]).trim().toUpperCase() === target) {
+                filtered.push({ raw: rowDate.getTime(), tgl: getFastDateIndo(rowDate), kamar: kamarVal, nama: String(d[5]).trim(), stat: String(d[6]).trim(), ket: String(d[7]).trim() });
+            }
+        }
+    });
+    
+    filtered.sort((a,b) => a.raw - b.raw);
+    let result = [["No", "Tanggal", "Nama Siswa", "Kamar", "Status", "Keterangan"]];
+    let no = 1;
+    filtered.forEach(f => result.push([no++, f.tgl, f.nama, f.kamar, f.stat, f.ket]));
+    if(result.length === 1) result.push(["-", "-", "TIDAK ADA CATATAN UNTUK KAMAR INI", "-", "-", "-"]);
+    return { laporan: result, materi: [] };
+}
+function getRekapTerpaduData(jenisRep, kelasTarget, param2, semester) {
+    let isReqGanjil = semester.includes("Ganjil"), isReqMonth = semester.includes("Bulan");
+    let reqMonthIdx = isReqMonth ? parseInt(semester.split(" ")[1]) : 0;
+    let isIndividu = (jenisRep === 'individu');
+    
+    let listSiswa = isIndividu ? [String(param2).trim()] : getSiswaByGroup(String(kelasTarget).trim(), 'Akademik');
+    let setSiswa = new Set(listSiswa);
+    
+    let rekapTotal = new Map();
+    listSiswa.forEach(s => rekapTotal.set(s, {
+        total: {H:0, T:0, S:0, I:0, A:0},
+        akademik: {H:0, T:0, S:0, I:0, A:0},
+        asrama: {H:0, T:0, S:0, I:0, A:0},
+        quran: {H:0, T:0, S:0, I:0, A:0}
+    }));
+    
+    let logSemua = [];
+    let sheets = [ 
+        {n: 'Log_Belajar_Putra', d: 'akademik', dName: 'Akademik'}, {n: 'Log_Belajar_Putri', d: 'akademik', dName: 'Akademik'}, 
+        {n: 'Log_Asrama_Putra', d: 'asrama', dName: 'Asrama'}, {n: 'Log_Asrama_Putri', d: 'asrama', dName: 'Asrama'}, 
+        {n: 'Log_AlQuran_Putra', d: 'quran', dName: 'Quran'}, {n: 'Log_AlQuran_Putri', d: 'quran', dName: 'Quran'} 
+    ];
+    
+    sheets.forEach(sh => {
+        let data = getMasterDataCached(sh.n);
+        for(let i=1; i<data.length; i++) {
+            let d = data[i], rawDate = d[1];
+            if(!rawDate) continue;
+            let rowDate = (rawDate.constructor === Date) ? rawDate : new Date(rawDate);
+            if(isNaN(rowDate.getTime())) continue;
+            let month = rowDate.getMonth() + 1;
+            if (isReqMonth) { if(month !== reqMonthIdx) continue; } else { if((month >= 7) !== isReqGanjil) continue; }
+            
+            let isQur = sh.d === 'quran';
+            let namaVal = isQur ? String(d[4]).trim() : String(d[5]).trim();
+            
+            if(setSiswa.has(namaVal)) {
+                let statVal = isQur ? String(d[5]).trim().toUpperCase() : String(d[6]).trim().toUpperCase();
+                let ketVal = isQur ? String(d[6]).trim() : String(d[7]).trim();
+                let konteks = isQur ? formatKelas(d[3]) : (sh.d==='asrama' ? 'Kamar: '+formatKelas(d[4]) : String(d[3]).trim());
+                
+                logSemua.push({ raw: rowDate.getTime(), tgl: getFastDateIndo(rowDate), divisi: sh.dName, nama: namaVal, konteks: konteks, status: statVal, ket: ketVal });
+                
+                if(['H','T','S','I','A'].includes(statVal)) {
+                    rekapTotal.get(namaVal).total[statVal]++;
+                    rekapTotal.get(namaVal)[sh.d][statVal]++;
+                }
+            }
+        }
+    });
+    
+    let result = [];
+    if(!isIndividu) {
+        result.push(["No", "Nama Siswa", "Akademik (H/T/S/I/A)", "Asrama (H/T/S/I/A)", "Al-Quran (H/T/S/I/A)", "Total Masuk (H+T)", "Total Absen (S+I+A)"]);
+        let no = 1;
+        listSiswa.forEach(s => { 
+            let v = rekapTotal.get(s);
+            let txtAka = `${v.akademik.H}/${v.akademik.T}/${v.akademik.S}/${v.akademik.I}/${v.akademik.A}`;
+            let txtAsr = `${v.asrama.H}/${v.asrama.T}/${v.asrama.S}/${v.asrama.I}/${v.asrama.A}`;
+            let txtQur = `${v.quran.H}/${v.quran.T}/${v.quran.S}/${v.quran.I}/${v.quran.A}`;
+            let totMasuk = v.total.H + v.total.T; 
+            let totAbsen = v.total.S + v.total.I + v.total.A;
+            result.push([no++, s, txtAka, txtAsr, txtQur, totMasuk, totAbsen]); 
+        });
+    } else {
+        logSemua.sort((a,b) => a.raw - b.raw);
+        result.push(["No", "Tanggal", "Divisi", "Konteks Laporan", "Status", "Keterangan"]);
+        let no = 1;
+        logSemua.forEach(l => result.push([no++, l.tgl, l.divisi.toUpperCase(), l.konteks, l.status, l.ket]));
+        if(result.length === 1) result.push(["-", "-", "-", "TIDAK ADA CATATAN UNTUK SISWA INI", "-", "-"]);
+    }
+    return { laporan: result, materi: [] };
+}
+function getMasterRuangan() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Master_Ruangan");
+  if (!sheet) return [];
+  const data = getFastData(sheet);
+  let res = [];
+  for(let i=1; i<data.length; i++) {
+    if(data[i][0]) res.push(String(data[i][0]).trim().toUpperCase());
+  }
+  return res.sort();
+}
+function getMasterKelasAkademik() {
+  let kelasSet = new Set();
+  ['Master_Siswa_Putra', 'Master_Siswa_Putri'].forEach(sh => {
+    let d = getMasterDataCached(sh);
+    for(let i=1; i<d.length; i++) {
+        if(d[i][2] && String(d[i][2]).trim() !== "") {
+            kelasSet.add(formatKelas(d[i][2]));
+        }
+    }
+  });
+  return Array.from(kelasSet).sort();
+}
+function getSiswaUjianForm(tanggal, kelasStr, mapel, gender) {
+  const dataSiswa = getMasterDataCached("Master_Siswa_" + gender);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheetLog = ss.getSheetByName("Log_Ujian_" + gender);
+  if (!sheetLog) return { error: "Sheet Log_Ujian_" + gender + " belum dibuat!" };
+  
+  const dataAbsen = getRecentData(sheetLog, 4000);
+  let sheetAsrama = ss.getSheetByName("Log_Asrama_" + gender);
+  let dataAsramaPagi = sheetAsrama ? getRecentData(sheetAsrama, 4000) : [];
+  
+  let targetGrupArray = String(kelasStr).trim().split(",").map(item => item.trim().toUpperCase());
+  let reqMapel = String(mapel).trim().toUpperCase();
+  
+  let mapSiswa = new Map();
+  for (let i = 1, len = dataSiswa.length; i < len; i++) {
+    let valSiswa = formatKelas(dataSiswa[i][2]);
+    let isMatch = false;
+    for(let t=0; t<targetGrupArray.length; t++) {
+      let target = targetGrupArray[t];
+      if (target !== "" && valSiswa !== "" && (valSiswa === target || valSiswa.includes(target) || target.includes(valSiswa))) { isMatch = true; break; }
+    }
+    
+    if (isMatch) {
+      let nama = String(dataSiswa[i][1]).trim();
+      let defaultStatus = 'H', defaultKet = '';
+      
+      if (dataAsramaPagi.length > 0) {
+        for (let a = 1; a < dataAsramaPagi.length; a++) {
+          if (getFastDateStr(dataAsramaPagi[a][1]) === tanggal && String(dataAsramaPagi[a][5]).trim() === nama) {
+            let statusAsrama = String(dataAsramaPagi[a][6]).toUpperCase();
+            if (statusAsrama === 'S' || statusAsrama === 'I' || statusAsrama === 'A') { 
+              defaultStatus = statusAsrama; 
+              defaultKet = "Otomatis Asrama: " + String(dataAsramaPagi[a][7]); 
+            }
+            break;
+          }
+        }
+      }
+      mapSiswa.set(nama, { nama: nama, status: defaultStatus, keterangan: defaultKet, kelasAsli: valSiswa });
+    }
+  }
+  
+  let isEdit = false;
+  for (let i = dataAbsen.length - 1; i >= 1; i--) {
+    if (getFastDateStr(dataAbsen[i][1]) !== tanggal) continue;
+    if (String(dataAbsen[i][7]).trim().toUpperCase() !== reqMapel) continue; 
+    
+    let namaSiswaLog = String(dataAbsen[i][8]).trim();
+    let s = mapSiswa.get(namaSiswaLog);
+    if (s) {
+      isEdit = true;
+      s.status = dataAbsen[i][9]; 
+      s.keterangan = dataAbsen[i][10]; 
+    }
+  }
+  
+  let arrSiswaSorted = Array.from(mapSiswa.values()).sort((a, b) => a.kelasAsli.localeCompare(b.kelasAsli) || a.nama.localeCompare(b.nama));
+  return { siswa: arrSiswaSorted, isEdit: isEdit, grupAktif: String(kelasStr).toUpperCase() };
+}
+function simpanAbsenUjian(req) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let targetSheetName = "Log_Ujian_" + req.gender;
+  const sheet = ss.getSheetByName(targetSheetName);
+  if (!sheet) return "Gagal: Sheet " + targetSheetName + " tidak ditemukan!";
+  
+  const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  let reqTgl = req.tanggal, reqJenis = req.jenisUjian, reqRuang = req.ruangan, reqP1 = req.pengawas1, reqP2 = req.pengawas2, reqKelas = req.kelas, reqMapel = req.mapel;
+  
+  let rowsToDelete = [];
+  let lr = sheet.getLastRow(), lc = sheet.getLastColumn();
+  if (lr > 1) {
+     let data = sheet.getRange(2, 1, lr - 1, lc).getValues();
+     for (let i = data.length - 1; i >= 0; i--) {
+        if (getFastDateStr(data[i][1]) === reqTgl && String(data[i][7]).trim().toUpperCase() === reqMapel.toUpperCase()) {
+            let rowKls = String(data[i][6]).trim().toUpperCase();
+            if(rowKls === reqKelas.toUpperCase() || reqKelas.toUpperCase().includes(rowKls)) {
+                rowsToDelete.push(i + 2);
+            }
+        }
+     }
+  }
+  
+  if (rowsToDelete.length > 0) {
+    let currentStart = rowsToDelete[0], count = 1;
+    for (let i = 1; i < rowsToDelete.length; i++) {
+      if (rowsToDelete[i] === currentStart - 1) { currentStart = rowsToDelete[i]; count++; }
+      else { sheet.deleteRows(currentStart, count); currentStart = rowsToDelete[i]; count = 1; }
+    }
+    sheet.deleteRows(currentStart, count);
+  }
+  
+  let rowsToAppend = [];
+  for(let i=0; i<req.siswa.length; i++) {
+    let s = req.siswa[i];
+    let klsFinal = (s.kelasAsli && s.kelasAsli !== "") ? s.kelasAsli : reqKelas.toUpperCase();
+    rowsToAppend.push([ timestamp, reqTgl, reqJenis.toUpperCase(), reqRuang.toUpperCase(), reqP1.toUpperCase(), reqP2.toUpperCase(), klsFinal, reqMapel.toUpperCase(), s.nama, s.status, s.keterangan ]);
+  }
+  
+  if(rowsToAppend.length > 0) {
+     sheet.getRange(sheet.getLastRow() + 1, 1, rowsToAppend.length, rowsToAppend[0].length).setValues(rowsToAppend);
+  }
+  return rowsToDelete.length > 0 ? "Data Ujian Diperbarui!" : "Data Ujian Tersimpan!";
+}
+function getRiwayatUjianHariIni(tanggal, gender) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Log_Ujian_" + gender);
+  if (!sheet) return [];
+  
+  const data = getRecentData(sheet, 4000);
+  let riwayat = new Map();
+  
+  for(let i=1; i<data.length; i++) {
+     if(getFastDateStr(data[i][1]) === tanggal) {
+        let key = String(data[i][3]).trim() + "|" + String(data[i][6]).trim() + "|" + String(data[i][7]).trim();
+        
+        if(!riwayat.has(key)) {
+            riwayat.set(key, { 
+              ruang: data[i][3], 
+              pengawas: data[i][4], 
+              kelas: data[i][6], 
+              mapel: data[i][7], 
+              totalSiswa: 0, 
+              hadir: 0 
+            });
+        }
+        
+        let obj = riwayat.get(key);
+        obj.totalSiswa++;
+        if(data[i][9] === 'H' || data[i][9] === 'T') {
+            obj.hadir++;
+        }
+     }
+  }
+  return Array.from(riwayat.values());
+}
+function getRekapSusulanSemua(gender) {
+  let logUjian = getMasterDataCached("Log_Ujian_" + gender);
+  let hasilSusulan = [];
+  
+  for(let i=1; i<logUjian.length; i++) {
+      let status = logUjian[i][9];
+      if(status === 'S' || status === 'I' || status === 'A') {
+          hasilSusulan.push({ 
+              tgl: getFastDateIndo(logUjian[i][1]),
+              jenis: String(logUjian[i][2]).trim(),
+              nama: String(logUjian[i][8]).trim(), 
+              kelas: formatKelas(logUjian[i][6]), 
+              mapel: String(logUjian[i][7]).trim(),
+              keterangan: `[${status}] - ${logUjian[i][10]}` 
+          });
+      }
+  }
+  
+  return hasilSusulan.sort((a, b) => {
+      let pA = a.tgl.split('/'), pB = b.tgl.split('/');
+      return new Date(pB[2], pB[1]-1, pB[0]) - new Date(pA[2], pA[1]-1, pA[0]) || a.mapel.localeCompare(b.mapel) || a.kelas.localeCompare(b.kelas) || a.nama.localeCompare(b.nama);
+  });
+}
+
+// ==========================================
+// KODE TAMBAHAN UNTUK INTEGRASI VERCEL
+// ==========================================
+function doPost(e) {
+  let response = { result: null, error: null };
+  try {
+    let body = JSON.parse(e.postData.contents);
+    let fnName = body.functionName;
+    let args = body.args || [];
+    
+    if (typeof this[fnName] === 'function') {
+      response.result = this[fnName].apply(this, args);
+    } else {
+      response.error = "Fungsi " + fnName + " tidak ditemukan di sistem.";
+    }
+  } catch(err) {
+    response.error = err.toString();
+  }
+  
+  return ContentService.createTextOutput(JSON.stringify(response))
+    .setMimeType(ContentService.MimeType.JSON);
+}

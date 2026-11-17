@@ -1,0 +1,6 @@
+{
+  "name": "PINTAR Terpadu - Sistem Presensi & Pembinaan Boarding School",
+  "description": "Platform terintegrasi presensi asrama, akademik, Al-Qur'an, ujian, piket guru, akun guru tanpa wajib login presensi, dan sistem pembinaan wali kelas boarding school hemat kuota.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

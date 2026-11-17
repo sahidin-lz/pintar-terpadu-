@@ -1,0 +1,620 @@
+{
+  "entities": {
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Trusted administrator registry entry for SIM PINTAR.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the administrator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified email address of the administrator.",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "description": "Administrative role level.",
+          "enum": ["Admin Super", "Admin SIM"],
+          "minLength": 5,
+          "maxLength": 32
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    },
+    "StudentDoc": {
+      "title": "StudentDoc",
+      "description": "Master student record for Wilayah Putra and Wilayah Putri.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique student document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "nis": {
+          "type": "string",
+          "description": "Student identification number (NIS).",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "nama": {
+          "type": "string",
+          "description": "Full uppercase name of the student.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "gender": {
+          "type": "string",
+          "description": "Boarding school territory (Putra or Putri).",
+          "enum": ["Putra", "Putri"],
+          "minLength": 5,
+          "maxLength": 16
+        },
+        "kelas": {
+          "type": "string",
+          "description": "Academic class name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "kamar": {
+          "type": "string",
+          "description": "Dormitory room name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "waliKelas": {
+          "type": "string",
+          "description": "Assigned homeroom teacher name.",
+          "minLength": 0,
+          "maxLength": 120
+        },
+        "musyrif": {
+          "type": "string",
+          "description": "Assigned dormitory supervisor name.",
+          "minLength": 0,
+          "maxLength": 120
+        },
+        "kelompokQuran": {
+          "type": "string",
+          "description": "Al-Quran study group name.",
+          "minLength": 0,
+          "maxLength": 120
+        },
+        "pengampuQuran": {
+          "type": "string",
+          "description": "Al-Quran instructor name.",
+          "minLength": 0,
+          "maxLength": 120
+        },
+        "authorId": {
+          "type": "string",
+          "description": "UID of the staff/admin who synced the record.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "nis",
+        "nama",
+        "gender",
+        "kelas",
+        "kamar",
+        "waliKelas",
+        "musyrif",
+        "kelompokQuran",
+        "pengampuQuran",
+        "authorId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StaffPublicDoc": {
+      "title": "StaffPublicDoc",
+      "description": "Public non-PII staff profile and amanah assignment.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique staff ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "description": "Public username handle.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "nama": {
+          "type": "string",
+          "description": "Full uppercase name of the staff member.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "jabatan": {
+          "type": "string",
+          "description": "Formatted composite role title.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "peran": {
+          "type": "string",
+          "description": "Primary role assignment.",
+          "enum": ["Guru", "Wali Kelas", "Musyrif", "Musyrifah", "Admin SIM", "Admin Super"],
+          "minLength": 4,
+          "maxLength": 32
+        },
+        "peranTambahan": {
+          "type": "array",
+          "description": "Bounded list of additional roles (max 6).",
+          "maxLength": 6
+        },
+        "genderScope": {
+          "type": "string",
+          "description": "Territory assignment scope.",
+          "enum": ["Putra", "Putri", "Semua"],
+          "minLength": 5,
+          "maxLength": 16
+        },
+        "waliKelasOf": {
+          "type": "string",
+          "description": "Assigned homeroom class if Wali Kelas.",
+          "minLength": 0,
+          "maxLength": 80
+        },
+        "kamarBinaan": {
+          "type": "array",
+          "description": "Bounded list of dormitory rooms supervised (max 10).",
+          "maxLength": 10
+        },
+        "authorId": {
+          "type": "string",
+          "description": "UID of the owner/admin who created the profile.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "username",
+        "nama",
+        "jabatan",
+        "peran",
+        "peranTambahan",
+        "genderScope",
+        "waliKelasOf",
+        "kamarBinaan",
+        "authorId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StaffPrivateDoc": {
+      "title": "StaffPrivateDoc",
+      "description": "Isolated PII contact information for a staff member.",
+      "type": "object",
+      "properties": {
+        "staffId": {
+          "type": "string",
+          "description": "Parent staff profile ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "whatsapp": {
+          "type": "string",
+          "description": "Private WhatsApp phone number.",
+          "minLength": 0,
+          "maxLength": 40
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the profile owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["staffId", "whatsapp", "ownerId", "createdAt", "updatedAt"]
+    },
+    "ScheduleDoc": {
+      "title": "ScheduleDoc",
+      "description": "Teaching schedule entry for Akademik and Al-Quran.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique schedule ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "guru": {
+          "type": "string",
+          "description": "Teacher name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "hari": {
+          "type": "string",
+          "description": "Day of week (SENIN-SABTU).",
+          "minLength": 4,
+          "maxLength": 24
+        },
+        "kelas": {
+          "type": "string",
+          "description": "Class or Halaqah name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "mapel": {
+          "type": "string",
+          "description": "Subject name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "jamKe": {
+          "type": "string",
+          "description": "Lesson period slot (e.g. 1-2).",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "gender": {
+          "type": "string",
+          "description": "Territory (Putra or Putri).",
+          "enum": ["Putra", "Putri"],
+          "minLength": 5,
+          "maxLength": 16
+        },
+        "kategori": {
+          "type": "string",
+          "description": "Schedule category.",
+          "enum": ["Akademik", "Al-Quran"],
+          "minLength": 8,
+          "maxLength": 24
+        },
+        "authorId": {
+          "type": "string",
+          "description": "UID of the creator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "guru",
+        "hari",
+        "kelas",
+        "mapel",
+        "jamKe",
+        "gender",
+        "kategori",
+        "authorId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AttendanceDoc": {
+      "title": "AttendanceDoc",
+      "description": "Student attendance log record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique attendance log ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "tanggal": {
+          "type": "string",
+          "description": "ISO date string YYYY-MM-DD.",
+          "minLength": 10,
+          "maxLength": 20
+        },
+        "tipe": {
+          "type": "string",
+          "description": "Attendance division type.",
+          "minLength": 3,
+          "maxLength": 40
+        },
+        "gender": {
+          "type": "string",
+          "description": "Territory (Putra or Putri).",
+          "enum": ["Putra", "Putri"],
+          "minLength": 5,
+          "maxLength": 16
+        },
+        "kelas": {
+          "type": "string",
+          "description": "Class name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "kamar": {
+          "type": "string",
+          "description": "Dormitory room name.",
+          "minLength": 0,
+          "maxLength": 80
+        },
+        "studentId": {
+          "type": "string",
+          "description": "Referenced student ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentName": {
+          "type": "string",
+          "description": "Student name snapshot.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "status": {
+          "type": "string",
+          "description": "Attendance status code.",
+          "enum": ["H", "S", "I", "A", "T"],
+          "minLength": 1,
+          "maxLength": 8
+        },
+        "catatan": {
+          "type": "string",
+          "description": "Optional note.",
+          "minLength": 0,
+          "maxLength": 250
+        },
+        "petugas": {
+          "type": "string",
+          "description": "Name of recording teacher/musyrif.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "authorId": {
+          "type": "string",
+          "description": "UID of recording user.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "tanggal",
+        "tipe",
+        "gender",
+        "kelas",
+        "kamar",
+        "studentId",
+        "studentName",
+        "status",
+        "catatan",
+        "petugas",
+        "authorId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PembinaanDoc": {
+      "title": "PembinaanDoc",
+      "description": "Student mentoring and character development record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique mentoring record ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "tanggal": {
+          "type": "string",
+          "description": "ISO date string YYYY-MM-DD.",
+          "minLength": 10,
+          "maxLength": 20
+        },
+        "gender": {
+          "type": "string",
+          "description": "Territory (Putra or Putri).",
+          "enum": ["Putra", "Putri"],
+          "minLength": 5,
+          "maxLength": 16
+        },
+        "kelas": {
+          "type": "string",
+          "description": "Student class.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "kamar": {
+          "type": "string",
+          "description": "Student dormitory room.",
+          "minLength": 0,
+          "maxLength": 80
+        },
+        "waliKelas": {
+          "type": "string",
+          "description": "Recording homeroom teacher or mentor.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "studentId": {
+          "type": "string",
+          "description": "Referenced student ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentName": {
+          "type": "string",
+          "description": "Student name snapshot.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "kategori": {
+          "type": "string",
+          "description": "Mentoring category.",
+          "minLength": 3,
+          "maxLength": 60
+        },
+        "uraian": {
+          "type": "string",
+          "description": "Detailed mentoring observation.",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "tindakLanjut": {
+          "type": "string",
+          "description": "Follow-up action taken.",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "statusTindakLanjut": {
+          "type": "string",
+          "description": "Follow-up workflow status (Selesai is terminal for non-admins).",
+          "enum": ["Selesai", "Proses", "Eskalasi"],
+          "minLength": 6,
+          "maxLength": 24
+        },
+        "poin": {
+          "type": "number",
+          "description": "Numeric evaluation point."
+        },
+        "authorId": {
+          "type": "string",
+          "description": "UID of recording user.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "tanggal",
+        "gender",
+        "kelas",
+        "kamar",
+        "waliKelas",
+        "studentId",
+        "studentName",
+        "kategori",
+        "uraian",
+        "tindakLanjut",
+        "statusTindakLanjut",
+        "poin",
+        "authorId",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Trusted administrator lookup table."
+    },
+    "/students/{studentId}": {
+      "schema": { "$ref": "#/entities/StudentDoc" },
+      "description": "Master student directory for Putra and Putri."
+    },
+    "/staff_profiles/{staffId}": {
+      "schema": { "$ref": "#/entities/StaffPublicDoc" },
+      "description": "Public staff profiles and multi-role amanah."
+    },
+    "/staff_profiles/{staffId}/private/{privateId}": {
+      "schema": { "$ref": "#/entities/StaffPrivateDoc" },
+      "description": "Isolated PII contact information for staff members."
+    },
+    "/schedules/{scheduleId}": {
+      "schema": { "$ref": "#/entities/ScheduleDoc" },
+      "description": "Academic and Al-Quran teaching schedules."
+    },
+    "/attendance_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AttendanceDoc" },
+      "description": "Daily attendance records referencing students."
+    },
+    "/pembinaan_records/{recordId}": {
+      "schema": { "$ref": "#/entities/PembinaanDoc" },
+      "description": "Mentoring and character follow-up records referencing students."
+    }
+  }
+}
