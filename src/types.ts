@@ -48,6 +48,7 @@ export interface Student {
 export interface TeacherPublic {
   id: string;
   username: string;
+  email?: string;
   nama: string;
   jabatan: string;
   peran: UserRole;

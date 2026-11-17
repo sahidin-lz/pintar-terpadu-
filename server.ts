@@ -12,10 +12,10 @@ import {
 } from './server/templates';
 import type { Gender, PresensiType, StatusTindakLanjut, WilayahFilter } from './src/types';
 
-async function startServer() {
-  const app = express();
-  app.use(express.json({ limit: '15mb' }));
+export const app = express();
+app.use(express.json({ limit: '15mb' }));
 
+function registerApiRoutes() {
   // ==============================================================
   // API ROUTES — PINTAR TERINTEGRASI & PEMBINAAN WALI KELAS
   // ==============================================================
@@ -685,6 +685,11 @@ async function startServer() {
     res.json(store.getQuranHalaqahRecap({ guru, kelompok, gender }));
   });
 
+}
+
+registerApiRoutes();
+
+async function startServer() {
   // ==============================================================
   // VITE / STATIC SERVING
   // ==============================================================
@@ -710,4 +715,8 @@ async function startServer() {
   });
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;
