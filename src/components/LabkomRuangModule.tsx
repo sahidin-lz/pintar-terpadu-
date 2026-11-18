@@ -2346,9 +2346,9 @@ export const LabkomRuangModule: React.FC<Props> = ({
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {visibleToday.map((b) => (
+                    {visibleToday.map((b, idx) => (
                       <div
-                        key={b.id}
+                        key={`${b.id}__${b.kampus}__${b.lab}__${b.tanggal}__${b.jamKe}__${idx}`}
                         className="rounded-xl border border-slate-200 p-3.5 bg-slate-50/50 hover:bg-white transition-colors flex flex-col justify-between gap-2.5"
                       >
                         <div className="space-y-1.5">
@@ -2952,9 +2952,9 @@ export const LabkomRuangModule: React.FC<Props> = ({
             </div>
 
             <div className="flex gap-1.5 overflow-x-auto pb-1 lg:pb-0">
-              {[...getMaster('LAB'), ...getMaster('RUANGAN')].map((r) => (
+              {[...getMaster('LAB'), ...getMaster('RUANGAN')].map((r, idx) => (
                 <button
-                  key={r.id}
+                  key={`${r.id}__${idx}`}
                   type="button"
                   onClick={() => setCurrentPlotingRuang(r.nilai)}
                   className={`px-3 py-2 rounded-lg text-[11px] font-bold uppercase whitespace-nowrap transition-colors ${
@@ -3824,8 +3824,8 @@ export const LabkomRuangModule: React.FC<Props> = ({
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {(state?.fixedSchedules || []).length > 0 ? (
-                      state!.fixedSchedules.map((r) => (
-                        <tr key={r.id} className="hover:bg-slate-50">
+                      state!.fixedSchedules.map((r, idx) => (
+                        <tr key={`${r.id}__${idx}`} className="hover:bg-slate-50">
                           <td className="p-3.5">
                             <div
                               className={`text-[10px] font-bold uppercase ${
@@ -4369,10 +4369,13 @@ export const LabkomRuangModule: React.FC<Props> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredHistory.slice(0, historyPageLimit).map((r) => {
+                  {filteredHistory.slice(0, historyPageLimit).map((r, idx) => {
                     const sem = getAcademicSemester(r.tanggal);
                     return (
-                      <tr key={r.id} className="hover:bg-slate-50">
+                      <tr
+                        key={`${r.id}__${r.kampus}__${r.lab}__${r.tanggal}__${r.jamKe}__${idx}`}
+                        className="hover:bg-slate-50"
+                      >
                         <td className="p-3.5 text-center">
                           {isAdmin && (
                             <input
@@ -4915,12 +4918,12 @@ export const LabkomRuangModule: React.FC<Props> = ({
                                   : 'Belum ada data. Tarik dari peminjaman atau tambah baru.'}
                               </div>
                             ) : (
-                              list.map((m) => {
+                              list.map((m, idx) => {
                                 const usedCount =
                                   usageMap.get(`${cat}|${m.nilai.trim().toUpperCase()}`) || 0;
                                 return (
                                   <div
-                                    key={m.id}
+                                    key={`${m.id}__${idx}`}
                                     className="p-2 flex justify-between items-center gap-2 hover:bg-slate-50 rounded-lg group"
                                   >
                                     {editingMasterId === m.id ? (

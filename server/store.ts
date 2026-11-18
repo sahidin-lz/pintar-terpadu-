@@ -52,6 +52,7 @@ import {
   classifyTimeCategory,
   DEFAULT_LABKOM_BROADCAST_TEMPLATE,
   ensureBaselineMasters,
+  ensureUniqueLabkomBookingIds,
   loadLabkomSeedData,
   parseLabkomCsvContent,
   parseLabkomTanggalToIso,
@@ -297,6 +298,7 @@ class PintarStore {
       if (!hasLabkomBookings) labkomBookings = seed.bookings;
       if (!hasLabkomMasters) labkomMasters = seed.masters;
     }
+    labkomBookings = ensureUniqueLabkomBookingIds(labkomBookings);
     labkomMasters = ensureBaselineMasters(labkomMasters);
 
     return {
@@ -2011,7 +2013,9 @@ class PintarStore {
       }
       if (Array.isArray(snapshot.attachments)) this.db.attachments = snapshot.attachments;
       if (Array.isArray(snapshot.whatsappLogs)) this.db.whatsappLogs = snapshot.whatsappLogs;
-      if (Array.isArray(snapshot.labkomBookings)) this.db.labkomBookings = snapshot.labkomBookings;
+      if (Array.isArray(snapshot.labkomBookings)) {
+        this.db.labkomBookings = ensureUniqueLabkomBookingIds(snapshot.labkomBookings);
+      }
       if (Array.isArray(snapshot.labkomFixedSchedules)) {
         this.db.labkomFixedSchedules = snapshot.labkomFixedSchedules;
       }
@@ -2174,11 +2178,28 @@ class PintarStore {
 
       if (Array.isArray(snapshot.labkomBookings)) {
         if (!this.db.labkomBookings) this.db.labkomBookings = [];
-        const seenLb = new Set(this.db.labkomBookings.map((b) => b.id));
+        const seenLbIds = new Set(this.db.labkomBookings.map((b) => b.id));
+        const seenLbSlots = new Set(
+          this.db.labkomBookings.map((b) => `${b.kampus}|${b.lab}|${b.tanggal}|${b.jamKe}`),
+        );
         for (const lb of snapshot.labkomBookings) {
-          if (!seenLb.has(lb.id)) {
-            this.db.labkomBookings.push(lb);
-            seenLb.add(lb.id);
+          const slot = `${lb.kampus}|${lb.lab}|${lb.tanggal}|${lb.jamKe}`;
+          if (!seenLbSlots.has(slot)) {
+            let nextId = String(lb.id || '').trim() || `TRX-SNAP-${Date.now()}`;
+            if (seenLbIds.has(nextId)) {
+              const jamSlug = String(lb.jamKe || '')
+                .toUpperCase()
+                .replace(/[^A-Z0-9]+/g, '');
+              let candidate = `${nextId}__J${jamSlug || 'X'}`;
+              let suffix = 2;
+              while (seenLbIds.has(candidate)) {
+                candidate = `${nextId}__J${jamSlug || 'X'}_${suffix++}`;
+              }
+              nextId = candidate;
+            }
+            seenLbIds.add(nextId);
+            seenLbSlots.add(slot);
+            this.db.labkomBookings.push(nextId === lb.id ? lb : { ...lb, id: nextId });
           }
         }
       }
@@ -5103,10 +5124,10 @@ class PintarStore {
       }
     }
 
-    const byIdIndex = new Map<string, number>();
+    const usedIds = new Set<string>();
     const bySlotIndex = new Map<string, number>();
     this.db.labkomBookings!.forEach((b, idx) => {
-      byIdIndex.set(b.id, idx);
+      usedIds.add(b.id);
       bySlotIndex.set(`${b.kampus}|${b.lab}|${b.tanggal}|${b.jamKe}`, idx);
     });
 
@@ -5116,7 +5137,7 @@ class PintarStore {
 
     for (const item of incoming) {
       const slotKey = `${item.kampus}|${item.lab}|${item.tanggal}|${item.jamKe}`;
-      const existingIdx = byIdIndex.get(item.id) ?? bySlotIndex.get(slotKey);
+      const existingIdx = bySlotIndex.get(slotKey);
 
       if (existingIdx !== undefined) {
         if (effectiveMode === 'upsert') {
@@ -5134,9 +5155,22 @@ class PintarStore {
         continue;
       }
 
+      let finalId = String(item.id || '').trim() || `TRX-IMP-${Date.now()}-${added}`;
+      if (usedIds.has(finalId)) {
+        const jamSlug = String(item.jamKe || '')
+          .toUpperCase()
+          .replace(/[^A-Z0-9]+/g, '');
+        let candidate = `${finalId}__J${jamSlug || added}`;
+        let suffix = 2;
+        while (usedIds.has(candidate)) {
+          candidate = `${finalId}__J${jamSlug || added}_${suffix++}`;
+        }
+        finalId = candidate;
+      }
+      usedIds.add(finalId);
+
       const newIdx = this.db.labkomBookings!.length;
-      this.db.labkomBookings!.push(item);
-      byIdIndex.set(item.id, newIdx);
+      this.db.labkomBookings!.push(finalId === item.id ? item : { ...item, id: finalId });
       bySlotIndex.set(slotKey, newIdx);
       added++;
     }
@@ -6016,8 +6050,13 @@ class PintarStore {
         duplicatesRemoved++;
       }
     }
-    this.db.labkomBookings = Array.from(bookingMap.values()).sort(
-      (a, b) => b.tanggal.localeCompare(a.tanggal) || a.kampus.localeCompare(b.kampus) || a.jamKe.localeCompare(b.jamKe, undefined, { numeric: true }),
+    this.db.labkomBookings = ensureUniqueLabkomBookingIds(
+      Array.from(bookingMap.values()),
+    ).sort(
+      (a, b) =>
+        b.tanggal.localeCompare(a.tanggal) ||
+        a.kampus.localeCompare(b.kampus) ||
+        a.jamKe.localeCompare(b.jamKe, undefined, { numeric: true }),
     );
 
     // 7. Tidy Labkom Fixed Schedules & Plotings

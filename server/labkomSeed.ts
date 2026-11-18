@@ -200,6 +200,26 @@ export function classifyTimeCategory(jam: string): 'JAM' | 'WAKTU_RUANG' {
   return 'JAM';
 }
 
+export function ensureUniqueLabkomBookingIds(bookings: LabkomBooking[]): LabkomBooking[] {
+  const seenIds = new Set<string>();
+  return bookings.map((b, idx) => {
+    let id = String(b.id || '').trim() || `TRX-AUTO-${idx}`;
+    if (seenIds.has(id)) {
+      const jamSlug = String(b.jamKe || '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, '');
+      let candidate = `${id}__J${jamSlug || idx}`;
+      let suffix = 2;
+      while (seenIds.has(candidate)) {
+        candidate = `${id}__J${jamSlug || idx}_${suffix++}`;
+      }
+      id = candidate;
+    }
+    seenIds.add(id);
+    return id === b.id ? b : { ...b, id };
+  });
+}
+
 export function parseLabkomCsvContent(
   csvText: string,
   overrideKampus?: LabkomKampus,
@@ -296,7 +316,7 @@ export function parseLabkomCsvContent(
       status: String(cols[iStatus] || '').trim() || 'Disetujui',
     });
   }
-  return bookings;
+  return ensureUniqueLabkomBookingIds(bookings);
 }
 
 export function buildMastersFromBookings(
@@ -378,7 +398,17 @@ export function ensureBaselineMasters(existing: LabkomMasterItem[]): LabkomMaste
   pushIfMissing('JAM', CANONICAL_JAMS);
   pushIfMissing('WAKTU_RUANG', CANONICAL_WAKTU_RUANG);
 
-  return merged;
+  const seenMasterIds = new Set<string>();
+  return merged.map((m, idx) => {
+    let id = String(m.id || '').trim() || `LM_${m.kategori}_${idx + 1}`;
+    if (seenMasterIds.has(id)) {
+      let suffix = 2;
+      while (seenMasterIds.has(`${id}_${suffix}`)) suffix++;
+      id = `${id}_${suffix}`;
+    }
+    seenMasterIds.add(id);
+    return id === m.id ? m : { ...m, id };
+  });
 }
 
 let cachedSeed: { bookings: LabkomBooking[]; masters: LabkomMasterItem[] } | null = null;
