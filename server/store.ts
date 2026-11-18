@@ -928,23 +928,54 @@ class PintarStore {
       this.db.schedules = [];
     }
     let added = 0;
+    let updated = 0;
     for (const r of payload.rows) {
-      const exists = this.db.schedules.some(
+      const cleanGuru = (r.guru || '').trim().toUpperCase();
+      const cleanHari = (r.hari || 'SENIN').trim().toUpperCase();
+      const cleanKelas = (r.kelas || '').trim().toUpperCase();
+      const cleanMapel = (r.mapel || '').trim().toUpperCase();
+      const cleanJam = (r.jamKe || '1-2').trim();
+      if (!cleanGuru || !cleanKelas || !cleanMapel) continue;
+
+      const exactIdx = this.db.schedules.findIndex(
         (s) =>
-          s.hari === r.hari.toUpperCase() &&
-          normalizeStr(s.guru) === normalizeStr(r.guru) &&
-          s.kelas.toUpperCase() === r.kelas.toUpperCase() &&
-          s.mapel.toUpperCase() === r.mapel.toUpperCase() &&
-          s.jamKe === r.jamKe
+          s.hari === cleanHari &&
+          normalizeStr(s.guru) === normalizeStr(cleanGuru) &&
+          s.kelas.toUpperCase() === cleanKelas &&
+          s.mapel.toUpperCase() === cleanMapel &&
+          s.jamKe === cleanJam
       );
-      if (!exists) {
+      if (exactIdx >= 0) {
+        this.db.schedules[exactIdx].gender = r.gender;
+        this.db.schedules[exactIdx].kategori = r.kategori;
+        continue;
+      }
+
+      // Check if an existing schedule slot for the same Hari + Kelas + JamKe exists (edit via Excel template)
+      const slotIdx = this.db.schedules.findIndex(
+        (s) =>
+          s.hari === cleanHari &&
+          s.kelas.toUpperCase() === cleanKelas &&
+          s.jamKe === cleanJam
+      );
+      if (slotIdx >= 0) {
+        this.db.schedules[slotIdx] = {
+          ...this.db.schedules[slotIdx],
+          guru: cleanGuru,
+          mapel: cleanMapel,
+          gender: r.gender,
+          kategori: r.kategori,
+          updatedAt: new Date().toISOString(),
+        };
+        updated++;
+      } else {
         this.db.schedules.push({
-          id: `J_${Date.now()}_${added}`,
-          guru: r.guru.toUpperCase(),
-          hari: r.hari.toUpperCase(),
-          kelas: r.kelas.toUpperCase(),
-          mapel: r.mapel.toUpperCase(),
-          jamKe: r.jamKe,
+          id: `J_${Date.now()}_${added}_${Math.random().toString(36).slice(2, 6)}`,
+          guru: cleanGuru,
+          hari: cleanHari,
+          kelas: cleanKelas,
+          mapel: cleanMapel,
+          jamKe: cleanJam,
           gender: r.gender,
           kategori: r.kategori,
         });
@@ -953,7 +984,7 @@ class PintarStore {
     }
     this.batchedWrites++;
     this.persist();
-    return { added };
+    return { added, updated };
   }
 
   public importTeachersBulk(payload: {
@@ -1078,6 +1109,27 @@ class PintarStore {
       this.batchedWrites++;
       this.persist();
     }
+    return this.db.ruanganUjian;
+  }
+
+  public updateRuanganUjian(oldName: string, newName: string): string[] {
+    const cleanOld = oldName.trim().toUpperCase();
+    const cleanNew = newName.trim().toUpperCase();
+    if (!cleanOld || !cleanNew) return this.db.ruanganUjian;
+    const idx = this.db.ruanganUjian.findIndex((r) => r.trim().toUpperCase() === cleanOld);
+    if (idx >= 0) {
+      this.db.ruanganUjian[idx] = cleanNew;
+      this.batchedWrites++;
+      this.persist();
+    }
+    return this.db.ruanganUjian;
+  }
+
+  public deleteRuanganUjian(namaRuang: string): string[] {
+    const clean = namaRuang.trim().toUpperCase();
+    this.db.ruanganUjian = this.db.ruanganUjian.filter((r) => r.trim().toUpperCase() !== clean);
+    this.batchedWrites++;
+    this.persist();
     return this.db.ruanganUjian;
   }
 
@@ -1603,6 +1655,64 @@ class PintarStore {
     this.batchedWrites++;
     this.persist();
     return this.db.students[idx];
+  }
+
+  public updateStudentById(
+    id: string,
+    updates: Partial<
+      Pick<
+        Student,
+        | 'nis'
+        | 'nama'
+        | 'gender'
+        | 'kelas'
+        | 'kamar'
+        | 'kelompokQuran'
+        | 'pengampuQuran'
+        | 'waliKelas'
+        | 'musyrif'
+      >
+    >
+  ): Student | null {
+    const idx = this.db.students.findIndex((s) => s.id === id);
+    if (idx < 0) return null;
+    const current = this.db.students[idx];
+    const nextNama = updates.nama ? updates.nama.trim().toUpperCase() : current.nama;
+    const nextKelas = updates.kelas ? updates.kelas.trim().toUpperCase() : current.kelas;
+    const nextKamar = updates.kamar !== undefined ? updates.kamar.trim() : current.kamar;
+    const nextKelompok =
+      updates.kelompokQuran !== undefined ? updates.kelompokQuran.trim() : current.kelompokQuran;
+    const nextPengampu =
+      updates.pengampuQuran !== undefined
+        ? updates.pengampuQuran.trim().toUpperCase()
+        : current.pengampuQuran;
+    const nextGender: Gender = updates.gender || current.gender;
+
+    this.db.students[idx] = {
+      ...current,
+      ...updates,
+      nama: nextNama,
+      kelas: nextKelas,
+      kamar: nextKamar,
+      kelompokQuran: nextKelompok,
+      pengampuQuran: nextPengampu,
+      gender: nextGender,
+    };
+    this.reconcileDatabaseRelations('1234');
+    this.batchedWrites++;
+    this.persist();
+    return this.db.students[idx];
+  }
+
+  public deleteStudentById(id: string): boolean {
+    const before = this.db.students.length;
+    this.db.students = this.db.students.filter((s) => s.id !== id);
+    if (this.db.students.length !== before) {
+      this.batchedWrites++;
+      this.persist();
+      return true;
+    }
+    return false;
   }
 
   public resetDatabaseEmpty() {

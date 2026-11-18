@@ -6,7 +6,9 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
+  Download,
   Edit3,
+  FileSpreadsheet,
   Grid3X3,
   Home,
   List,
@@ -14,6 +16,7 @@ import {
   Save,
   Search,
   Trash2,
+  Upload,
   Users,
   X,
 } from 'lucide-react';
@@ -25,6 +28,11 @@ import type {
   TeacherPublic,
   WilayahFilter,
 } from '../types';
+import {
+  downloadComponentExcelTemplate,
+  parseDatabaseExcelBuffer,
+  triggerExcelDownloadFromSpec,
+} from '../utils/excelParser';
 
 interface JadwalModuleProps {
   currentUser: TeacherPublic | null;
@@ -318,6 +326,107 @@ export const JadwalModule: React.FC<JadwalModuleProps> = ({
     }
   };
 
+  const [uploadingExcelJadwal, setUploadingExcelJadwal] = useState(false);
+
+  const handleDownloadBlankJadwalExcel = () => {
+    try {
+      const fname = downloadComponentExcelTemplate('jadwal', 'blank');
+      notify(`Mengunduh ${fname} (Template Kosong Jadwal Akademik & Al-Qur'an).`, 'success');
+    } catch {
+      notify('Gagal mengunduh template kosong jadwal.', 'error');
+    }
+  };
+
+  const handleDownloadExistingJadwalExcel = () => {
+    try {
+      const targetList = visibleSchedules.length > 0 ? visibleSchedules : schedules;
+      const rows: string[][] = [
+        ['Guru', 'Hari', 'Kelas / Halaqah', 'Mata Pelajaran', 'Jam Ke', 'Wilayah (Putra/Putri)'],
+        ...(targetList.length > 0
+          ? targetList.map((s) => [s.guru, s.hari, s.kelas, s.mapel, s.jamKe, s.gender])
+          : [
+              [
+                currentUser?.nama || 'UST. NUR FAIZIN',
+                'SENIN',
+                '10 ABU BAKAR AS-SHIDDIQ',
+                'FIQIH IBADAH',
+                '1-2',
+                'Putra',
+              ],
+              [
+                currentUser?.nama || 'UST. DAFFA M Z',
+                'SELASA',
+                '10-08 Putra',
+                "HALAQAH AL-QUR'AN",
+                '3-4',
+                'Putra',
+              ],
+            ]),
+      ];
+      triggerExcelDownloadFromSpec({
+        filename: 'Template_Jadwal_Mengajar_Saat_Ini.xlsx',
+        sourceLabel: 'Jadwal Mengajar Akademik & Al-Quran',
+        sheets: [
+          {
+            name: '4_Jadwal_Mengajar',
+            label: 'Jadwal Putra & Putri',
+            rows,
+          },
+        ],
+      });
+      notify(
+        `Berhasil mengunduh ${targetList.length} jadwal yang sudah ada ke Excel (.xlsx). Silakan edit lalu upload kembali.`,
+        'success'
+      );
+    } catch {
+      notify('Gagal mengekspor jadwal ke Excel.', 'error');
+    }
+  };
+
+  const handleUploadJadwalExcel = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploadingExcelJadwal(true);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const buf = ev.target?.result as ArrayBuffer;
+      if (!buf) {
+        setUploadingExcelJadwal(false);
+        return;
+      }
+      try {
+        const parsed = parseDatabaseExcelBuffer(buf, file.name);
+        if (parsed.scheduleRows.length === 0) {
+          throw new Error(
+            'Tidak ada baris jadwal yang ditemukan di file Excel. Pastikan kolom: Guru | Hari | Kelas / Halaqah | Mata Pelajaran | Jam Ke | Wilayah.'
+          );
+        }
+        const res = await fetch('/api/import/jadwal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            rows: parsed.scheduleRows,
+            replaceExisting: false,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal mengimpor jadwal dari Excel.');
+        loadSchedules();
+        onChanged();
+        notify(
+          `Berhasil memproses ${parsed.scheduleRows.length} baris jadwal dari Excel (${data.added || 0} baru ditambahkan, ${data.updated || 0} jadwal lama diperbarui).`,
+          'success'
+        );
+      } catch (err) {
+        notify((err as Error).message, 'error');
+      } finally {
+        setUploadingExcelJadwal(false);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
   const handleDeleteSchedule = async (id: string) => {
     const res = await fetch(`/api/jadwal/${id}`, { method: 'DELETE' });
     if (res.ok) {
@@ -520,7 +629,87 @@ export const JadwalModule: React.FC<JadwalModuleProps> = ({
       </div>
 
       {subTab === 'mengajar' ? (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
+        <div className="space-y-5">
+          {/* Hybrid Schedule Toolbar: Template Excel vs Sistem (Guru Akademik & Al-Qur'an) */}
+          <div className="rounded-xl border border-teal-200 bg-gradient-to-r from-teal-50/80 via-emerald-50/50 to-white p-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-700 text-white shrink-0">
+                <FileSpreadsheet className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-xs font-bold text-slate-900">
+                    Kelola Jadwal Guru Akademik &amp; Al-Qur&apos;an (Lewat Sistem, Edit Jadwal, atau Template Excel)
+                  </h3>
+                  <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[10px] font-semibold text-teal-900">
+                    Hybrid Input &amp; Edit
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  Anda dapat menambah/mengedit jadwal secara langsung lewat form sistem di bawah, <b>klik tombol pensil (Edit)</b> pada jadwal yang sudah ada, atau <b>Unduh &amp; Upload Template Excel (.xlsx)</b>.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setFormMinimized(false);
+                  setEditingId(null);
+                  setFormKategori('Akademik');
+                  if (currentUser?.nama) setFormGuru(currentUser.nama);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap shrink-0"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                + Jadwal Akademik (Sistem)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFormMinimized(false);
+                  setEditingId(null);
+                  setFormKategori('Al-Quran');
+                  setFormMapel("HALAQAH AL-QUR'AN");
+                  if (currentUser?.nama) setFormGuru(currentUser.nama);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 whitespace-nowrap shrink-0"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                + Jadwal Al-Qur&apos;an (Sistem)
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadBlankJadwalExcel}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+              >
+                <Download className="h-3.5 w-3.5 text-teal-700" />
+                Template Kosong (.xlsx)
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadExistingJadwalExcel}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-teal-300 bg-white px-3 py-1.5 text-xs font-semibold text-teal-800 hover:bg-teal-50 whitespace-nowrap shrink-0"
+              >
+                <Download className="h-3.5 w-3.5 text-teal-700" />
+                Unduh &amp; Edit Jadwal Saat Ini (.xlsx)
+              </button>
+              <label className="inline-flex items-center gap-1.5 rounded-lg bg-[#0B1324] px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 cursor-pointer whitespace-nowrap shrink-0">
+                <Upload className="h-3.5 w-3.5 text-teal-300" />
+                <span>{uploadingExcelJadwal ? 'Mengupload...' : 'Upload Excel Jadwal (.xlsx)'}</span>
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  disabled={uploadingExcelJadwal}
+                  onChange={handleUploadJadwalExcel}
+                  className="hidden"
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
           {/* Create / Edit Form (Collapsible) */}
           {formMinimized ? (
             <div className="lg:col-span-12 rounded-xl border border-slate-200 bg-white px-5 py-3 flex flex-wrap items-center justify-between gap-3">
@@ -1136,6 +1325,7 @@ export const JadwalModule: React.FC<JadwalModuleProps> = ({
                 </div>
               </div>
             )}
+          </div>
           </div>
         </div>
       ) : subTab === 'pindah' ? (

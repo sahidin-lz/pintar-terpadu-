@@ -6,6 +6,7 @@ import {
   Clock,
   Copy,
   Download,
+  Edit3,
   ExternalLink,
   FileSpreadsheet,
   Home,
@@ -13,14 +14,17 @@ import {
   LogOut,
   Plus,
   ShieldCheck,
+  Trash2,
   Upload,
   UserCheck,
   UserPlus,
   Users,
+  X,
 } from 'lucide-react';
 import type { Gender, ScheduleItem, TeacherAbsenceLog, TeacherPublic } from '../types';
 import { downloadCsv, formatTanggalIndo, getTodayDateStr } from '../utils/exportHelpers';
 import {
+  downloadComponentExcelTemplate,
   parseDatabaseExcelBuffer,
   triggerExcelDownloadFromSpec,
   type DatabaseWorkbookSpec,
@@ -199,12 +203,15 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
   const [inKelompok, setInKelompok] = useState('');
   const [savingSantri, setSavingSantri] = useState(false);
 
+  const [editingJadwalId, setEditingJadwalId] = useState<string | null>(null);
+  const [inKategoriJadwal, setInKategoriJadwal] = useState<'Akademik' | 'Al-Quran'>('Akademik');
   const [inHari, setInHari] = useState('SENIN');
   const [inJadwalWilayah, setInJadwalWilayah] = useState<Gender>(defaultGender);
   const [inJadwalKelas, setInJadwalKelas] = useState(unlockedTeacher?.waliKelasOf || '');
   const [inMapel, setInMapel] = useState('');
   const [inJam, setInJam] = useState('1-2');
   const [savingJadwal, setSavingJadwal] = useState(false);
+  const [uploadingJadwalExcel, setUploadingJadwalExcel] = useState(false);
 
   const [editScope, setEditScope] = useState<'Putra' | 'Putri' | 'Semua'>(unlockedTeacher?.genderScope || 'Putra');
   const [editWaliKelas, setEditWaliKelas] = useState(unlockedTeacher?.waliKelasOf || '');
@@ -454,34 +461,426 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
     }
     setSavingJadwal(true);
     try {
-      const res = await fetch('/api/guru/import-personal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          teacherName: unlockedTeacher.nama,
-          scheduleRows: [
-            {
-              guru: unlockedTeacher.nama,
-              hari: inHari,
-              kelas: inJadwalKelas.trim(),
-              mapel: inMapel.trim(),
-              jamKe: inJam.trim() || '1-2',
-              gender: inJadwalWilayah,
-            },
-          ],
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal menambahkan jadwal.');
-      setInMapel('');
-      fetchRecap(unlockedTeacher.nama);
-      onDataUpdated?.();
-      notify(`Jadwal ${inHari} (${inJadwalKelas.toUpperCase()}) ditambahkan ke akun Anda.`, 'success');
+      if (editingJadwalId) {
+        const res = await fetch(`/api/jadwal/${editingJadwalId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            guru: unlockedTeacher.nama,
+            hari: inHari,
+            kelas: inJadwalKelas.trim(),
+            mapel: inMapel.trim(),
+            jamKe: inJam.trim() || '1-2',
+            gender: inJadwalWilayah,
+            kategori: inKategoriJadwal,
+            allowOverride: true,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal memperbarui jadwal.');
+        setEditingJadwalId(null);
+        setInMapel('');
+        fetchRecap(unlockedTeacher.nama);
+        onDataUpdated?.();
+        notify(`Jadwal ${inHari} (${inJadwalKelas.toUpperCase()}) berhasil diperbarui.`, 'success');
+      } else {
+        const res = await fetch('/api/jadwal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            guru: unlockedTeacher.nama,
+            hari: inHari,
+            kelas: inJadwalKelas.trim(),
+            mapel: inMapel.trim(),
+            jamKe: inJam.trim() || '1-2',
+            gender: inJadwalWilayah,
+            kategori: inKategoriJadwal,
+            allowOverride: true,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal menambahkan jadwal.');
+        setInMapel('');
+        fetchRecap(unlockedTeacher.nama);
+        onDataUpdated?.();
+        notify(`Jadwal ${inHari} (${inJadwalKelas.toUpperCase()}) ditambahkan ke akun Anda.`, 'success');
+      }
     } catch (err) {
       notify((err as Error).message, 'error');
     } finally {
       setSavingJadwal(false);
     }
+  };
+
+  const handleStartEditPersonalJadwal = (item: ScheduleItem) => {
+    setEditingJadwalId(item.id);
+    setInKategoriJadwal(
+      item.kategori ||
+        (item.mapel.toUpperCase().includes('QUR') || item.mapel.toUpperCase().includes('HALAQAH')
+          ? 'Al-Quran'
+          : 'Akademik')
+    );
+    setInHari(item.hari);
+    setInJadwalWilayah(item.gender);
+    setInJadwalKelas(item.kelas);
+    setInMapel(item.mapel);
+    setInJam(item.jamKe);
+    notify(`Mode Edit Jadwal aktif: ${item.hari} · ${item.kelas} (${item.mapel}).`, 'info');
+  };
+
+  const handleDeletePersonalJadwal = async (id: string) => {
+    if (!unlockedTeacher) return;
+    const res = await fetch(`/api/jadwal/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      if (editingJadwalId === id) {
+        setEditingJadwalId(null);
+        setInMapel('');
+      }
+      fetchRecap(unlockedTeacher.nama);
+      onDataUpdated?.();
+      notify('Jadwal berhasil dihapus.', 'info');
+    }
+  };
+
+  const handleDownloadMyJadwalExcel = (mode: 'blank' | 'filled') => {
+    if (!unlockedTeacher) return;
+    if (mode === 'blank') {
+      const fname = downloadComponentExcelTemplate('jadwal', 'blank');
+      notify(`Mengunduh ${fname} (Template Kosong Jadwal Akademik & Al-Qur'an).`, 'success');
+      return;
+    }
+    const mySchedules = recap?.allMySchedules || [];
+    const defG = unlockedTeacher.genderScope === 'Putri' ? 'Putri' : 'Putra';
+    const rows: string[][] = [
+      ['Guru', 'Hari', 'Kelas / Halaqah', 'Mata Pelajaran', 'Jam Ke', 'Wilayah (Putra/Putri)'],
+      ...(mySchedules.length > 0
+        ? mySchedules.map((s) => [s.guru, s.hari, s.kelas, s.mapel, s.jamKe, s.gender])
+        : [
+            [
+              unlockedTeacher.nama,
+              'SENIN',
+              unlockedTeacher.waliKelasOf || (defG === 'Putri' ? '10 KHADIJAH' : '10 ABU BAKAR AS-SHIDDIQ'),
+              'BAHASA ARAB',
+              '1-2',
+              defG,
+            ],
+            [
+              unlockedTeacher.nama,
+              'SELASA',
+              defG === 'Putri' ? '10-01 Putri' : '10-08 Putra',
+              "HALAQAH AL-QUR'AN",
+              '3-4',
+              defG,
+            ],
+          ]),
+    ];
+    triggerExcelDownloadFromSpec({
+      filename: `Jadwal_${unlockedTeacher.nama.replace(/[^A-Za-z0-9]+/g, '_')}.xlsx`,
+      sourceLabel: `Jadwal ${unlockedTeacher.nama}`,
+      sheets: [{ name: '4_Jadwal_Mengajar', label: 'Jadwal Saya', rows }],
+    });
+    notify(`Berhasil mengunduh jadwal ${unlockedTeacher.nama} ke Excel (.xlsx).`, 'success');
+  };
+
+  const handleUploadMyJadwalExcel = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !unlockedTeacher) return;
+    setUploadingJadwalExcel(true);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const buf = ev.target?.result as ArrayBuffer;
+      if (!buf) {
+        setUploadingJadwalExcel(false);
+        return;
+      }
+      try {
+        const parsed = parseDatabaseExcelBuffer(buf, file.name);
+        if (parsed.scheduleRows.length === 0) {
+          throw new Error(
+            'File Excel tidak berisi baris jadwal valid. Pastikan menggunakan Template Jadwal Mengajar.'
+          );
+        }
+        const rowsForMe = parsed.scheduleRows.map((r) => ({
+          ...r,
+          guru: r.guru?.trim() ? r.guru.trim().toUpperCase() : unlockedTeacher.nama,
+        }));
+        const res = await fetch('/api/import/jadwal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rows: rowsForMe, replaceExisting: false }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal mengimpor jadwal Excel.');
+        fetchRecap(unlockedTeacher.nama);
+        onDataUpdated?.();
+        notify(
+          `Upload Excel Jadwal berhasil! (${data.added || 0} jadwal baru ditambahkan, ${data.updated || 0} jadwal lama diperbarui).`,
+          'success'
+        );
+      } catch (err) {
+        notify((err as Error).message, 'error');
+      } finally {
+        setUploadingJadwalExcel(false);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const renderInlineScheduleWorkbench = (roleContext: 'Akademik' | 'Al-Quran') => {
+    const mySchedules = recap?.allMySchedules || [];
+    return (
+      <div className="rounded-xl border border-teal-200 bg-white overflow-hidden">
+        <div className="bg-gradient-to-r from-teal-50/90 via-emerald-50/50 to-white px-5 py-4 border-b border-slate-200 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm font-bold text-slate-900">
+                Kelola Jadwal {roleContext === 'Al-Quran' ? "Halaqah Al-Qur'an & Mengajar" : 'Guru Akademik & Al-Qur’an'} ({mySchedules.length} Jadwal)
+              </h3>
+              <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[10px] font-semibold text-teal-900">
+                Tambah Sistem · Edit Jadwal · Template Excel
+              </span>
+            </div>
+            <p className="text-xs text-slate-600 mt-0.5">
+              Anda bisa menambah jadwal baru lewat form sistem di bawah, klik <b>Edit</b> pada jadwal yang sudah ada, atau <b>Unduh &amp; Upload Template Excel Jadwal (.xlsx)</b>.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => handleDownloadMyJadwalExcel('blank')}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+            >
+              <Download className="h-3.5 w-3.5 text-teal-700" />
+              Template Kosong (.xlsx)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDownloadMyJadwalExcel('filled')}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-teal-300 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-900 hover:bg-teal-100 whitespace-nowrap shrink-0"
+            >
+              <Download className="h-3.5 w-3.5 text-teal-700" />
+              Unduh &amp; Edit Jadwal Saya (.xlsx)
+            </button>
+            <label className="inline-flex items-center gap-1.5 rounded-lg bg-[#0B1324] px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 cursor-pointer whitespace-nowrap shrink-0">
+              <Upload className="h-3.5 w-3.5 text-teal-300" />
+              <span>{uploadingJadwalExcel ? 'Mengupload...' : 'Upload Excel Jadwal (.xlsx)'}</span>
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                disabled={uploadingJadwalExcel}
+                onChange={handleUploadMyJadwalExcel}
+                className="hidden"
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="p-5 grid grid-cols-1 gap-5 lg:grid-cols-12 items-start">
+          {/* Form Tambah / Edit Jadwal */}
+          <form
+            onSubmit={handleDirectSaveJadwal}
+            className="lg:col-span-5 rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-3"
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
+              <div className="text-xs font-bold text-slate-900">
+                {editingJadwalId ? 'Mode Edit Jadwal Saya' : 'Tambah Jadwal Baru via Sistem'}
+              </div>
+              {editingJadwalId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingJadwalId(null);
+                    setInMapel('');
+                  }}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-700 hover:text-rose-800"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  Batal Edit
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Kategori Jadwal</label>
+                <select
+                  value={inKategoriJadwal}
+                  onChange={(e) => {
+                    const val = e.target.value as 'Akademik' | 'Al-Quran';
+                    setInKategoriJadwal(val);
+                    if (val === 'Al-Quran' && !inMapel) setInMapel("HALAQAH AL-QUR'AN");
+                  }}
+                  className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-xs font-semibold"
+                >
+                  <option value="Akademik">Guru Akademik (KBM)</option>
+                  <option value="Al-Quran">Guru Al-Qur&apos;an (Halaqah)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Wilayah</label>
+                <select
+                  value={inJadwalWilayah}
+                  onChange={(e) => setInJadwalWilayah(e.target.value as Gender)}
+                  className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-xs font-semibold"
+                >
+                  <option value="Putra">Wilayah Putra</option>
+                  <option value="Putri">Wilayah Putri</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Hari</label>
+                <select
+                  value={inHari}
+                  onChange={(e) => setInHari(e.target.value)}
+                  className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-xs font-semibold"
+                >
+                  {['SENIN', 'SELASA', 'RABU', 'KAMIS', 'JUMAT', 'SABTU'].map((h) => (
+                    <option key={h} value={h}>
+                      {h}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Jam Pelajaran (JP)</label>
+                <input
+                  type="text"
+                  value={inJam}
+                  onChange={(e) => setInJam(e.target.value)}
+                  placeholder="Contoh: 1-2 atau 5-6"
+                  className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-mono-num"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                {inKategoriJadwal === 'Al-Quran' ? 'Kelompok Halaqah Al-Qur’an *' : 'Nama Kelas Akademik *'}
+              </label>
+              <input
+                type="text"
+                value={inJadwalKelas}
+                onChange={(e) => setInJadwalKelas(e.target.value)}
+                placeholder={
+                  inKategoriJadwal === 'Al-Quran'
+                    ? inJadwalWilayah === 'Putri'
+                      ? '10-01 Putri'
+                      : '10-08 Putra'
+                    : inJadwalWilayah === 'Putri'
+                    ? '10 KHADIJAH BINTI KHUWAILID'
+                    : '10 ABU BAKAR AS-SHIDDIQ'
+                }
+                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                {inKategoriJadwal === 'Al-Quran' ? 'Agenda Halaqah / Target Tahfidz *' : 'Mata Pelajaran *'}
+              </label>
+              <input
+                type="text"
+                value={inMapel}
+                onChange={(e) => setInMapel(e.target.value)}
+                placeholder={inKategoriJadwal === 'Al-Quran' ? "HALAQAH AL-QUR'AN" : 'BAHASA ARAB / FIQIH'}
+                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={savingJadwal}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50 whitespace-nowrap shrink-0"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {savingJadwal
+                ? 'Menyimpan...'
+                : editingJadwalId
+                ? 'Simpan Perubahan Jadwal'
+                : `Tambah Jadwal ${inKategoriJadwal}`}
+            </button>
+          </form>
+
+          {/* Tabel Daftar Jadwal Saya + Tombol Edit & Hapus */}
+          <div className="lg:col-span-7 rounded-xl border border-slate-200 bg-white overflow-hidden">
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-2.5 flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-800">
+                Daftar Jadwal Aktif ({unlockedTeacher?.nama})
+              </span>
+              <span className="text-[11px] text-slate-500">Klik Edit untuk mengubah jadwal yang sudah ada</span>
+            </div>
+            <div className="max-h-72 overflow-y-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="border-b border-slate-200 bg-slate-50/70 text-slate-600 sticky top-0">
+                  <tr>
+                    <th className="px-3 py-2 font-semibold">Hari &amp; JP</th>
+                    <th className="px-3 py-2 font-semibold">Kelas / Halaqah</th>
+                    <th className="px-3 py-2 font-semibold">Mapel / Kategori</th>
+                    <th className="px-3 py-2 text-right font-semibold">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {mySchedules.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
+                        Belum ada jadwal terdaftar. Tambahkan lewat form di samping atau upload Template Excel.
+                      </td>
+                    </tr>
+                  ) : (
+                    mySchedules.map((sch) => (
+                      <tr
+                        key={sch.id}
+                        className={`hover:bg-slate-50 ${
+                          editingJadwalId === sch.id ? 'bg-teal-50/70' : ''
+                        }`}
+                      >
+                        <td className="px-3 py-2.5 whitespace-nowrap">
+                          <div className="font-semibold text-slate-900">{sch.hari}</div>
+                          <div className="font-mono-num text-[11px] text-slate-500">JP {sch.jamKe}</div>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="font-semibold text-slate-900">{sch.kelas}</div>
+                          <div className="text-[11px] text-slate-500">Wilayah {sch.gender}</div>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="font-medium text-slate-800">{sch.mapel}</div>
+                          <div className="text-[10px] font-semibold text-teal-700">
+                            {sch.kategori || (sch.mapel.includes('QUR') ? 'Al-Quran' : 'Akademik')}
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditPersonalJadwal(sch)}
+                            className="mr-1.5 inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-50"
+                          >
+                            <Edit3 className="h-3 w-3" />
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePersonalJadwal(sch.id)}
+                            className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Hapus
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const handleSaveAssignment = async (e: React.FormEvent) => {
@@ -1135,6 +1534,9 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
             )}
           </div>
 
+          {/* Kelola Jadwal Guru Akademik & Al-Qur'an (Sistem, Edit, atau Template Excel) */}
+          {renderInlineScheduleWorkbench('Akademik')}
+
           {/* Personal Session History */}
           <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
@@ -1357,6 +1759,9 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
               <div className="mt-1 text-xs text-slate-500">Evaluasi berkala pengampu</div>
             </div>
           </div>
+
+          {/* Kelola Jadwal Pengampu Al-Qur'an & Halaqah (Sistem, Edit, atau Template Excel) */}
+          {renderInlineScheduleWorkbench('Al-Quran')}
 
           <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
             <div className="flex flex-col gap-2 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">

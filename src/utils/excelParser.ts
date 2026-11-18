@@ -95,6 +95,334 @@ export function buildWorkbookFromSpec(spec: DatabaseWorkbookSpec): XLSX.WorkBook
   return wb;
 }
 
+export type ComponentTemplateKey =
+  | 'master_pegawai'
+  | 'santri'
+  | 'musyrif_kamar'
+  | 'wali_kelas'
+  | 'guru_quran'
+  | 'jadwal'
+  | 'ruang_ujian'
+  | 'pembinaan';
+
+export interface ComponentTemplateDefinition {
+  key: ComponentTemplateKey;
+  stepNumber: string;
+  title: string;
+  subtitle: string;
+  filenameBlank: string;
+  filenameFilled: string;
+  columnsSummary: string[];
+  sheetNamesInSpec: string[];
+  blankSheets: WorkbookSheetSpec[];
+}
+
+export const COMPONENT_TEMPLATES: ComponentTemplateDefinition[] = [
+  {
+    key: 'master_pegawai',
+    stepNumber: '01',
+    title: 'Master Pegawai & Amanah',
+    subtitle: 'Daftar induk guru/pembina. Bisa isi Nama Pegawai saja dulu, lalu klik amanah di aplikasi.',
+    filenameBlank: 'Template_01_Master_Pegawai_Kosong.xlsx',
+    filenameFilled: 'Template_01_Master_Pegawai_Data_Saat_Ini.xlsx',
+    columnsSummary: [
+      'No',
+      'Nama Pegawai (Wajib)',
+      'Wilayah (Putra/Putri/Semua)',
+      'Peran Utama',
+      'Amanah Tambahan (pisah ;)',
+      'Wali Kelas Dari',
+      'Kamar Binaan (pisah ;)',
+      'WhatsApp',
+      'Username',
+      'PIN',
+    ],
+    sheetNamesInSpec: ['Master_Pegawai'],
+    blankSheets: [
+      {
+        name: 'Master_Pegawai',
+        label: 'Daftar Induk Pegawai',
+        rows: [
+          [
+            'No',
+            'Nama Pegawai (Wajib)',
+            'Wilayah (Putra/Putri/Semua)',
+            'Peran Utama (Guru/Wali Kelas/Musyrif/Musyrifah/Admin SIM)',
+            'Amanah Tambahan (Pisahkan dengan ; misal: Wali Kelas; Musyrif)',
+            'Amanah Wali Kelas Dari (Contoh: 10 ABU BAKAR AS-SHIDDIQ)',
+            'Amanah Kamar Binaan (Pisahkan dengan ; misal: 10.1 Putra; 10.2 Putra)',
+            'WhatsApp',
+            'Username Login',
+            'PIN Login',
+          ],
+          ['1', 'UST. AHMAD FAUZI', 'Putra', 'Wali Kelas', 'Guru; Musyrif', '10 ABU BAKAR AS-SHIDDIQ', '10.1 Putra', '6281234567890', 'ahmad.fauzi', '1234'],
+          ['2', 'USTZ. SITI MARIYAM', 'Putri', 'Musyrifah', 'Wali Kelas', '10 KHADIJAH BINTI KHUWAILID', '10.1 Putri', '6281298765432', 'siti.mariyam', '1234'],
+        ],
+      },
+    ],
+  },
+  {
+    key: 'santri',
+    stepNumber: '02',
+    title: 'Data Santri (Putra & Putri)',
+    subtitle: 'Master biodata santri lengkap dengan Kelas Akademik, Kamar Asrama, Kelompok & Pengampu Al-Qur’an.',
+    filenameBlank: 'Template_02_Data_Santri_Kosong.xlsx',
+    filenameFilled: 'Template_02_Data_Santri_Data_Saat_Ini.xlsx',
+    columnsSummary: [
+      'No / NIS',
+      'Nama',
+      'Wilayah (Putra/Putri)',
+      'Nama Kelas',
+      'Kamar',
+      'Kelp. Al-Quran',
+      'Pengampu Al-Quran',
+    ],
+    sheetNamesInSpec: ['1A_Siswa_Putra', '1B_Siswa_Putri'],
+    blankSheets: [
+      {
+        name: '1A_Siswa_Putra',
+        label: 'Santri Wilayah Putra',
+        rows: [
+          ['No / NIS', 'Nama', 'Wilayah (Putra/Putri)', 'Nama Kelas', 'Kamar', 'Kelp. Al-Quran', 'Pengampu Al-Quran'],
+          ['1001', 'ABDUL GHOFAR RAHMAN', 'Putra', '10 ABU BAKAR AS-SHIDDIQ', '10.6 Putra', '10-03 Putra', 'UST. NUR FAIZIN'],
+          ['1002', 'ACHMAD RASYA FARID', 'Putra', '10 ABU BAKAR AS-SHIDDIQ', '10.4 Putra', '10-08 Putra', 'UST. DAFFA M Z'],
+        ],
+      },
+      {
+        name: '1B_Siswa_Putri',
+        label: 'Santri Wilayah Putri',
+        rows: [
+          ['No / NIS', 'Nama', 'Wilayah (Putra/Putri)', 'Nama Kelas', 'Kamar', 'Kelp. Al-Quran', 'Pengampu Al-Quran'],
+          ['P-01', 'AISYAH HUMAIRA ZAHRA', 'Putri', '10 KHADIJAH BINTI KHUWAILID', '10.1 Putri', '10-01 Putri', 'USTZ. SITI MARIYAM'],
+          ['P-02', 'FATIMAH AZ-ZAHRA', 'Putri', '10 KHADIJAH BINTI KHUWAILID', '10.1 Putri', '10-01 Putri', 'USTZ. SITI MARIYAM'],
+        ],
+      },
+    ],
+  },
+  {
+    key: 'musyrif_kamar',
+    stepNumber: '03',
+    title: 'Musyrif/ah & Kamar Asrama',
+    subtitle: 'Khusus pembagian kamar asrama Putra & Putri beserta akun Musyrif / Musyrifah.',
+    filenameBlank: 'Template_03_Musyrif_Kamar_Asrama_Kosong.xlsx',
+    filenameFilled: 'Template_03_Musyrif_Kamar_Asrama_Data_Saat_Ini.xlsx',
+    columnsSummary: [
+      'No',
+      'Nama Musyrif/ah',
+      'Kamar Binaan (pisah ;)',
+      'Wilayah (Putra/Putri)',
+      'WhatsApp',
+      'Username',
+      'PIN',
+    ],
+    sheetNamesInSpec: ['2A_Musyrif_Putra', '2B_Musyrifah_Putri'],
+    blankSheets: [
+      {
+        name: '2A_Musyrif_Putra',
+        label: 'Musyrif Asrama Putra',
+        rows: [
+          ['No', 'Nama Musyrif', 'Kamar Binaan (Pisahkan dengan ;)', 'Wilayah', 'WhatsApp', 'Username Login', 'PIN Login'],
+          ['1', 'UST. RIZKI PRATAMA', '10.1 Putra; 10.2 Putra', 'Putra', '62812000111', 'rizki.pratama', '1234'],
+        ],
+      },
+      {
+        name: '2B_Musyrifah_Putri',
+        label: 'Musyrifah Asrama Putri',
+        rows: [
+          ['No', 'Nama Musyrifah', 'Kamar Binaan (Pisahkan dengan ;)', 'Wilayah', 'WhatsApp', 'Username Login', 'PIN Login'],
+          ['1', 'USTZ. SITI MARIYAM', '10.1 Putri; 10.2 Putri', 'Putri', '62812000222', 'siti.mariyam', '1234'],
+        ],
+      },
+    ],
+  },
+  {
+    key: 'wali_kelas',
+    stepNumber: '04',
+    title: 'Wali Kelas (Putra & Putri)',
+    subtitle: 'Khusus daftar Wali Kelas dan penugasan Kelas Binaan Akademik.',
+    filenameBlank: 'Template_04_Wali_Kelas_Kosong.xlsx',
+    filenameFilled: 'Template_04_Wali_Kelas_Data_Saat_Ini.xlsx',
+    columnsSummary: [
+      'No',
+      'Nama Wali Kelas',
+      'Kelas Binaan',
+      'Wilayah (Putra/Putri)',
+      'WhatsApp',
+      'Username',
+      'PIN',
+    ],
+    sheetNamesInSpec: ['3A_Wali_Kelas_Putra', '3B_Wali_Kelas_Putri'],
+    blankSheets: [
+      {
+        name: '3A_Wali_Kelas_Putra',
+        label: 'Wali Kelas Putra',
+        rows: [
+          ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'WhatsApp', 'Username Login', 'PIN Login'],
+          ['1', 'UST. NUR FAIZIN', '10 ABU BAKAR AS-SHIDDIQ', 'Putra', '62812000333', 'nur.faizin', '1234'],
+        ],
+      },
+      {
+        name: '3B_Wali_Kelas_Putri',
+        label: 'Wali Kelas Putri',
+        rows: [
+          ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'WhatsApp', 'Username Login', 'PIN Login'],
+          ['1', 'USTZ. HANIFAH', '10 KHADIJAH BINTI KHUWAILID', 'Putri', '62812000444', 'hanifah', '1234'],
+        ],
+      },
+    ],
+  },
+  {
+    key: 'guru_quran',
+    stepNumber: '05',
+    title: "Guru Mapel & Pengampu Al-Qur'an",
+    subtitle: "Khusus akun Guru Mata Pelajaran Akademik dan Ustadz/ah Pengampu Halaqah Al-Qur'an.",
+    filenameBlank: 'Template_05_Guru_dan_Pengampu_Quran_Kosong.xlsx',
+    filenameFilled: 'Template_05_Guru_dan_Pengampu_Quran_Data_Saat_Ini.xlsx',
+    columnsSummary: [
+      'No',
+      'Nama Guru / Pengampu',
+      'Peran (Guru / Pengampu Al-Quran)',
+      'Wilayah (Putra/Putri/Semua)',
+      'WhatsApp',
+      'Username',
+      'PIN',
+    ],
+    sheetNamesInSpec: ['3C_Guru_Pengampu'],
+    blankSheets: [
+      {
+        name: '3C_Guru_Pengampu',
+        label: 'Guru & Pengampu Quran',
+        rows: [
+          ['No', 'Nama Guru', 'Peran (Guru / Pengampu Al-Quran)', 'Wilayah (Putra/Putri/Semua)', 'WhatsApp', 'Username Login', 'PIN Login'],
+          ['1', 'UST. DAFFA M Z', 'Pengampu Al-Quran', 'Putra', '62812000555', 'daffa.mz', '1234'],
+          ['2', 'UST. SOFYAN IMAM KELSABA', 'Guru', 'Putra', '62812000666', 'sofyan.imam', '1234'],
+        ],
+      },
+    ],
+  },
+  {
+    key: 'jadwal',
+    stepNumber: '06',
+    title: "Jadwal KBM & Halaqah Al-Qur'an",
+    subtitle: 'Jadwal mengajar harian (Senin–Sabtu) beserta validasi anti-bentrok jam pelajaran (JP).',
+    filenameBlank: 'Template_06_Jadwal_Mengajar_Kosong.xlsx',
+    filenameFilled: 'Template_06_Jadwal_Mengajar_Data_Saat_Ini.xlsx',
+    columnsSummary: [
+      'Guru',
+      'Hari (SENIN-SABTU)',
+      'Kelas / Halaqah',
+      'Mata Pelajaran',
+      'Jam Ke (misal: 1-2)',
+      'Wilayah (Putra/Putri)',
+    ],
+    sheetNamesInSpec: ['4_Jadwal_Mengajar'],
+    blankSheets: [
+      {
+        name: '4_Jadwal_Mengajar',
+        label: 'Jadwal Putra & Putri',
+        rows: [
+          ['Guru', 'Hari', 'Kelas / Halaqah', 'Mata Pelajaran', 'Jam Ke', 'Wilayah (Putra/Putri)'],
+          ['UST. NUR FAIZIN', 'SENIN', '10 ABU BAKAR AS-SHIDDIQ', 'FIQIH IBADAH', '1-2', 'Putra'],
+          ['UST. DAFFA M Z', 'SELASA', '10-08 Putra', "HALAQAH AL-QUR'AN", '3-4', 'Putra'],
+        ],
+      },
+    ],
+  },
+  {
+    key: 'ruang_ujian',
+    stepNumber: '07',
+    title: 'Daftar Ruangan Ujian',
+    subtitle: 'Master ruangan pengawasan ujian akademik & tahfidz wilayah Putra dan Putri.',
+    filenameBlank: 'Template_07_Ruang_Ujian_Kosong.xlsx',
+    filenameFilled: 'Template_07_Ruang_Ujian_Data_Saat_Ini.xlsx',
+    columnsSummary: ['Nama Ruangan Ujian', 'Wilayah (Putra/Putri/Semua)'],
+    sheetNamesInSpec: ['5_Ruang_Ujian'],
+    blankSheets: [
+      {
+        name: '5_Ruang_Ujian',
+        label: 'Ruang Ujian Putra/Putri',
+        rows: [
+          ['Nama Ruangan Ujian', 'Wilayah (Putra/Putri/Semua)'],
+          ['RUANG 01 PUTRA - AL-GHAZALI', 'Putra'],
+          ['RUANG 01 PUTRI - KHADIJAH', 'Putri'],
+        ],
+      },
+    ],
+  },
+  {
+    key: 'pembinaan',
+    stepNumber: '08',
+    title: 'Catatan Pembinaan & Prestasi/Pelanggaran',
+    subtitle: 'Rekap catatan ibadah, karakter, kedisiplinan, poin prestasi/pelanggaran, dan tindak lanjut.',
+    filenameBlank: 'Template_08_Catatan_Pembinaan_Kosong.xlsx',
+    filenameFilled: 'Template_08_Catatan_Pembinaan_Data_Saat_Ini.xlsx',
+    columnsSummary: [
+      'Tanggal (YYYY-MM-DD)',
+      'Nama Santri',
+      'Wilayah',
+      'Kategori',
+      'Uraian Pembinaan',
+      'Poin (+/-)',
+      'Status (Selesai/Proses/Eskalasi)',
+      'Tindak Lanjut',
+    ],
+    sheetNamesInSpec: ['6_Catatan_Pembinaan'],
+    blankSheets: [
+      {
+        name: '6_Catatan_Pembinaan',
+        label: 'Catatan Pembinaan',
+        rows: [
+          [
+            'Tanggal (YYYY-MM-DD)',
+            'Nama Santri',
+            'Wilayah (Putra/Putri)',
+            'Kategori (Pemantauan Ibadah/Pembinaan Karakter/Kedisiplinan/Prestasi/Kesehatan)',
+            'Uraian Pembinaan / Catatan',
+            'Poin (+/-)',
+            'Status (Selesai/Proses/Eskalasi)',
+            'Tindak Lanjut',
+          ],
+          [
+            new Date().toISOString().slice(0, 10),
+            'ABDUL GHOFAR RAHMAN',
+            'Putra',
+            'Prestasi',
+            'Juara 1 Tasmi 5 Juz Sekali Duduk tingkat Asrama.',
+            '15',
+            'Selesai',
+            'Diberikan sertifikat penghargaan',
+          ],
+        ],
+      },
+    ],
+  },
+];
+
+export function downloadComponentExcelTemplate(
+  key: ComponentTemplateKey,
+  mode: 'blank' | 'filled',
+  serverSpec?: DatabaseWorkbookSpec | null,
+): string {
+  const def = COMPONENT_TEMPLATES.find((t) => t.key === key);
+  if (!def) throw new Error('Definisi template komponen tidak ditemukan.');
+
+  let sheetsToExport: WorkbookSheetSpec[] = def.blankSheets;
+  if (mode === 'filled' && serverSpec && serverSpec.sheets.length > 0) {
+    const matched = serverSpec.sheets.filter((s) => def.sheetNamesInSpec.includes(s.name));
+    if (matched.length > 0) {
+      sheetsToExport = matched;
+    }
+  }
+
+  const filename = mode === 'blank' ? def.filenameBlank : def.filenameFilled;
+  triggerExcelDownloadFromSpec({
+    filename,
+    sourceLabel: `${def.title} (${mode === 'blank' ? 'Template Kosong' : 'Data Saat Ini'})`,
+    sheets: sheetsToExport,
+  });
+  return filename;
+}
+
 export function triggerExcelDownloadFromSpec(spec: DatabaseWorkbookSpec): void {
   const wb = buildWorkbookFromSpec(spec);
   const out = XLSX.write(wb, {

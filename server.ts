@@ -171,6 +171,18 @@ function registerApiRoutes() {
     res.json(store.getStudentsDirectory({ gender, kelas, q }));
   });
 
+  app.put('/api/students/:id', (req, res) => {
+    const updated = store.updateStudentById(req.params.id, req.body || {});
+    if (!updated) return res.status(404).json({ error: 'Data santri tidak ditemukan.' });
+    res.json({ student: updated, counts: store.getSystemCounts() });
+  });
+
+  app.delete('/api/students/:id', (req, res) => {
+    const ok = store.deleteStudentById(req.params.id);
+    if (!ok) return res.status(404).json({ error: 'Data santri tidak ditemukan.' });
+    res.json({ deleted: true, counts: store.getSystemCounts() });
+  });
+
   app.post('/api/students/move-class', (req, res) => {
     const { studentIds, targetKelas, targetKamar, targetKelompok, targetGender } = req.body || {};
     if (!Array.isArray(studentIds) || studentIds.length === 0) {
@@ -251,6 +263,22 @@ function registerApiRoutes() {
     const { namaRuang } = req.body;
     if (!namaRuang) return res.status(400).json({ error: 'Nama ruangan ujian wajib diisi.' });
     const list = store.addRuanganUjian(String(namaRuang));
+    res.json({ ruanganUjian: list });
+  });
+
+  app.put('/api/import/ruangan-ujian', (req, res) => {
+    const { oldName, newName } = req.body || {};
+    if (!oldName || !newName) {
+      return res.status(400).json({ error: 'Nama ruangan lama dan baru wajib diisi.' });
+    }
+    const list = store.updateRuanganUjian(String(oldName), String(newName));
+    res.json({ ruanganUjian: list });
+  });
+
+  app.delete('/api/import/ruangan-ujian', (req, res) => {
+    const namaRuang = String(req.query.namaRuang || req.body?.namaRuang || '');
+    if (!namaRuang) return res.status(400).json({ error: 'Nama ruangan wajib diisi.' });
+    const list = store.deleteRuanganUjian(namaRuang);
     res.json({ ruanganUjian: list });
   });
 

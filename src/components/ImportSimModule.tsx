@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
+  Edit3,
   FileSpreadsheet,
   Home,
   KeyRound,
@@ -23,12 +24,16 @@ import {
   UserCheck,
   UserPlus,
   Users,
+  X,
 } from 'lucide-react';
-import type { RoomMapping, SystemCounts, TeacherPublic, UserRole } from '../types';
+import type { RoomMapping, ScheduleItem, Student, SystemCounts, TeacherPublic, UserRole } from '../types';
 import {
+  COMPONENT_TEMPLATES,
+  downloadComponentExcelTemplate,
   parseDatabaseExcelBuffer,
   parseDatabaseWorkbookFromSpec,
   triggerExcelDownloadFromSpec,
+  type ComponentTemplateKey,
   type DatabaseWorkbookSpec,
   type ParsedDatabaseWorkbook,
 } from '../utils/excelParser';
@@ -72,6 +77,9 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   // Collapsible panels & Template spec state
   const [inventoryMinimized, setInventoryMinimized] = useState<boolean>(false);
   const [templateMinimized, setTemplateMinimized] = useState<boolean>(false);
+  const [componentTemplatesMinimized, setComponentTemplatesMinimized] = useState<boolean>(false);
+  const [uploadingComponentKey, setUploadingComponentKey] = useState<ComponentTemplateKey | null>(null);
+  const [componentUploadStatus, setComponentUploadStatus] = useState<Record<string, string>>({});
   const [workbookSpec, setWorkbookSpec] = useState<DatabaseWorkbookSpec | null>(null);
   const [loadingSpec, setLoadingSpec] = useState<boolean>(false);
 
@@ -109,7 +117,10 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const [assignPin, setAssignPin] = useState<string>('');
   const [savingAssign, setSavingAssign] = useState<boolean>(false);
 
-  // Direct Student & Schedule Input inside Admin Login
+  // Direct Student & Schedule Input + Edit inside Admin Login
+  const [adminStudents, setAdminStudents] = useState<Student[]>([]);
+  const [studentSearchQ, setStudentSearchQ] = useState('');
+  const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
   const [sNis, setSNis] = useState('');
   const [sNama, setSNama] = useState('');
   const [sGender, setSGender] = useState<'Putra' | 'Putri'>('Putra');
@@ -119,6 +130,10 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const [sPengampu, setSPengampu] = useState('');
   const [savingStudentDirect, setSavingStudentDirect] = useState(false);
 
+  const [adminSchedules, setAdminSchedules] = useState<ScheduleItem[]>([]);
+  const [scheduleSearchQ, setScheduleSearchQ] = useState('');
+  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
+  const [jKategori, setJKategori] = useState<'Akademik' | 'Al-Quran'>('Akademik');
   const [jGuru, setJGuru] = useState('');
   const [jHari, setJHari] = useState('SENIN');
   const [jGender, setJGender] = useState<'Putra' | 'Putri'>('Putra');
@@ -127,7 +142,8 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const [jJam, setJJam] = useState('1-2');
   const [savingScheduleDirect, setSavingScheduleDirect] = useState(false);
 
-  // Manual account creation & Exam room & Reset
+  // Manual account creation / edit & Exam room & Reset
+  const [editingTeacherId, setEditingTeacherId] = useState<string | null>(null);
   const [mNama, setMNama] = useState('');
   const [mPeran, setMPeran] = useState<UserRole>('Wali Kelas');
   const [mGender, setMGender] = useState<'Putra' | 'Putri' | 'Semua'>('Putra');
@@ -136,6 +152,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const [mUsername, setMUsername] = useState('');
   const [mPin, setMPin] = useState('1234');
 
+  const [editingRuangOldName, setEditingRuangOldName] = useState<string | null>(null);
   const [newRuang, setNewRuang] = useState<string>('');
   const [confirmReset, setConfirmReset] = useState<boolean>(false);
 
@@ -154,11 +171,23 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     }
   }, []);
 
+  const loadAdminEntities = useCallback(() => {
+    fetch('/api/students')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: Student[]) => setAdminStudents(Array.isArray(list) ? list : []))
+      .catch(() => {});
+    fetch('/api/jadwal')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: ScheduleItem[]) => setAdminSchedules(Array.isArray(list) ? list : []))
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (isSuperAdmin) {
       loadWorkbookSpec();
+      loadAdminEntities();
     }
-  }, [isSuperAdmin, counts?.students, counts?.teachers, counts?.rooms, counts?.schedules, loadWorkbookSpec]);
+  }, [isSuperAdmin, counts?.students, counts?.teachers, counts?.rooms, counts?.schedules, loadWorkbookSpec, loadAdminEntities]);
 
   const isLocalSuperAdminMatch = (identifier: string, pin: string): boolean => {
     const normId = identifier.trim().toLowerCase();
@@ -251,6 +280,114 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     } catch {
       notify('Gagal membuat file Excel di browser.', 'error');
     }
+  };
+
+  const handleDownloadComponentTemplate = async (
+    key: ComponentTemplateKey,
+    mode: 'blank' | 'filled'
+  ) => {
+    try {
+      let spec = workbookSpec;
+      if (mode === 'filled' && !spec) {
+        spec = await loadWorkbookSpec();
+      }
+      const downloadedName = downloadComponentExcelTemplate(key, mode, spec);
+      notify(
+        `Berhasil mengunduh ${downloadedName} (${mode === 'blank' ? 'Template Kosong Siap Isi' : 'Berisi Data Saat Ini'}).`,
+        'success'
+      );
+    } catch (err) {
+      notify((err as Error).message || 'Gagal mengunduh template komponen.', 'error');
+    }
+  };
+
+  const handleSingleComponentFileUpload = (
+    key: ComponentTemplateKey,
+    title: string,
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setUploadingComponentKey(key);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const buf = ev.target?.result as ArrayBuffer;
+      if (!buf) {
+        setUploadingComponentKey(null);
+        return;
+      }
+      try {
+        const parsed = parseDatabaseExcelBuffer(buf, file.name);
+        const cleanSantri = parsed.santriRows.filter(
+          (r) => !r.warning || r.warning !== 'Nama identik dengan Nama Kelas'
+        );
+        const combinedTeachers = [
+          ...parsed.pegawaiRows,
+          ...parsed.musyrifRows,
+          ...parsed.waliKelasRows,
+          ...parsed.guruRows,
+        ];
+
+        const payload = {
+          santriRows: key === 'santri' ? cleanSantri : cleanSantri,
+          teacherRows: combinedTeachers,
+          scheduleRows: parsed.scheduleRows,
+          ruanganUjian: parsed.ruanganUjian,
+          pembinaanRows: parsed.pembinaanRows,
+          replaceExisting: false,
+          autoCreateAccounts: true,
+          autoCreateQuranSchedules: key === 'santri',
+          defaultPin: defaultPin || '1234',
+        };
+
+        const totalDetected =
+          cleanSantri.length +
+          combinedTeachers.length +
+          parsed.scheduleRows.length +
+          parsed.ruanganUjian.length +
+          parsed.pembinaanRows.length;
+
+        if (totalDetected === 0) {
+          throw new Error(
+            `Tidak ada baris data yang terbaca pada file ${file.name}. Pastikan header sesuai template ${title}.`
+          );
+        }
+
+        const res = await fetch('/api/import/all-in-one', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Gagal menyimpan file komponen ${title}.`);
+
+        if (auth.currentUser) {
+          fetch('/api/firebase/snapshot')
+            .then((r) => (r.ok ? r.json() : null))
+            .then((snap) => (snap ? pushSnapshotToFirestore(snap) : null))
+            .then(() => fetch('/api/firebase/mark-synced', { method: 'POST' }))
+            .catch(() => {});
+        }
+
+        setExcelWorkbook(parsed);
+        onDataUpdated();
+        await loadWorkbookSpec();
+
+        const summaryBadge = `Tersimpan (${totalDetected} baris dari ${file.name})`;
+        setComponentUploadStatus((prev) => ({ ...prev, [key]: summaryBadge }));
+        notify(
+          `Komponen "${title}" berhasil diupload! (${totalDetected} baris diproses & disimpan ke database).`,
+          'success'
+        );
+      } catch (err) {
+        notify((err as Error).message, 'error');
+      } finally {
+        setUploadingComponentKey(null);
+      }
+    };
+    reader.readAsArrayBuffer(file);
   };
 
   const handleLoadServerTemplateToPreview = async () => {
@@ -599,6 +736,42 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       notify('Nama lengkap wajib diisi.', 'error');
       return;
     }
+    const kamarArr = mKamar
+      .split(/[;,]/)
+      .map((k) => k.trim())
+      .filter(Boolean);
+
+    if (editingTeacherId) {
+      const payload: Record<string, unknown> = {
+        nama: mNama.trim().toUpperCase(),
+        peran: mPeran,
+        genderScope: mGender,
+        waliKelasOf: mWaliKelas.trim(),
+        kamarBinaan: kamarArr,
+      };
+      if (mPin.trim() && mPin.trim() !== '1234') {
+        payload.pin = mPin.trim();
+      }
+      const res = await fetch(`/api/guru/${editingTeacherId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        setEditingTeacherId(null);
+        setMNama('');
+        setMWaliKelas('');
+        setMKamar('');
+        setMUsername('');
+        onDataUpdated();
+        loadWorkbookSpec();
+        notify('Data akun guru/pembina berhasil diperbarui.', 'success');
+      } else {
+        notify('Gagal memperbarui akun guru.', 'error');
+      }
+      return;
+    }
+
     const res = await fetch('/api/import/guru', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -609,10 +782,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
             peran: mPeran,
             genderScope: mGender,
             waliKelasOf: mWaliKelas.trim() || undefined,
-            kamarBinaan: mKamar
-              .split(/[;,]/)
-              .map((k) => k.trim())
-              .filter(Boolean),
+            kamarBinaan: kamarArr,
             username: mUsername.trim() || undefined,
             pin: mPin.trim() || '1234',
           },
@@ -630,6 +800,19 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     }
   };
 
+  const handleStartEditAccount = (t: TeacherPublic) => {
+    setEditingTeacherId(t.id);
+    setMNama(t.nama);
+    setMPeran(t.peran);
+    setMGender(t.genderScope);
+    setMWaliKelas(t.waliKelasOf || '');
+    setMKamar((t.kamarBinaan || []).join('; '));
+    setMUsername(t.username);
+    setMPin('');
+    setActiveTab('kelola');
+    notify(`Mode Edit Akun: ${t.nama}`, 'info');
+  };
+
   const handleDirectAddStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!sNama.trim() || !sKelas.trim()) {
@@ -638,37 +821,90 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     }
     setSavingStudentDirect(true);
     try {
-      const res = await fetch('/api/import/santri-sim', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rows: [
-            {
-              nis: sNis.trim(),
-              nama: sNama.trim(),
-              kelas: sKelas.trim(),
-              kamar: sKamar.trim(),
-              kelompokQuran: sKelompok.trim(),
-              pengampuQuran: sPengampu.trim(),
-              gender: sGender,
-            },
-          ],
-          autoCreateAccounts: true,
-          autoCreateQuranSchedules: Boolean(sKelompok.trim() && sPengampu.trim()),
-          defaultPin: '1234',
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal menyimpan santri.');
-      setSNis('');
-      setSNama('');
-      onDataUpdated();
-      loadWorkbookSpec();
-      notify(`Santri ${sNama.trim().toUpperCase()} (Wilayah ${sGender}) tersimpan langsung.`, 'success');
+      if (editingStudentId) {
+        const res = await fetch(`/api/students/${editingStudentId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            nis: sNis.trim(),
+            nama: sNama.trim(),
+            kelas: sKelas.trim(),
+            kamar: sKamar.trim(),
+            kelompokQuran: sKelompok.trim(),
+            pengampuQuran: sPengampu.trim(),
+            gender: sGender,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal memperbarui data santri.');
+        setEditingStudentId(null);
+        setSNis('');
+        setSNama('');
+        onDataUpdated();
+        loadWorkbookSpec();
+        loadAdminEntities();
+        notify(`Perubahan data santri ${sNama.trim().toUpperCase()} berhasil disimpan.`, 'success');
+      } else {
+        const res = await fetch('/api/import/santri-sim', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            rows: [
+              {
+                nis: sNis.trim(),
+                nama: sNama.trim(),
+                kelas: sKelas.trim(),
+                kamar: sKamar.trim(),
+                kelompokQuran: sKelompok.trim(),
+                pengampuQuran: sPengampu.trim(),
+                gender: sGender,
+              },
+            ],
+            autoCreateAccounts: true,
+            autoCreateQuranSchedules: Boolean(sKelompok.trim() && sPengampu.trim()),
+            defaultPin: '1234',
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal menyimpan santri.');
+        setSNis('');
+        setSNama('');
+        onDataUpdated();
+        loadWorkbookSpec();
+        loadAdminEntities();
+        notify(`Santri ${sNama.trim().toUpperCase()} (Wilayah ${sGender}) tersimpan langsung.`, 'success');
+      }
     } catch (err) {
       notify((err as Error).message, 'error');
     } finally {
       setSavingStudentDirect(false);
+    }
+  };
+
+  const handleStartEditStudent = (st: Student) => {
+    setEditingStudentId(st.id);
+    setSNis(st.nis || '');
+    setSNama(st.nama);
+    setSGender(st.gender);
+    setSKelas(st.kelas);
+    setSKamar(st.kamar || '');
+    setSKelompok(st.kelompokQuran || '');
+    setSPengampu(st.pengampuQuran || '');
+    setActiveTab('kelola');
+    notify(`Mode Edit Santri: ${st.nama}`, 'info');
+  };
+
+  const handleDeleteStudentDirect = async (st: Student) => {
+    const res = await fetch(`/api/students/${st.id}`, { method: 'DELETE' });
+    if (res.ok) {
+      if (editingStudentId === st.id) {
+        setEditingStudentId(null);
+        setSNama('');
+      }
+      onDataUpdated();
+      loadWorkbookSpec();
+      loadAdminEntities();
+      notify(`Data santri ${st.nama} dihapus.`, 'info');
     }
   };
 
@@ -680,29 +916,85 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     }
     setSavingScheduleDirect(true);
     try {
-      const res = await fetch('/api/jadwal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          guru: jGuru.trim(),
-          hari: jHari,
-          kelas: jKelas.trim(),
-          mapel: jMapel.trim(),
-          jamKe: jJam.trim() || '1-2',
-          gender: jGender,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal menyimpan jadwal.');
-      setJKelas('');
-      setJMapel('');
-      onDataUpdated();
-      loadWorkbookSpec();
-      notify(`Jadwal ${jMapel.trim().toUpperCase()} (Wilayah ${jGender}) tersimpan langsung.`, 'success');
+      if (editingScheduleId) {
+        const res = await fetch(`/api/jadwal/${editingScheduleId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            guru: jGuru.trim(),
+            hari: jHari,
+            kelas: jKelas.trim(),
+            mapel: jMapel.trim(),
+            jamKe: jJam.trim() || '1-2',
+            gender: jGender,
+            kategori: jKategori,
+            allowOverride: true,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal memperbarui jadwal.');
+        setEditingScheduleId(null);
+        setJKelas('');
+        setJMapel('');
+        onDataUpdated();
+        loadWorkbookSpec();
+        loadAdminEntities();
+        notify(`Jadwal ${jMapel.trim().toUpperCase()} (${jGuru.trim().toUpperCase()}) berhasil diperbarui.`, 'success');
+      } else {
+        const res = await fetch('/api/jadwal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            guru: jGuru.trim(),
+            hari: jHari,
+            kelas: jKelas.trim(),
+            mapel: jMapel.trim(),
+            jamKe: jJam.trim() || '1-2',
+            gender: jGender,
+            kategori: jKategori,
+            allowOverride: true,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal menyimpan jadwal.');
+        setJKelas('');
+        setJMapel('');
+        onDataUpdated();
+        loadWorkbookSpec();
+        loadAdminEntities();
+        notify(`Jadwal ${jMapel.trim().toUpperCase()} (Wilayah ${jGender}) tersimpan langsung.`, 'success');
+      }
     } catch (err) {
       notify((err as Error).message, 'error');
     } finally {
       setSavingScheduleDirect(false);
+    }
+  };
+
+  const handleStartEditSchedule = (sch: ScheduleItem) => {
+    setEditingScheduleId(sch.id);
+    setJGuru(sch.guru);
+    setJKategori(sch.kategori || (sch.mapel.toUpperCase().includes('QUR') ? 'Al-Quran' : 'Akademik'));
+    setJHari(sch.hari);
+    setJGender(sch.gender);
+    setJKelas(sch.kelas);
+    setJMapel(sch.mapel);
+    setJJam(sch.jamKe);
+    setActiveTab('kelola');
+    notify(`Mode Edit Jadwal: ${sch.hari} · ${sch.guru} (${sch.kelas})`, 'info');
+  };
+
+  const handleDeleteScheduleDirect = async (sch: ScheduleItem) => {
+    const res = await fetch(`/api/jadwal/${sch.id}`, { method: 'DELETE' });
+    if (res.ok) {
+      if (editingScheduleId === sch.id) {
+        setEditingScheduleId(null);
+        setJMapel('');
+      }
+      onDataUpdated();
+      loadWorkbookSpec();
+      loadAdminEntities();
+      notify('Jadwal berhasil dihapus.', 'info');
     }
   };
 
@@ -721,6 +1013,21 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const handleAddRuang = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRuang.trim()) return;
+    if (editingRuangOldName) {
+      const res = await fetch('/api/import/ruangan-ujian', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldName: editingRuangOldName, newName: newRuang.trim() }),
+      });
+      if (res.ok) {
+        setEditingRuangOldName(null);
+        setNewRuang('');
+        onDataUpdated();
+        loadWorkbookSpec();
+        notify('Nama ruangan ujian berhasil diperbarui.', 'success');
+      }
+      return;
+    }
     const res = await fetch('/api/import/ruangan-ujian', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -731,6 +1038,21 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       onDataUpdated();
       loadWorkbookSpec();
       notify('Ruang ujian ditambahkan.', 'success');
+    }
+  };
+
+  const handleDeleteRuang = async (namaRuang: string) => {
+    const res = await fetch(`/api/import/ruangan-ujian?namaRuang=${encodeURIComponent(namaRuang)}`, {
+      method: 'DELETE',
+    });
+    if (res.ok) {
+      if (editingRuangOldName === namaRuang) {
+        setEditingRuangOldName(null);
+        setNewRuang('');
+      }
+      onDataUpdated();
+      loadWorkbookSpec();
+      notify(`Ruangan ujian ${namaRuang} dihapus.`, 'info');
     }
   };
 
@@ -969,6 +1291,175 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
         )}
       </div>
 
+      {/* PER-COMPONENT INDIVIDUAL TEMPLATES (8 SEPARATE EXCEL FILES) */}
+      <div className="rounded-xl border border-teal-300 bg-white p-5 space-y-4 shadow-xs">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-700 text-white shadow-sm shrink-0">
+              <FileSpreadsheet className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base font-bold text-slate-900">
+                  Pusat Template Per Komponen (8 File Excel Terpisah — Mudah &amp; Tidak Membingungkan)
+                </h2>
+                <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[11px] font-semibold text-teal-900">
+                  Rekomendasi Admin
+                </span>
+              </div>
+              <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+                Pilih <b>salah satu komponen saja</b> sesuai kebutuhan Anda. Bisa unduh <b>Template Kosong</b> (hanya judul kolom + 2 contoh) atau <b>Template + Data Saat Ini</b>, lalu langsung klik <b>Upload Komponen Ini</b> pada kartu yang sama.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setComponentTemplatesMinimized((v) => !v)}
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 whitespace-nowrap shrink-0"
+          >
+            {componentTemplatesMinimized ? (
+              <>
+                <ChevronDown className="h-3.5 w-3.5" />
+                Tampilkan 8 Template Komponen
+              </>
+            ) : (
+              <>
+                <ChevronUp className="h-3.5 w-3.5" />
+                Sembunyikan
+              </>
+            )}
+          </button>
+        </div>
+
+        {!componentTemplatesMinimized && (
+          <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 xl:grid-cols-4">
+            {COMPONENT_TEMPLATES.map((tpl) => {
+              const isUploadingThis = uploadingComponentKey === tpl.key;
+              const statusText = componentUploadStatus[tpl.key];
+
+              // Calculate current live row count from server workbookSpec for this component
+              const currentRowCount = workbookSpec
+                ? workbookSpec.sheets
+                    .filter((s) => tpl.sheetNamesInSpec.includes(s.name))
+                    .reduce((acc, s) => acc + Math.max(0, s.rows.length - 1), 0)
+                : 0;
+
+              return (
+                <div
+                  key={tpl.key}
+                  className="flex flex-col justify-between rounded-xl border border-slate-200 bg-slate-50/60 p-4 hover:border-teal-300 hover:bg-white transition-all space-y-3"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#0B1324] font-mono-num text-[11px] font-bold text-teal-300 shrink-0">
+                          {tpl.stepNumber}
+                        </span>
+                        <h3 className="text-xs font-bold text-slate-900 leading-snug">{tpl.title}</h3>
+                      </div>
+                      <span className="rounded-md border border-slate-200 bg-white px-2 py-0.5 font-mono-num text-[10px] font-semibold text-slate-700 whitespace-nowrap shrink-0">
+                        {currentRowCount} data
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-slate-600 leading-relaxed">{tpl.subtitle}</p>
+
+                    <div className="rounded-lg border border-slate-200/80 bg-white p-2.5">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                        Kolom di File Excel:
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {tpl.columnsSummary.map((col) => (
+                          <span
+                            key={col}
+                            className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-700"
+                          >
+                            {col}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {statusText && (
+                      <div className="flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                        <span className="truncate">{statusText}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-200/80 space-y-1.5">
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadComponentTemplate(tpl.key, 'blank')}
+                        className="inline-flex items-center justify-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-800 hover:bg-slate-100 transition-colors whitespace-nowrap shrink-0"
+                        title="Unduh template kosong (hanya kolom & 2 contoh baris)"
+                      >
+                        <Download className="h-3 w-3 text-teal-700 shrink-0" />
+                        Template Kosong
+                      </button>
+                      <button
+                        type="button"
+                        disabled={loadingSpec}
+                        onClick={() => handleDownloadComponentTemplate(tpl.key, 'filled')}
+                        className="inline-flex items-center justify-center gap-1 rounded-lg border border-teal-300 bg-teal-50/80 px-2.5 py-1.5 text-[11px] font-semibold text-teal-900 hover:bg-teal-100 transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
+                        title="Unduh template berisi data saat ini"
+                      >
+                        <Download className="h-3 w-3 text-teal-700 shrink-0" />
+                        + Data Saat Ini
+                      </button>
+                    </div>
+
+                    <label className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#0B1324] px-3 py-2 text-[11px] font-semibold text-white hover:bg-slate-800 cursor-pointer transition-colors whitespace-nowrap shrink-0">
+                      <Upload className="h-3.5 w-3.5 text-teal-300 shrink-0" />
+                      <span>
+                        {isUploadingThis ? 'Mengupload & Menyimpan...' : `Upload ${tpl.title.split(' ')[0]} (.xlsx)`}
+                      </span>
+                      <input
+                        type="file"
+                        accept=".xlsx,.xls"
+                        disabled={isUploadingThis}
+                        onChange={(e) => handleSingleComponentFileUpload(tpl.key, tpl.title, e)}
+                        className="hidden"
+                      />
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (tpl.key === 'master_pegawai') {
+                          setActiveTab('pegawai_amanah');
+                        } else {
+                          setActiveTab('kelola');
+                          if (tpl.key === 'guru_quran') {
+                            setJKategori('Al-Quran');
+                            setMPeran('Pengampu Al-Quran');
+                          } else if (tpl.key === 'wali_kelas') {
+                            setMPeran('Wali Kelas');
+                          } else if (tpl.key === 'musyrif_kamar') {
+                            setMPeran('Musyrif');
+                          }
+                        }
+                        notify(
+                          `Membuka form Input & Edit Langsung untuk komponen "${tpl.title}".`,
+                          'info'
+                        );
+                      }}
+                      className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50/60 px-3 py-1.5 text-[11px] font-semibold text-teal-900 hover:bg-teal-100/80 transition-colors whitespace-nowrap shrink-0"
+                    >
+                      <Edit3 className="h-3 w-3 text-teal-700 shrink-0" />
+                      <span>Isi / Edit Langsung di Sistem →</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* SINGLE UNIFIED DATABASE EXCEL TEMPLATE CARD */}
       <div className="rounded-xl border border-emerald-300 bg-gradient-to-r from-emerald-50/90 via-teal-50/70 to-sky-50/80 p-5 space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -978,10 +1469,10 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
             </div>
             <div>
               <h2 className="text-base font-bold text-slate-900">
-                Template Tunggal Database Sekolah (Excel .xlsx) — Sekali Unduh &amp; Sekali Upload
+                Opsi Gabungan: Template Tunggal Seluruh Database Sekolah (11 Sheet Sekaligus)
               </h2>
               <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                Khusus master database sistem ({workbookSpec?.sourceLabel || 'memuat...'}). Pembinaan 1 tahun dijalankan langsung oleh logika sistem di menu Pembinaan.
+                Gunakan ini jika Anda ingin mengunduh atau mengupload seluruh 11 sheet ({workbookSpec?.sourceLabel || 'memuat...'}) dalam 1 file `.xlsx` terpadu.
               </p>
             </div>
           </div>
@@ -994,7 +1485,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
               className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-700 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:from-emerald-700 hover:to-teal-800 whitespace-nowrap disabled:opacity-50"
             >
               <Download className="h-3.5 w-3.5" />
-              Unduh Template Excel (.xlsx)
+              Unduh Semua Sheet (.xlsx)
             </button>
             <button
               type="button"
@@ -2035,127 +2526,256 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
           </div>
         ) : (
           <div className="space-y-6">
-            {/* Direct Input Santri (Putra/Putri) & Jadwal directly inside Admin Login */}
+            {/* Direct Input & Edit Santri (Putra/Putri) & Jadwal (Guru Akademik & Al-Qur'an) */}
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 items-start">
-              <form
-                onSubmit={handleDirectAddStudent}
-                className="rounded-xl border border-teal-200 bg-gradient-to-br from-teal-50/50 to-white p-4 space-y-3"
-              >
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 border-b border-teal-100 pb-2.5">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-600 text-white">
-                    <Users className="h-3.5 w-3.5" />
-                  </span>
-                  Input Langsung Data Santri (Putra / Putri)
-                </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Wilayah *</label>
-                    <select
-                      value={sGender}
-                      onChange={(e) => setSGender(e.target.value as 'Putra' | 'Putri')}
-                      className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-xs font-semibold"
-                    >
-                      <option value="Putra">Putra</option>
-                      <option value="Putri">Putri</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">No / NIS</label>
-                    <input
-                      type="text"
-                      value={sNis}
-                      onChange={(e) => setSNis(e.target.value)}
-                      placeholder="1001"
-                      className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-mono-num"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Kamar Asrama</label>
-                    <input
-                      type="text"
-                      value={sKamar}
-                      onChange={(e) => setSKamar(e.target.value)}
-                      placeholder={sGender === 'Putri' ? '10.1 Putri' : '10.4 Putra'}
-                      className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nama Santri *</label>
-                    <input
-                      type="text"
-                      value={sNama}
-                      onChange={(e) => setSNama(e.target.value)}
-                      placeholder={sGender === 'Putri' ? 'AISYAH HUMAIRA' : 'AHMAD FAUZI'}
-                      className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-medium"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nama Kelas *</label>
-                    <input
-                      type="text"
-                      value={sKelas}
-                      onChange={(e) => setSKelas(e.target.value)}
-                      placeholder={sGender === 'Putri' ? '10 KHADIJAH' : '10 ABU BAKAR AS-SHIDDIQ'}
-                      className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Kelompok Al-Qur&apos;an</label>
-                    <input
-                      type="text"
-                      value={sKelompok}
-                      onChange={(e) => setSKelompok(e.target.value)}
-                      placeholder={sGender === 'Putri' ? '10-01 Putri' : '10-08 Putra'}
-                      className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Pengampu Al-Qur&apos;an</label>
-                    <input
-                      type="text"
-                      value={sPengampu}
-                      onChange={(e) => setSPengampu(e.target.value)}
-                      placeholder={sGender === 'Putri' ? 'USTZ. SITI MARIYAM' : 'UST. DAFFA M Z'}
-                      className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
-                    />
-                  </div>
-                </div>
-                <button
-                  type="submit"
-                  disabled={savingStudentDirect}
-                  className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+              {/* PANEL 1: SANTRI (TAMBAH LANGSUNG & EDIT YANG SUDAH ADA) */}
+              <div className="rounded-xl border border-teal-200 bg-white overflow-hidden">
+                <form
+                  onSubmit={handleDirectAddStudent}
+                  className="bg-gradient-to-br from-teal-50/50 to-white p-4 space-y-3 border-b border-slate-200"
                 >
-                  <Plus className="h-3.5 w-3.5" />
-                  {savingStudentDirect ? 'Menyimpan...' : `Simpan Santri Wilayah ${sGender}`}
-                </button>
-              </form>
-
-              <form
-                onSubmit={handleDirectAddSchedule}
-                className="rounded-xl border border-sky-200 bg-gradient-to-br from-sky-50/50 to-white p-4 space-y-3"
-              >
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 border-b border-sky-100 pb-2.5">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-600 text-white">
-                    <CalendarClock className="h-3.5 w-3.5" />
-                  </span>
-                  Input Langsung Jadwal Mengajar (Putra / Putri)
-                </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nama Guru *</label>
-                    <input
-                      type="text"
-                      value={jGuru}
-                      onChange={(e) => setJGuru(e.target.value)}
-                      placeholder={jGender === 'Putri' ? 'USTZ. HANIFAH' : 'UST. AHMAD'}
-                      className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-medium"
-                    />
+                  <div className="flex items-center justify-between gap-2 border-b border-teal-100 pb-2.5">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-600 text-white">
+                        <Users className="h-3.5 w-3.5" />
+                      </span>
+                      {editingStudentId
+                        ? 'Edit Data Santri yang Sudah Ada'
+                        : 'Input Langsung Data Santri (Putra / Putri)'}
+                    </div>
+                    {editingStudentId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingStudentId(null);
+                          setSNis('');
+                          setSNama('');
+                        }}
+                        className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                      >
+                        <X className="h-3 w-3" />
+                        Batal Edit
+                      </button>
+                    )}
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Wilayah *</label>
+                      <select
+                        value={sGender}
+                        onChange={(e) => setSGender(e.target.value as 'Putra' | 'Putri')}
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-xs font-semibold"
+                      >
+                        <option value="Putra">Putra</option>
+                        <option value="Putri">Putri</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">No / NIS</label>
+                      <input
+                        type="text"
+                        value={sNis}
+                        onChange={(e) => setSNis(e.target.value)}
+                        placeholder="1001"
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-mono-num"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Kamar Asrama</label>
+                      <input
+                        type="text"
+                        value={sKamar}
+                        onChange={(e) => setSKamar(e.target.value)}
+                        placeholder={sGender === 'Putri' ? '10.1 Putri' : '10.4 Putra'}
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nama Santri *</label>
+                      <input
+                        type="text"
+                        value={sNama}
+                        onChange={(e) => setSNama(e.target.value)}
+                        placeholder={sGender === 'Putri' ? 'AISYAH HUMAIRA' : 'AHMAD FAUZI'}
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-medium"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nama Kelas *</label>
+                      <input
+                        type="text"
+                        value={sKelas}
+                        onChange={(e) => setSKelas(e.target.value)}
+                        placeholder={sGender === 'Putri' ? '10 KHADIJAH' : '10 ABU BAKAR AS-SHIDDIQ'}
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Kelompok Al-Qur&apos;an</label>
+                      <input
+                        type="text"
+                        value={sKelompok}
+                        onChange={(e) => setSKelompok(e.target.value)}
+                        placeholder={sGender === 'Putri' ? '10-01 Putri' : '10-08 Putra'}
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Pengampu Al-Qur&apos;an</label>
+                      <input
+                        type="text"
+                        value={sPengampu}
+                        onChange={(e) => setSPengampu(e.target.value)}
+                        placeholder={sGender === 'Putri' ? 'USTZ. SITI MARIYAM' : 'UST. DAFFA M Z'}
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={savingStudentDirect}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50 whitespace-nowrap shrink-0"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    {savingStudentDirect
+                      ? 'Menyimpan...'
+                      : editingStudentId
+                      ? 'Simpan Perubahan Data Santri'
+                      : `Tambah Santri Baru (${sGender})`}
+                  </button>
+                </form>
+
+                {/* Tabel Edit Santri yang Sudah Ada */}
+                <div className="p-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-slate-800">
+                    Edit Santri yang Sudah Ada ({adminStudents.length})
+                  </span>
+                  <input
+                    type="text"
+                    value={studentSearchQ}
+                    onChange={(e) => setStudentSearchQ(e.target.value)}
+                    placeholder="Cari nama santri / kelas / kamar..."
+                    className="h-8 w-56 rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
+                  />
+                </div>
+                <div className="max-h-64 overflow-y-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="sticky top-0 bg-slate-100 text-slate-600 border-b border-slate-200">
+                      <tr>
+                        <th className="px-3 py-2 font-semibold">Nama Santri</th>
+                        <th className="px-2 py-2 font-semibold">Kelas &amp; Kamar</th>
+                        <th className="px-2 py-2 font-semibold">Halaqah</th>
+                        <th className="px-3 py-2 text-right font-semibold">Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {adminStudents
+                        .filter((st) => {
+                          const q = studentSearchQ.trim().toLowerCase();
+                          if (!q) return true;
+                          return (
+                            st.nama.toLowerCase().includes(q) ||
+                            st.kelas.toLowerCase().includes(q) ||
+                            (st.kamar || '').toLowerCase().includes(q)
+                          );
+                        })
+                        .slice(0, 60)
+                        .map((st) => (
+                          <tr
+                            key={st.id}
+                            className={`hover:bg-slate-50 ${
+                              editingStudentId === st.id ? 'bg-teal-50/80' : ''
+                            }`}
+                          >
+                            <td className="px-3 py-2">
+                              <div className="font-semibold text-slate-900">{st.nama}</div>
+                              <div className="font-mono-num text-[10px] text-slate-500">
+                                NIS: {st.nis || '-'} · {st.gender}
+                              </div>
+                            </td>
+                            <td className="px-2 py-2">
+                              <div className="font-medium text-slate-800">{st.kelas}</div>
+                              <div className="text-[10px] text-slate-500">Kamar: {st.kamar || '-'}</div>
+                            </td>
+                            <td className="px-2 py-2 text-[11px] text-slate-600">
+                              <div>{st.kelompokQuran || '-'}</div>
+                              <div className="text-[10px] text-teal-700">{st.pengampuQuran || '-'}</div>
+                            </td>
+                            <td className="px-3 py-2 text-right whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditStudent(st)}
+                                className="mr-1 inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-50"
+                              >
+                                <Edit3 className="h-3 w-3" />
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteStudentDirect(st)}
+                                className="inline-flex items-center rounded border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50"
+                                title="Hapus santri"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* PANEL 2: JADWAL GURU AKADEMIK & AL-QUR'AN (TAMBAH LANGSUNG & EDIT YANG SUDAH ADA) */}
+              <div className="rounded-xl border border-sky-200 bg-white overflow-hidden">
+                <form
+                  onSubmit={handleDirectAddSchedule}
+                  className="bg-gradient-to-br from-sky-50/50 to-white p-4 space-y-3 border-b border-slate-200"
+                >
+                  <div className="flex items-center justify-between gap-2 border-b border-sky-100 pb-2.5">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-600 text-white">
+                        <CalendarClock className="h-3.5 w-3.5" />
+                      </span>
+                      {editingScheduleId
+                        ? 'Edit Jadwal Guru Akademik / Al-Qur’an'
+                        : 'Input Langsung Jadwal Guru Akademik & Al-Qur’an'}
+                    </div>
+                    {editingScheduleId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingScheduleId(null);
+                          setJKelas('');
+                          setJMapel('');
+                        }}
+                        className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                      >
+                        <X className="h-3 w-3" />
+                        Batal Edit
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Kategori Jadwal</label>
+                      <select
+                        value={jKategori}
+                        onChange={(e) => {
+                          const val = e.target.value as 'Akademik' | 'Al-Quran';
+                          setJKategori(val);
+                          if (val === 'Al-Quran' && !jMapel) setJMapel("HALAQAH AL-QUR'AN");
+                        }}
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-xs font-semibold"
+                      >
+                        <option value="Akademik">Guru Akademik (KBM)</option>
+                        <option value="Al-Quran">Guru Al-Qur&apos;an</option>
+                      </select>
+                    </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-600 mb-1">Wilayah</label>
                       <select
@@ -2182,61 +2802,189 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                       </select>
                     </div>
                   </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nama Guru / Pengampu *</label>
+                      <input
+                        type="text"
+                        list="admin-guru-list"
+                        value={jGuru}
+                        onChange={(e) => setJGuru(e.target.value)}
+                        placeholder={jGender === 'Putri' ? 'USTZ. HANIFAH' : 'UST. NUR FAIZIN'}
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-medium"
+                      />
+                      <datalist id="admin-guru-list">
+                        {teachers.map((t) => (
+                          <option key={t.id} value={t.nama} />
+                        ))}
+                      </datalist>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                        {jKategori === 'Al-Quran' ? 'Kelompok Halaqah *' : 'Nama Kelas *'}
+                      </label>
+                      <input
+                        type="text"
+                        value={jKelas}
+                        onChange={(e) => setJKelas(e.target.value)}
+                        placeholder={
+                          jKategori === 'Al-Quran'
+                            ? '10-08 Putra'
+                            : jGender === 'Putri'
+                            ? '10 KHADIJAH'
+                            : '10 ABU BAKAR AS-SHIDDIQ'
+                        }
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                        {jKategori === 'Al-Quran' ? 'Materi Halaqah / Setoran *' : 'Mata Pelajaran *'}
+                      </label>
+                      <input
+                        type="text"
+                        value={jMapel}
+                        onChange={(e) => setJMapel(e.target.value)}
+                        placeholder={jKategori === 'Al-Quran' ? "HALAQAH AL-QUR'AN" : 'BAHASA ARAB'}
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Jam Ke (JP)</label>
+                      <input
+                        type="text"
+                        value={jJam}
+                        onChange={(e) => setJJam(e.target.value)}
+                        placeholder="1-2"
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-mono-num"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={savingScheduleDirect}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-sky-700 px-4 py-2 text-xs font-semibold text-white hover:bg-sky-800 disabled:opacity-50 whitespace-nowrap shrink-0"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    {savingScheduleDirect
+                      ? 'Menyimpan...'
+                      : editingScheduleId
+                      ? 'Simpan Perubahan Jadwal'
+                      : `Tambah Jadwal ${jKategori} (${jGender})`}
+                  </button>
+                </form>
+
+                {/* Tabel Edit Jadwal yang Sudah Ada */}
+                <div className="p-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-slate-800">
+                    Edit Jadwal yang Sudah Ada ({adminSchedules.length})
+                  </span>
+                  <input
+                    type="text"
+                    value={scheduleSearchQ}
+                    onChange={(e) => setScheduleSearchQ(e.target.value)}
+                    placeholder="Cari guru / mapel / kelas..."
+                    className="h-8 w-56 rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
+                  />
                 </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Kelas / Halaqah *</label>
-                    <input
-                      type="text"
-                      value={jKelas}
-                      onChange={(e) => setJKelas(e.target.value)}
-                      placeholder={jGender === 'Putri' ? '10 KHADIJAH' : '10 ABU BAKAR'}
-                      className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Mata Pelajaran *</label>
-                    <input
-                      type="text"
-                      value={jMapel}
-                      onChange={(e) => setJMapel(e.target.value)}
-                      placeholder="BAHASA ARAB"
-                      className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Jam Ke</label>
-                    <input
-                      type="text"
-                      value={jJam}
-                      onChange={(e) => setJJam(e.target.value)}
-                      placeholder="1-2"
-                      className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-mono-num"
-                    />
-                  </div>
+                <div className="max-h-64 overflow-y-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="sticky top-0 bg-slate-100 text-slate-600 border-b border-slate-200">
+                      <tr>
+                        <th className="px-3 py-2 font-semibold">Hari &amp; JP</th>
+                        <th className="px-2 py-2 font-semibold">Guru &amp; Mapel</th>
+                        <th className="px-2 py-2 font-semibold">Kelas / Halaqah</th>
+                        <th className="px-3 py-2 text-right font-semibold">Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {adminSchedules
+                        .filter((sch) => {
+                          const q = scheduleSearchQ.trim().toLowerCase();
+                          if (!q) return true;
+                          return (
+                            sch.guru.toLowerCase().includes(q) ||
+                            sch.mapel.toLowerCase().includes(q) ||
+                            sch.kelas.toLowerCase().includes(q) ||
+                            sch.hari.toLowerCase().includes(q)
+                          );
+                        })
+                        .map((sch) => (
+                          <tr
+                            key={sch.id}
+                            className={`hover:bg-slate-50 ${
+                              editingScheduleId === sch.id ? 'bg-sky-50/80' : ''
+                            }`}
+                          >
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              <div className="font-semibold text-slate-900">{sch.hari}</div>
+                              <div className="font-mono-num text-[10px] text-slate-500">JP {sch.jamKe}</div>
+                            </td>
+                            <td className="px-2 py-2">
+                              <div className="font-semibold text-slate-900">{sch.guru}</div>
+                              <div className="text-[10px] text-sky-700 font-medium">{sch.mapel}</div>
+                            </td>
+                            <td className="px-2 py-2">
+                              <div className="font-medium text-slate-800">{sch.kelas}</div>
+                              <div className="text-[10px] text-slate-500">{sch.gender}</div>
+                            </td>
+                            <td className="px-3 py-2 text-right whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditSchedule(sch)}
+                                className="mr-1 inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-sky-800 hover:bg-sky-50"
+                              >
+                                <Edit3 className="h-3 w-3" />
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteScheduleDirect(sch)}
+                                className="inline-flex items-center rounded border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50"
+                                title="Hapus jadwal"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
                 </div>
-                <button
-                  type="submit"
-                  disabled={savingScheduleDirect}
-                  className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-sky-700 px-4 py-2 text-xs font-semibold text-white hover:bg-sky-800 disabled:opacity-50"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  {savingScheduleDirect ? 'Menyimpan...' : `Simpan Jadwal Wilayah ${jGender}`}
-                </button>
-              </form>
+              </div>
             </div>
 
-            {/* Quick Add Single Teacher/Wali Kelas/Musyrif + Account Directory */}
+            {/* Quick Add / Edit Single Teacher/Wali Kelas/Musyrif + Account Directory */}
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start border-t border-slate-200 pt-5">
               <form
                 onSubmit={handleCreateSingleAccount}
                 className="lg:col-span-4 rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50/60 to-white p-4 space-y-3"
               >
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 border-b border-indigo-100 pb-2.5">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600 text-white">
-                    <UserPlus className="h-3.5 w-3.5" />
-                  </span>
-                  Tambah Akun Guru / Wali / Musyrif
+                <div className="flex items-center justify-between gap-2 border-b border-indigo-100 pb-2.5">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600 text-white">
+                      <UserPlus className="h-3.5 w-3.5" />
+                    </span>
+                    {editingTeacherId ? 'Edit Akun Guru / Pembina' : 'Tambah Akun Guru / Wali / Musyrif'}
+                  </div>
+                  {editingTeacherId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingTeacherId(null);
+                        setMNama('');
+                        setMWaliKelas('');
+                        setMKamar('');
+                        setMUsername('');
+                      }}
+                      className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700"
+                    >
+                      <X className="h-3 w-3" />
+                      Batal
+                    </button>
+                  )}
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nama Lengkap &amp; Gelar *</label>
@@ -2259,7 +3007,8 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                       <option value="Wali Kelas">Wali Kelas</option>
                       <option value="Musyrif">Musyrif</option>
                       <option value="Musyrifah">Musyrifah</option>
-                      <option value="Guru">Guru</option>
+                      <option value="Guru">Guru Akademik</option>
+                      <option value="Pengampu Al-Quran">Pengampu Al-Qur&apos;an</option>
                     </select>
                   </div>
                   <div>
@@ -2312,22 +3061,24 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                       type="text"
                       value={mPin}
                       onChange={(e) => setMPin(e.target.value)}
+                      placeholder={editingTeacherId ? 'Kosongkan jika tetap' : '1234'}
                       className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-mono-num focus:border-indigo-600 focus:outline-none"
                     />
                   </div>
                 </div>
                 <button
                   type="submit"
-                  className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap shrink-0"
                 >
-                  <Plus className="h-3.5 w-3.5" />
-                  Simpan Akun
+                  <Save className="h-3.5 w-3.5" />
+                  {editingTeacherId ? 'Simpan Perubahan Akun' : 'Simpan Akun Baru'}
                 </button>
               </form>
 
               <div className="lg:col-span-8 rounded-xl border border-slate-200 overflow-hidden">
-                <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-900">
-                  Daftar Akun Terdaftar ({teachers.length})
+                <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 flex items-center justify-between text-xs font-semibold text-slate-900">
+                  <span>Daftar Akun Terdaftar ({teachers.length})</span>
+                  <span className="text-[11px] font-normal text-slate-500">Klik Edit untuk mengubah data akun</span>
                 </div>
                 <div className="max-h-80 overflow-auto">
                   <table className="w-full text-left text-xs">
@@ -2351,7 +3102,12 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                             ? 'text-indigo-700 font-semibold'
                             : 'text-sky-700 font-semibold';
                         return (
-                          <tr key={t.id} className="hover:bg-slate-50">
+                          <tr
+                            key={t.id}
+                            className={`hover:bg-slate-50 ${
+                              editingTeacherId === t.id ? 'bg-indigo-50/70' : ''
+                            }`}
+                          >
                             <td className="px-3 py-2 font-semibold text-slate-900">{t.nama}</td>
                             <td className="px-3 py-2 font-mono-num text-slate-600">{t.username}</td>
                             <td className={`px-3 py-2 ${roleColor}`}>{t.peran}</td>
@@ -2361,18 +3117,28 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                               {t.kamarBinaan?.length ? `Kamar: ${t.kamarBinaan.join(', ')}` : ''}
                               {!t.waliKelasOf && !t.kamarBinaan?.length ? '-' : ''}
                             </td>
-                            <td className="px-3 py-2 text-right">
+                            <td className="px-3 py-2 text-right whitespace-nowrap">
                               {t.peran === 'Admin Super' ? (
                                 <span className="text-[11px] font-semibold text-teal-700">Utama</span>
                               ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteAccount(t.id, t.nama)}
-                                  title="Hapus akun"
-                                  className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-700"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartEditAccount(t)}
+                                    className="mr-1 inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50"
+                                  >
+                                    <Edit3 className="h-3 w-3" />
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteAccount(t.id, t.nama)}
+                                    title="Hapus akun"
+                                    className="inline-flex items-center rounded border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </>
                               )}
                             </td>
                           </tr>
@@ -2384,10 +3150,26 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
               </div>
             </div>
 
-            {/* Ruang Ujian + Reset Empty */}
+            {/* Ruang Ujian (Tambah & Edit) + Reset Empty */}
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 border-t border-slate-200 pt-5">
               <div className="rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50/50 to-white p-4 space-y-3">
-                <h3 className="text-sm font-semibold text-slate-900">Daftar Ruangan Ujian</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-900">
+                    {editingRuangOldName ? `Edit Ruangan: ${editingRuangOldName}` : 'Daftar Ruangan Ujian (Tambah & Edit)'}
+                  </h3>
+                  {editingRuangOldName && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingRuangOldName(null);
+                        setNewRuang('');
+                      }}
+                      className="text-xs font-semibold text-rose-700 hover:underline"
+                    >
+                      Batal Edit
+                    </button>
+                  )}
+                </div>
                 <form onSubmit={handleAddRuang} className="flex gap-2">
                   <input
                     type="text"
@@ -2398,10 +3180,10 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                   />
                   <button
                     type="submit"
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-700"
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-700 whitespace-nowrap shrink-0"
                   >
-                    <Plus className="h-3.5 w-3.5" />
-                    Tambah
+                    <Save className="h-3.5 w-3.5" />
+                    {editingRuangOldName ? 'Simpan Nama Baru' : 'Tambah'}
                   </button>
                 </form>
                 {ruanganUjian.length === 0 ? (
@@ -2409,12 +3191,31 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                 ) : (
                   <div className="flex flex-wrap gap-2">
                     {ruanganUjian.map((r) => (
-                      <span
+                      <div
                         key={r}
-                        className="rounded-md border border-amber-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800"
+                        className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-800"
                       >
-                        {r}
-                      </span>
+                        <span>{r}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingRuangOldName(r);
+                            setNewRuang(r);
+                          }}
+                          title="Edit nama ruangan"
+                          className="rounded p-0.5 text-slate-500 hover:bg-amber-50 hover:text-amber-800"
+                        >
+                          <Edit3 className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteRuang(r)}
+                          title="Hapus ruangan"
+                          className="rounded p-0.5 text-slate-400 hover:bg-rose-50 hover:text-rose-700"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
                     ))}
                   </div>
                 )}
