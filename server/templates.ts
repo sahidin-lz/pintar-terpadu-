@@ -4,6 +4,8 @@ import { fileURLToPath } from 'url';
 import * as XLSX from 'xlsx';
 import type { Gender, RoomMapping, ScheduleItem, Student, TeacherPublic } from '../src/types';
 
+const XLSX_API = (XLSX as unknown as { default?: typeof XLSX }).default || XLSX;
+
 interface AuthenticRosterRow {
   no: string;
   nama: string;
@@ -28,11 +30,20 @@ export interface WorkbookSheetSpec {
   rows: string[][];
 }
 
-const THIS_DIR = path.dirname(fileURLToPath(import.meta.url));
+const THIS_DIR =
+  typeof __dirname !== 'undefined' && __dirname
+    ? __dirname
+    : typeof import.meta !== 'undefined' && import.meta.url
+    ? path.dirname(fileURLToPath(import.meta.url))
+    : process.cwd();
 const INTEGRASI_ASSET_NAME = 'Salinan_dari_integrASI__pengembangan_sistem_presensi_baru__232cd323';
 
 function resolveIntegrasiAssetPath(): string {
   const candidates = [
+    path.resolve(process.cwd(), 'data/integrasi-putra.csv'),
+    path.resolve(THIS_DIR, '../data/integrasi-putra.csv'),
+    path.resolve(THIS_DIR, '../../data/integrasi-putra.csv'),
+    '/var/task/data/integrasi-putra.csv',
     path.resolve(process.cwd(), 'public/assets/aistudio', INTEGRASI_ASSET_NAME),
     path.resolve(THIS_DIR, '../public/assets/aistudio', INTEGRASI_ASSET_NAME),
     path.resolve(THIS_DIR, '../../public/assets/aistudio', INTEGRASI_ASSET_NAME),
@@ -728,13 +739,13 @@ export function buildDatabaseWorkbookSpec(ctx: TemplateContext): {
 }
 
 function buildSheetWithTextCells(rows: string[][]): XLSX.WorkSheet {
-  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const ws = XLSX_API.utils.aoa_to_sheet(rows);
   ws['!cols'] = autoFitColumns(rows);
-  const range = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null;
+  const range = ws['!ref'] ? XLSX_API.utils.decode_range(ws['!ref']) : null;
   if (range) {
     for (let r = range.s.r; r <= range.e.r; r++) {
       for (let c = range.s.c; c <= range.e.c; c++) {
-        const addr = XLSX.utils.encode_cell({ r, c });
+        const addr = XLSX_API.utils.encode_cell({ r, c });
         const cell = ws[addr];
         if (cell) {
           cell.t = 's';
@@ -752,12 +763,12 @@ export function buildDatabaseWorkbookBuffer(ctx: TemplateContext): {
   buffer: Buffer;
 } {
   const spec = buildDatabaseWorkbookSpec(ctx);
-  const wb = XLSX.utils.book_new();
+  const wb = XLSX_API.utils.book_new();
   for (const sheet of spec.sheets) {
     const ws = buildSheetWithTextCells(sheet.rows);
-    XLSX.utils.book_append_sheet(wb, ws, sheet.name);
+    XLSX_API.utils.book_append_sheet(wb, ws, sheet.name);
   }
-  const buffer = XLSX.write(wb, {
+  const buffer = XLSX_API.write(wb, {
     type: 'buffer',
     bookType: 'xlsx',
     compression: true,
@@ -765,7 +776,7 @@ export function buildDatabaseWorkbookBuffer(ctx: TemplateContext): {
 
   return {
     filename: spec.filename,
-    buffer,
+    buffer: Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer),
   };
 }
 
@@ -933,12 +944,12 @@ export function buildPersonalLoginWorkbookBuffer(
   buffer: Buffer;
 } {
   const spec = buildPersonalLoginWorkbookSpec(ctx, teacher);
-  const wb = XLSX.utils.book_new();
+  const wb = XLSX_API.utils.book_new();
   for (const sheet of spec.sheets) {
     const ws = buildSheetWithTextCells(sheet.rows);
-    XLSX.utils.book_append_sheet(wb, ws, sheet.name);
+    XLSX_API.utils.book_append_sheet(wb, ws, sheet.name);
   }
-  const buffer = XLSX.write(wb, {
+  const buffer = XLSX_API.write(wb, {
     type: 'buffer',
     bookType: 'xlsx',
     compression: true,
@@ -946,6 +957,6 @@ export function buildPersonalLoginWorkbookBuffer(
 
   return {
     filename: spec.filename,
-    buffer,
+    buffer: Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer),
   };
 }

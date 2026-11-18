@@ -32,11 +32,14 @@ import {
   downloadComponentExcelTemplate,
   parseDatabaseExcelBuffer,
   parseDatabaseWorkbookFromSpec,
-  triggerExcelDownloadFromSpec,
   type ComponentTemplateKey,
   type DatabaseWorkbookSpec,
   type ParsedDatabaseWorkbook,
 } from '../utils/excelParser';
+import {
+  buildClientDatabaseWorkbookSpec,
+  downloadMasterDatabaseExcelClient,
+} from '../utils/exportHelpers';
 import { auth, pushSnapshotToFirestore } from '../firebase';
 import { loadSubTab, saveSubTab } from '../utils/sessionPersistence';
 
@@ -100,15 +103,13 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const [adminPin, setAdminPin] = useState<string>('');
   const [loggingIn, setLoggingIn] = useState<boolean>(false);
 
-  // Collapsible panels & Template spec state
+  // Collapsible panels & Template spec state (dirakit 100% di sisi klien browser)
   const [inventoryMinimized, setInventoryMinimized] = useState<boolean>(false);
   const [templateMinimized, setTemplateMinimized] = useState<boolean>(false);
   const [componentTemplatesMinimized, setComponentTemplatesMinimized] = useState<boolean>(false);
   const [uploadingComponentKey, setUploadingComponentKey] = useState<ComponentTemplateKey | null>(null);
   const [componentUploadStatus, setComponentUploadStatus] = useState<Record<string, string>>({});
-  const [workbookSpec, setWorkbookSpec] = useState<DatabaseWorkbookSpec | null>(null);
   const [loadingSpec, setLoadingSpec] = useState<boolean>(false);
-  const [specError, setSpecError] = useState<string | null>(null);
 
   // Active tab & Excel upload state
   const [activeTab, setActiveTab] = useState<AdminTab>(() =>
@@ -195,40 +196,48 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const [newRuang, setNewRuang] = useState<string>('');
   const [confirmReset, setConfirmReset] = useState<boolean>(false);
 
-  const loadWorkbookSpec = useCallback(async () => {
+  const workbookSpec = useMemo<DatabaseWorkbookSpec>(
+    () =>
+      buildClientDatabaseWorkbookSpec({
+        students: adminStudents,
+        rooms,
+        teachers,
+        schedules: adminSchedules,
+        ruanganUjian,
+      }),
+    [adminStudents, rooms, teachers, adminSchedules, ruanganUjian],
+  );
+
+  const loadAdminEntities = useCallback(async () => {
     setLoadingSpec(true);
-    setSpecError(null);
     try {
-      const res = await fetch('/api/templates/workbook-data');
-      const data = await parseJsonSafe<DatabaseWorkbookSpec>(res);
-      setWorkbookSpec(data);
-      return data;
-    } catch (err) {
-      const msg = (err as Error).message || 'Gagal memuat data template terpadu dari server.';
-      setSpecError(msg);
-      return null;
+      const [studentsRes, schedulesRes] = await Promise.all([
+        fetch('/api/students').then((r) => (r.ok ? r.json() : [])).catch(() => []),
+        fetch('/api/jadwal').then((r) => (r.ok ? r.json() : [])).catch(() => []),
+      ]);
+      setAdminStudents(Array.isArray(studentsRes) ? studentsRes : []);
+      setAdminSchedules(Array.isArray(schedulesRes) ? schedulesRes : []);
     } finally {
       setLoadingSpec(false);
     }
   }, []);
 
-  const loadAdminEntities = useCallback(() => {
-    fetch('/api/students')
-      .then((r) => (r.ok ? r.json() : []))
-      .then((list: Student[]) => setAdminStudents(Array.isArray(list) ? list : []))
-      .catch(() => {});
-    fetch('/api/jadwal')
-      .then((r) => (r.ok ? r.json() : []))
-      .then((list: ScheduleItem[]) => setAdminSchedules(Array.isArray(list) ? list : []))
-      .catch(() => {});
-  }, []);
+  const loadWorkbookSpec = useCallback(async () => {
+    await loadAdminEntities();
+    return buildClientDatabaseWorkbookSpec({
+      students: adminStudents,
+      rooms,
+      teachers,
+      schedules: adminSchedules,
+      ruanganUjian,
+    });
+  }, [loadAdminEntities, adminStudents, rooms, teachers, adminSchedules, ruanganUjian]);
 
   useEffect(() => {
     if (isSuperAdmin) {
-      loadWorkbookSpec();
       loadAdminEntities();
     }
-  }, [isSuperAdmin, counts?.students, counts?.teachers, counts?.rooms, counts?.schedules, loadWorkbookSpec, loadAdminEntities]);
+  }, [isSuperAdmin, counts?.students, counts?.teachers, counts?.rooms, counts?.schedules, loadAdminEntities]);
 
   const isLocalSuperAdminMatch = (identifier: string, pin: string): boolean => {
     const normId = identifier.trim().toLowerCase();
@@ -309,40 +318,37 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     }
   };
 
-  const handleDownloadExcelTemplate = async () => {
+  const handleDownloadExcelTemplate = () => {
     try {
-      const spec = workbookSpec || (await loadWorkbookSpec());
-      if (spec) {
-        triggerExcelDownloadFromSpec(spec);
-        notify(`Mengunduh ${spec.filename} (Format Excel .xlsx terkompresi — siap dibuka di Excel/WPS/Sheets).`, 'success');
-        return;
-      }
-      // Fallback: download directly from server XLSX endpoint if JSON spec failed
-      window.location.href = '/api/templates/xlsx';
-      notify('Mengunduh file Template_Database_PINTAR_SIM.xlsx dari server...', 'info');
+      const spec = downloadMasterDatabaseExcelClient({
+        students: adminStudents,
+        rooms,
+        teachers,
+        schedules: adminSchedules,
+        ruanganUjian,
+      });
+      notify(
+        `Mengunduh ${spec.filename} (${spec.sheets.length} sheet dirakit 100% di browser — bebas timeout server).`,
+        'success',
+      );
     } catch (err) {
-      notify((err as Error).message || 'Gagal membuat file Excel template.', 'error');
+      notify((err as Error).message || 'Gagal merakit file Excel (.xlsx) di browser.', 'error');
     }
   };
 
-  const handleDownloadComponentTemplate = async (
+  const handleDownloadComponentTemplate = (
     key: ComponentTemplateKey,
     mode: 'blank' | 'filled'
   ) => {
     try {
-      let spec = workbookSpec;
-      if (mode === 'filled' && !spec) {
-        spec = await loadWorkbookSpec();
-      }
-      const effectiveMode: 'blank' | 'filled' = mode === 'filled' && !spec ? 'blank' : mode;
-      const downloadedName = downloadComponentExcelTemplate(key, effectiveMode, spec);
+      const downloadedName = downloadComponentExcelTemplate(key, mode, workbookSpec);
       notify(
-        `Berhasil mengunduh ${downloadedName} (${effectiveMode === 'blank' ? 'Template Kosong Siap Isi' : 'Berisi Data Saat Ini'}).`,
+        `Berhasil mengunduh ${downloadedName} (${mode === 'blank' ? 'Template Kosong Siap Isi' : 'Berisi Data Saat Ini'}).`,
         'success'
       );
     } catch (err) {
       const downloadedName = downloadComponentExcelTemplate(key, 'blank', null);
-      notify(`Mengunduh template standar ${downloadedName} (${(err as Error).message || 'mode offline'}).`, 'info');
+      notify(`Mengunduh template standar ${downloadedName} (${(err as Error).message || 'mode lokal'}).`, 'info');
     }
   };
 
@@ -435,17 +441,12 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     reader.readAsArrayBuffer(file);
   };
 
-  const handleLoadServerTemplateToPreview = async () => {
-    const spec = workbookSpec || (await loadWorkbookSpec());
-    if (!spec) {
-      notify(specError || 'Gagal memuat template Excel dari server. Coba klik "Segarkan Data Template".', 'error');
-      return;
-    }
+  const handleLoadServerTemplateToPreview = () => {
     try {
-      const parsed = parseDatabaseWorkbookFromSpec(spec);
+      const parsed = parseDatabaseWorkbookFromSpec(workbookSpec);
       setExcelWorkbook(parsed);
       setActiveTab('excel_upload');
-      notify('Template Database Excel berhasil dimuat ke pratinjau. Siap diperiksa atau disimpan.', 'success');
+      notify('Template Database Excel 11 sheet berhasil dirakit di browser & dimuat ke pratinjau.', 'success');
     } catch (err) {
       notify((err as Error).message || 'Gagal memproses pratinjau template terpadu.', 'error');
     }
@@ -454,63 +455,40 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const handleDirectCommitWorkbookSpec = async () => {
     setImporting(true);
     try {
-      // If an edited Excel workbook is loaded in preview, upload it safely via /api/import/all-in-one
-      if (excelWorkbook) {
-        const cleanSantri = excelWorkbook.santriRows.filter(
-          (r) => !r.warning || r.warning !== 'Nama identik dengan Nama Kelas'
-        );
-        const combinedTeachers = [
-          ...excelWorkbook.pegawaiRows,
-          ...excelWorkbook.musyrifRows,
-          ...excelWorkbook.waliKelasRows,
-          ...excelWorkbook.guruRows,
-        ];
-        const res = await fetch('/api/import/all-in-one', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            santriRows: cleanSantri,
-            teacherRows: combinedTeachers,
-            scheduleRows: excelWorkbook.scheduleRows,
-            ruanganUjian: excelWorkbook.ruanganUjian,
-            pembinaanRows: excelWorkbook.pembinaanRows,
-            replaceExisting: false,
-            autoCreateAccounts,
-            autoCreateQuranSchedules,
-            defaultPin: defaultPin || '1234',
-          }),
-        });
-        const data = await parseJsonSafe<{
-          santri: { inserted: number; updated: number };
-          teachers: { added: number; updated: number };
-          schedules: { added: number; updated?: number };
-        }>(res);
-        notify(
-          `Seluruh data pratinjau berhasil disimpan! Siswa: ${data.santri.inserted} baru/${data.santri.updated} update · Akun: ${data.teachers.added + data.teachers.updated} · Jadwal: ${data.schedules.added + (data.schedules.updated || 0)}.`,
-          'success'
-        );
-      } else {
-        // Direct atomic commit & reconcile on server (no heavy browser->server roundtrip, zero data wiped)
-        const res = await fetch('/api/templates/commit-master', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            autoCreateAccounts,
-            autoCreateQuranSchedules,
-            defaultPin: defaultPin || '1234',
-          }),
-        });
-        const data = await parseJsonSafe<{
-          santri: { inserted: number; updated: number };
-          teachers: { added: number; updated: number };
-          schedules: { added: number; updated?: number };
-          counts?: SystemCounts;
-        }>(res);
-        notify(
-          `Data Template Terpadu berhasil diambil & direkonsiliasi! Total aktif: ${data.counts?.students ?? 0} santri · ${data.counts?.teachers ?? 0} akun · ${data.counts?.schedules ?? 0} jadwal · ${data.counts?.attendanceLogs ?? 0} presensi.`,
-          'success'
-        );
-      }
+      const targetWorkbook = excelWorkbook || parseDatabaseWorkbookFromSpec(workbookSpec);
+      const cleanSantri = targetWorkbook.santriRows.filter(
+        (r) => !r.warning || r.warning !== 'Nama identik dengan Nama Kelas'
+      );
+      const combinedTeachers = [
+        ...targetWorkbook.pegawaiRows,
+        ...targetWorkbook.musyrifRows,
+        ...targetWorkbook.waliKelasRows,
+        ...targetWorkbook.guruRows,
+      ];
+      const res = await fetch('/api/import/all-in-one', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          santriRows: cleanSantri,
+          teacherRows: combinedTeachers,
+          scheduleRows: targetWorkbook.scheduleRows,
+          ruanganUjian: targetWorkbook.ruanganUjian,
+          pembinaanRows: targetWorkbook.pembinaanRows,
+          replaceExisting: false,
+          autoCreateAccounts,
+          autoCreateQuranSchedules,
+          defaultPin: defaultPin || '1234',
+        }),
+      });
+      const data = await parseJsonSafe<{
+        santri: { inserted: number; updated: number };
+        teachers: { added: number; updated: number };
+        schedules: { added: number; updated?: number };
+      }>(res);
+      notify(
+        `Seluruh data template berhasil disimpan! Siswa: ${data.santri.inserted} baru/${data.santri.updated} update · Akun: ${data.teachers.added + data.teachers.updated} · Jadwal: ${data.schedules.added + (data.schedules.updated || 0)}.`,
+        'success'
+      );
 
       if (auth.currentUser) {
         fetch('/api/firebase/snapshot')
@@ -521,10 +499,9 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       }
 
       onDataUpdated();
-      await loadWorkbookSpec();
-      loadAdminEntities();
+      await loadAdminEntities();
     } catch (err) {
-      notify((err as Error).message || 'Gagal mengambil & menyimpan data template terpadu.', 'error');
+      notify((err as Error).message || 'Gagal menyimpan data template terpadu.', 'error');
     } finally {
       setImporting(false);
     }
@@ -1680,21 +1657,6 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
               </button>
             </div>
         </div>
-
-        {specError && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-300 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-900">
-            <span>
-              <b>Kendala memuat Template Terpadu:</b> {specError}
-            </span>
-            <button
-              type="button"
-              onClick={loadWorkbookSpec}
-              className="rounded-md bg-rose-700 px-3 py-1 font-semibold text-white hover:bg-rose-800 whitespace-nowrap"
-            >
-              Coba Muat Ulang
-            </button>
-          </div>
-        )}
 
         {!templateMinimized && dataSheets.length > 0 && (
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5 pt-1">

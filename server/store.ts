@@ -62,7 +62,12 @@ export interface DatabaseSchema {
   };
 }
 
-const THIS_DIR = path.dirname(fileURLToPath(import.meta.url));
+const THIS_DIR =
+  typeof __dirname !== 'undefined' && __dirname
+    ? __dirname
+    : typeof import.meta !== 'undefined' && import.meta.url
+    ? path.dirname(fileURLToPath(import.meta.url))
+    : process.cwd();
 
 function resolveBundledDataDir(): string {
   const candidates = [
@@ -220,7 +225,11 @@ class PintarStore {
   private masterCache: Map<string, { data: unknown; expiresAt: number }> = new Map();
 
   constructor() {
-    this.db = this.loadFromDisk();
+    try {
+      this.db = this.loadFromDisk();
+    } catch {
+      this.db = createInitialDatabase();
+    }
   }
 
   private scoreDatabase(parsed: DatabaseSchema): number {

@@ -1,7 +1,7 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { store } from './server/store';
+import { store } from './server/store.js';
 import {
   buildDatabaseWorkbookBuffer,
   buildDatabaseWorkbookSpec,
@@ -9,7 +9,7 @@ import {
   buildPersonalLoginWorkbookSpec,
   loadAuthenticPutraRoster,
   type TemplateContext,
-} from './server/templates';
+} from './server/templates.js';
 import type { Gender, PresensiType, StatusTindakLanjut, TeacherPublic, UserRole, WilayahFilter } from './src/types';
 
 export const app = express();
@@ -852,6 +852,12 @@ function registerApiRoutes() {
     res.json(store.getQuranHalaqahRecap({ guru, kelompok, gender }));
   });
 
+  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const message = err instanceof Error ? err.message : 'Terjadi kesalahan internal server.';
+    if (!res.headersSent) {
+      res.status(500).json({ error: message });
+    }
+  });
 }
 
 registerApiRoutes();
@@ -864,7 +870,8 @@ async function startServer() {
   const distPath = path.resolve(process.cwd(), 'dist');
 
   if (!isProd || !fs.existsSync(distPath)) {
-    const { createServer: createViteServer } = await import('vite');
+    const vitePkg = 'vite';
+    const { createServer: createViteServer } = await import(/* @vite-ignore */ vitePkg);
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -883,7 +890,7 @@ async function startServer() {
   });
 }
 
-if (!process.env.VERCEL) {
+if (!process.env.VERCEL && !process.env.VERCEL_ENV && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
   startServer();
 }
 
