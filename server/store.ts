@@ -6029,7 +6029,8 @@ class PintarStore {
         [lab, kelas, guru, namaPeminjam, b.keterangan],
         b.kampus === 'PUTRI' ? 'Putri' : 'Putra',
       );
-      const kampus: LabkomKampus = inferredG === 'Putri' ? 'PUTRI' : 'PUTRA';
+      const kampus: LabkomKampus =
+        b.kampus === 'PUTRI' || inferredG === 'Putri' ? 'PUTRI' : 'PUTRA';
       if (kampus !== b.kampus) genderReclassified++;
       const slotKey = `${kampus}|${lab}|${tanggal}|${jamKe}`;
       if (!bookingMap.has(slotKey)) {

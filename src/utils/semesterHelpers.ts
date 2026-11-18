@@ -86,20 +86,44 @@ export function matchesSemesterFilter(dateStr: string, filter: SemesterFilter): 
   return true;
 }
 
+const MONTH_NAME_MAP: Record<string, string> = {
+  jan: '01', januari: '01', january: '01',
+  feb: '02', februari: '02', february: '02',
+  mar: '03', maret: '03', march: '03',
+  apr: '04', april: '04',
+  mei: '05', may: '05',
+  jun: '06', juni: '06', june: '06',
+  jul: '07', juli: '07', july: '07',
+  agu: '08', agt: '08', agustus: '08', aug: '08', august: '08',
+  sep: '09', sept: '09', september: '09',
+  okt: '10', oktober: '10', oct: '10', october: '10',
+  nov: '11', november: '11',
+  des: '12', desember: '12', dec: '12', december: '12',
+};
+
 /**
- * Mengubah format tanggal DD/MM/YYYY [HH:mm:ss] atau YYYY-MM-DD ke YYYY-MM-DD.
+ * Mengubah format tanggal DD/MM/YYYY [HH:mm:ss], DD Month YYYY, atau YYYY-MM-DD ke YYYY-MM-DD.
  */
 export function parseFlexibleDateToIso(raw: string): string {
   const s = String(raw || '').trim();
   if (!s) return '';
-  const isoMatch = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  const isoMatch = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
   if (isoMatch) {
     return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
   }
-  const dmyMatch = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  const dmyMatch = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
   if (dmyMatch) {
-    const [, dd, mm, yyyy] = dmyMatch;
+    const [, dd, mm, yyyyRaw] = dmyMatch;
+    const yyyy = yyyyRaw.length === 2 ? `20${yyyyRaw}` : yyyyRaw;
     return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+  }
+  const namedMatch = s.match(/^(\d{1,2})[\s\-/.]+([a-zA-Z]+)[\s\-/.]+(\d{2,4})/);
+  if (namedMatch) {
+    const mm = MONTH_NAME_MAP[namedMatch[2].toLowerCase()];
+    if (mm) {
+      const yyyy = namedMatch[3].length === 2 ? `20${namedMatch[3]}` : namedMatch[3];
+      return `${yyyy}-${mm}-${namedMatch[1].padStart(2, '0')}`;
+    }
   }
   return '';
 }

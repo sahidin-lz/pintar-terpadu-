@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   BarChart3,
   Calendar,
   CalendarPlus,
@@ -28,6 +31,19 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import type {
   LabkomBooking,
   LabkomKampus,
@@ -227,7 +243,7 @@ function extractLabkomRowsFromMatrix(
   if (!matrix || matrix.length === 0) return [];
 
   let headerIdx = -1;
-  for (let i = 0; i < Math.min(matrix.length, 8); i++) {
+  for (let i = 0; i < Math.min(matrix.length, 25); i++) {
     const tokens = (matrix[i] || []).map(normHdr);
     const hasLoc = tokens.some(
       (t) =>
@@ -422,12 +438,19 @@ export const LabkomRuangModule: React.FC<Props> = ({
   const [tgBotToken, setTgBotToken] = useState<string>('');
   const [tgChatId, setTgChatId] = useState<string>('');
 
-  // History & Visualization State
+  // History & Visualization State (Detailed Booking Logs Data Grid)
   const [historySearch, setHistorySearch] = useState<string>('');
   const [historyKampusFilter, setHistoryKampusFilter] = useState<'ALL' | LabkomKampus>('ALL');
   const [historySemesterFilter, setHistorySemesterFilter] = useState<SemesterFilter>('ALL');
+  const [historyLabFilter, setHistoryLabFilter] = useState<string>('ALL');
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<string>('ALL');
+  const [historySortKey, setHistorySortKey] = useState<
+    'tanggal' | 'kampus' | 'namaPeminjam' | 'guru' | 'kelas' | 'mapel' | 'lab' | 'jamKe' | 'status'
+  >('tanggal');
+  const [historySortDir, setHistorySortDir] = useState<'asc' | 'desc'>('desc');
+  const [historyPage, setHistoryPage] = useState<number>(1);
+  const [historyPageSize, setHistoryPageSize] = useState<number | 'ALL'>(50);
   const [historySelectedIds, setHistorySelectedIds] = useState<Set<string>>(new Set());
-  const [historyPageLimit, setHistoryPageLimit] = useState<number>(80);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState<boolean>(false);
   const [dashBorrowerFilter, setDashBorrowerFilter] = useState<'ALL' | LabkomKampus>('ALL');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -1536,15 +1559,31 @@ export const LabkomRuangModule: React.FC<Props> = ({
     setSubmitting(true);
     try {
       const lowerName = file.name.toLowerCase();
+      const hasFilePutra = lowerName.includes('putra') || lowerName.includes('ikhwan');
+      const hasFilePutri =
+        lowerName.includes('putri') || lowerName.includes('akhwat') || lowerName.includes('siswi');
       const fileHintKampus: 'AUTO' | 'PUTRA' | 'PUTRI' =
-        lowerName.includes('putri') || lowerName.includes('akhwat') || lowerName.includes('siswi')
+        hasFilePutra && hasFilePutri
+          ? 'AUTO'
+          : hasFilePutri
           ? 'PUTRI'
-          : lowerName.includes('putra') || lowerName.includes('ikhwan')
+          : hasFilePutra
           ? 'PUTRA'
           : 'AUTO';
 
       if (lowerName.endsWith('.csv') || lowerName.endsWith('.tsv')) {
         const csvText = await file.text();
+        if (
+          csvText.includes('TEMPLATE LOG PEMINJAMAN LABKOM') &&
+          csvText.includes('PETUNJUK PENGISIAN') &&
+          !csvText.toLowerCase().includes('jam_ke')
+        ) {
+          notify(
+            'File CSV ini hanya berisi sheet "0_Panduan" (petunjuk pengisian) karena Excel/Google Sheets hanya mengekspor sheet pertama saat Save As CSV. Unggah langsung file .xlsx atau ekspor khusus sheet "Data_Pinjam_Putri" / "Data_Pinjam"!',
+            'error',
+          );
+          return;
+        }
         const matrix = parseClientCsvMatrix(csvText);
         const validRows = extractLabkomRowsFromMatrix(
           matrix,
@@ -1595,10 +1634,15 @@ export const LabkomRuangModule: React.FC<Props> = ({
             defval: '',
             raw: true,
           });
+          const hasSheetPutra = upper.includes('PUTRA') || upper.includes('IKHWAN');
+          const hasSheetPutri =
+            upper.includes('PUTRI') || upper.includes('AKHWAT') || upper.includes('SISWI');
           const sheetHintKampus: LabkomKampus | undefined =
-            upper.includes('PUTRI') || upper.includes('AKHWAT') || upper.includes('SISWI')
+            hasSheetPutra && hasSheetPutri
+              ? undefined
+              : hasSheetPutri
               ? 'PUTRI'
-              : upper.includes('PUTRA') || upper.includes('IKHWAN')
+              : hasSheetPutra
               ? 'PUTRA'
               : fileHintKampus === 'PUTRI'
               ? 'PUTRI'
@@ -1611,7 +1655,7 @@ export const LabkomRuangModule: React.FC<Props> = ({
         }
         if (allRows.length === 0) {
           notify(
-            `Tidak ditemukan baris log peminjaman valid di ${file.name} (${wb.SheetNames.length} sheet). Pastikan kolom Lab/Lokasi, Tanggal, dan Jam_Ke tersedia.`,
+            `Tidak ditemukan baris log peminjaman valid di ${file.name} (${wb.SheetNames.length} sheet). Pastikan sheet Data_Pinjam / Data_Pinjam_Putri terisi kolom Lab, Tanggal, dan Jam_Ke.`,
             'error',
           );
           return;
@@ -1710,22 +1754,164 @@ export const LabkomRuangModule: React.FC<Props> = ({
     }
   };
 
-  // Filtered History Rows
+  useEffect(() => {
+    setHistoryPage(1);
+  }, [
+    historySearch,
+    historyKampusFilter,
+    historySemesterFilter,
+    historyLabFilter,
+    historyStatusFilter,
+    historySortKey,
+    historySortDir,
+    historyPageSize,
+  ]);
+
+  const historyKampusCounts = useMemo(() => {
+    const all = state?.bookings || [];
+    let putra = 0;
+    let putri = 0;
+    for (const b of all) {
+      if (b.kampus === 'PUTRI') putri++;
+      else putra++;
+    }
+    return { all: all.length, putra, putri };
+  }, [state]);
+
+  const historyLabOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const b of state?.bookings || []) {
+      const lab = String(b.lab || '').trim().toUpperCase();
+      if (lab) set.add(lab);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
+  }, [state]);
+
+  const historyStatusOptions = useMemo(() => {
+    const set = new Set<string>(['Disetujui', 'Menunggu', 'Selesai', 'Dibatalkan']);
+    for (const b of state?.bookings || []) {
+      const st = String(b.status || '').trim();
+      if (st) set.add(st);
+    }
+    return Array.from(set);
+  }, [state]);
+
+  const toggleHistorySort = (
+    key:
+      | 'tanggal'
+      | 'kampus'
+      | 'namaPeminjam'
+      | 'guru'
+      | 'kelas'
+      | 'mapel'
+      | 'lab'
+      | 'jamKe'
+      | 'status',
+  ) => {
+    if (historySortKey === key) {
+      setHistorySortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setHistorySortKey(key);
+      setHistorySortDir(key === 'tanggal' ? 'desc' : 'asc');
+    }
+  };
+
+  // Filtered & Sorted History Rows (Detailed Data Grid)
   const filteredHistory = useMemo(() => {
     if (!state) return [];
     const q = historySearch.trim().toLowerCase();
+    const dir = historySortDir === 'asc' ? 1 : -1;
     return state.bookings
       .filter((b) => {
         if (historyKampusFilter !== 'ALL' && b.kampus !== historyKampusFilter) return false;
         if (!matchesSemesterFilter(b.tanggal, historySemesterFilter)) return false;
+        if (historyLabFilter !== 'ALL' && b.lab.trim().toUpperCase() !== historyLabFilter) {
+          return false;
+        }
+        if (
+          historyStatusFilter !== 'ALL' &&
+          (b.status || 'Disetujui').toLowerCase() !== historyStatusFilter.toLowerCase()
+        ) {
+          return false;
+        }
         if (q) {
-          const hay = `${b.namaPeminjam} ${b.guru} ${b.kelas} ${b.mapel} ${b.lab} ${b.tanggal} ${b.keterangan} ${b.status}`.toLowerCase();
+          const hay = `${b.id} ${b.kampus} ${b.email} ${b.namaPeminjam} ${b.guru} ${b.kelas} ${b.mapel} ${b.lab} ${b.tanggal} ${b.jamKe} ${b.keterangan} ${b.status}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
       })
-      .sort((a, b) => b.tanggal.localeCompare(a.tanggal) || b.timestamp.localeCompare(a.timestamp));
-  }, [state, historyKampusFilter, historySemesterFilter, historySearch]);
+      .sort((a, b) => {
+        let cmp = 0;
+        switch (historySortKey) {
+          case 'tanggal':
+            cmp =
+              a.tanggal.localeCompare(b.tanggal) ||
+              a.jamKe.localeCompare(b.jamKe, 'id', { numeric: true }) ||
+              a.timestamp.localeCompare(b.timestamp);
+            break;
+          case 'jamKe':
+            cmp = a.jamKe.localeCompare(b.jamKe, 'id', { numeric: true });
+            break;
+          case 'kampus':
+            cmp = a.kampus.localeCompare(b.kampus);
+            break;
+          case 'namaPeminjam':
+            cmp = (a.namaPeminjam || '').localeCompare(b.namaPeminjam || '', 'id');
+            break;
+          case 'guru':
+            cmp = (a.guru || '').localeCompare(b.guru || '', 'id');
+            break;
+          case 'kelas':
+            cmp = (a.kelas || '').localeCompare(b.kelas || '', 'id', { numeric: true });
+            break;
+          case 'mapel':
+            cmp = (a.mapel || '').localeCompare(b.mapel || '', 'id');
+            break;
+          case 'lab':
+            cmp = (a.lab || '').localeCompare(b.lab || '', 'id', { numeric: true });
+            break;
+          case 'status':
+            cmp = (a.status || 'Disetujui').localeCompare(b.status || 'Disetujui', 'id');
+            break;
+        }
+        if (cmp !== 0) return cmp * dir;
+        return b.tanggal.localeCompare(a.tanggal) || b.timestamp.localeCompare(a.timestamp);
+      });
+  }, [
+    state,
+    historyKampusFilter,
+    historySemesterFilter,
+    historyLabFilter,
+    historyStatusFilter,
+    historySearch,
+    historySortKey,
+    historySortDir,
+  ]);
+
+  const historyPageMeta = useMemo(() => {
+    const total = filteredHistory.length;
+    if (historyPageSize === 'ALL') {
+      return {
+        rows: filteredHistory,
+        page: 1,
+        totalPages: 1,
+        startNum: total === 0 ? 0 : 1,
+        endNum: total,
+      };
+    }
+    const perPage = historyPageSize;
+    const totalPages = Math.max(1, Math.ceil(total / perPage));
+    const safePage = Math.min(Math.max(1, historyPage), totalPages);
+    const startIdx = (safePage - 1) * perPage;
+    const rows = filteredHistory.slice(startIdx, startIdx + perPage);
+    return {
+      rows,
+      page: safePage,
+      totalPages,
+      startNum: total === 0 ? 0 : startIdx + 1,
+      endNum: Math.min(total, startIdx + rows.length),
+    };
+  }, [filteredHistory, historyPage, historyPageSize]);
 
   // Visual Analytics Summary for Log Peminjam (Putra & Putri)
   const historyVisualStats = useMemo(() => {
@@ -1912,6 +2098,85 @@ export const LabkomRuangModule: React.FC<Props> = ({
 
   const themeAccent = viewKampus === 'PUTRA' ? 'bg-blue-600' : 'bg-fuchsia-600';
 
+  // Weekly Dashboard Analytics (Current Week: Monday - Sunday) using Recharts
+  const currentWeekDashboard = useMemo(() => {
+    const todayStr = getTodayDateStr();
+    const [y, m, d] = todayStr.split('-').map(Number);
+    const base = new Date(y, (m || 1) - 1, d || 1);
+    const day = base.getDay(); // 0=Sun..6=Sat
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    const monday = new Date(base);
+    monday.setDate(base.getDate() + mondayOffset);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+
+    const toIso = (dt: Date) =>
+      `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(
+        dt.getDate(),
+      ).padStart(2, '0')}`;
+
+    const weekStart = toIso(monday);
+    const weekEnd = toIso(sunday);
+    const rangeLabel = `${String(monday.getDate()).padStart(2, '0')} ${
+      NAMA_BULAN_INDO[monday.getMonth()] || ''
+    } – ${String(sunday.getDate()).padStart(2, '0')} ${
+      NAMA_BULAN_INDO[sunday.getMonth()] || ''
+    } ${sunday.getFullYear()}`;
+
+    const weekBookings = (state?.bookings || []).filter(
+      (b) => b.tanggal >= weekStart && b.tanggal <= weekEnd,
+    );
+
+    const byLabMap = new Map<
+      string,
+      { lab: string; Putra: number; Putri: number; Total: number }
+    >();
+    const canonicalLabs = (state?.masters || [])
+      .filter((ms) => ms.kategori === 'LAB')
+      .map((ms) => ms.nilai.trim().toUpperCase())
+      .filter(Boolean);
+    for (const lb of canonicalLabs) {
+      if (!byLabMap.has(lb)) byLabMap.set(lb, { lab: lb, Putra: 0, Putri: 0, Total: 0 });
+    }
+
+    let putraTotal = 0;
+    let putriTotal = 0;
+    for (const b of weekBookings) {
+      const labName = (b.lab || 'LAINNYA').trim().toUpperCase();
+      const entry = byLabMap.get(labName) || { lab: labName, Putra: 0, Putri: 0, Total: 0 };
+      if (b.kampus === 'PUTRI') {
+        entry.Putri++;
+        putriTotal++;
+      } else {
+        entry.Putra++;
+        putraTotal++;
+      }
+      entry.Total++;
+      byLabMap.set(labName, entry);
+    }
+
+    const byLabData = Array.from(byLabMap.values()).sort(
+      (a, b) => b.Total - a.Total || a.lab.localeCompare(b.lab, 'id', { numeric: true }),
+    );
+    const byCampusData = [
+      { name: 'Kampus Putra', value: putraTotal, color: '#2563eb' },
+      { name: 'Kampus Putri', value: putriTotal, color: '#c026d3' },
+    ];
+    const topLab = byLabData[0] && byLabData[0].Total > 0 ? byLabData[0] : null;
+
+    return {
+      weekStart,
+      weekEnd,
+      rangeLabel,
+      total: weekBookings.length,
+      putraTotal,
+      putriTotal,
+      byLabData,
+      byCampusData,
+      topLab,
+    };
+  }, [state]);
+
   if (loading && !state) {
     return (
       <div className="bg-white border border-slate-200 rounded-xl p-10 text-center space-y-2">
@@ -1923,6 +2188,178 @@ export const LabkomRuangModule: React.FC<Props> = ({
 
   return (
     <div className="space-y-5">
+      {/* ====================================================== */}
+      {/* 0. DASHBOARD MINGGU INI (RECHARTS: LAB & KAMPUS)       */}
+      {/* ====================================================== */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-teal-50 text-teal-700 border border-teal-200">
+                <BarChart3 className="h-4 w-4" />
+              </span>
+              <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                Dashboard Peminjaman Minggu Ini (Putra &amp; Putri)
+              </h3>
+            </div>
+            <p className="text-[11px] text-slate-500 mt-0.5 font-mono-num">
+              Periode Senin–Minggu: {currentWeekDashboard.rangeLabel} ({currentWeekDashboard.weekStart} s.d.{' '}
+              {currentWeekDashboard.weekEnd})
+            </p>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-center sm:text-left">
+              <div className="text-[10px] font-semibold text-slate-500 uppercase">Total Minggu Ini</div>
+              <div className="text-sm sm:text-base font-bold text-slate-900 font-mono-num">
+                {currentWeekDashboard.total.toLocaleString('id-ID')}
+              </div>
+            </div>
+            <div className="rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-1.5 text-center sm:text-left">
+              <div className="text-[10px] font-semibold text-blue-700 uppercase">Putra</div>
+              <div className="text-sm sm:text-base font-bold text-blue-900 font-mono-num">
+                {currentWeekDashboard.putraTotal.toLocaleString('id-ID')}
+              </div>
+            </div>
+            <div className="rounded-lg border border-fuchsia-200 bg-fuchsia-50/70 px-3 py-1.5 text-center sm:text-left">
+              <div className="text-[10px] font-semibold text-fuchsia-700 uppercase">Putri</div>
+              <div className="text-sm sm:text-base font-bold text-fuchsia-900 font-mono-num">
+                {currentWeekDashboard.putriTotal.toLocaleString('id-ID')}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          {/* Recharts BarChart: Total Bookings by Lab (Putra vs Putri) */}
+          <div className="lg:col-span-8 rounded-xl border border-slate-200 bg-slate-50/40 p-3.5">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                Total Peminjaman per Labkom / Ruangan (Minggu Ini)
+              </h4>
+              {currentWeekDashboard.topLab && (
+                <span className="text-[11px] font-semibold text-teal-800 bg-teal-50 border border-teal-200 rounded px-2 py-0.5 font-mono-num">
+                  Teramai: {currentWeekDashboard.topLab.lab} ({currentWeekDashboard.topLab.Total})
+                </span>
+              )}
+            </div>
+            {currentWeekDashboard.byLabData.length === 0 ? (
+              <div className="h-[220px] flex items-center justify-center text-xs text-slate-400">
+                Belum ada data Lab untuk minggu ini.
+              </div>
+            ) : (
+              <div className="h-[230px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={currentWeekDashboard.byLabData}
+                    margin={{ top: 8, right: 12, left: -16, bottom: 4 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                    <XAxis
+                      dataKey="lab"
+                      tick={{ fontSize: 10, fill: '#475569', fontWeight: 600 }}
+                      axisLine={{ stroke: '#cbd5e1' }}
+                      tickLine={false}
+                      interval={0}
+                      angle={currentWeekDashboard.byLabData.length > 6 ? -18 : 0}
+                      textAnchor={currentWeekDashboard.byLabData.length > 6 ? 'end' : 'middle'}
+                      height={currentWeekDashboard.byLabData.length > 6 ? 48 : 28}
+                    />
+                    <YAxis
+                      allowDecimals={false}
+                      tick={{ fontSize: 10, fill: '#64748b' }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        fontSize: '12px',
+                        borderRadius: '10px',
+                        borderColor: '#cbd5e1',
+                      }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: '11px', fontWeight: 600 }} />
+                    <Bar dataKey="Putra" stackId="a" fill="#2563eb" radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="Putri" stackId="a" fill="#c026d3" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+
+          {/* Recharts PieChart + Breakdown: Total Bookings by Campus (Putra vs Putri) */}
+          <div className="lg:col-span-4 rounded-xl border border-slate-200 bg-slate-50/40 p-3.5 flex flex-col justify-between">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                Perbandingan Kampus (Minggu Ini)
+              </h4>
+            </div>
+            {currentWeekDashboard.total === 0 ? (
+              <div className="h-[220px] flex items-center justify-center text-xs text-slate-400 text-center px-4">
+                Belum ada peminjaman tercatat pada minggu ini ({currentWeekDashboard.rangeLabel}).
+              </div>
+            ) : (
+              <div className="flex-1 flex flex-col justify-center">
+                <div className="h-[180px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={currentWeekDashboard.byCampusData}
+                        dataKey="value"
+                        nameKey="name"
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={44}
+                        outerRadius={70}
+                        paddingAngle={3}
+                      >
+                        {currentWeekDashboard.byCampusData.map((entry) => (
+                          <Cell key={entry.name} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        contentStyle={{
+                          fontSize: '12px',
+                          borderRadius: '10px',
+                          borderColor: '#cbd5e1',
+                        }}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  {currentWeekDashboard.byCampusData.map((item) => {
+                    const pct =
+                      currentWeekDashboard.total > 0
+                        ? Math.round((item.value / currentWeekDashboard.total) * 100)
+                        : 0;
+                    return (
+                      <div
+                        key={item.name}
+                        className="rounded-lg bg-white border border-slate-200 px-2.5 py-2 flex items-center justify-between gap-1.5"
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span
+                            className="w-2.5 h-2.5 rounded-full shrink-0"
+                            style={{ backgroundColor: item.color }}
+                          />
+                          <span className="text-[11px] font-bold text-slate-700 truncate">
+                            {item.name.replace('Kampus ', '')}
+                          </span>
+                        </div>
+                        <span className="text-[11px] font-mono-num font-bold text-slate-900 shrink-0">
+                          {item.value} ({pct}%)
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Header Control Bar */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
@@ -4120,46 +4557,119 @@ export const LabkomRuangModule: React.FC<Props> = ({
             );
           })()}
 
-          {/* Search & Filters */}
-          <div className="bg-white p-3 rounded-xl border border-slate-200 flex flex-col sm:flex-row gap-2.5">
-            <div className="relative flex-1">
-              <Search className="h-4 w-4 text-slate-400 absolute left-3 top-2.5" />
-              <input
-                type="text"
-                value={historySearch}
-                onChange={(e) => setHistorySearch(e.target.value)}
-                placeholder="Cari peminjam, guru, kelas, mapel, lokasi, atau tanggal..."
-                className="w-full border border-slate-200 rounded-lg pl-9 pr-8 py-2 text-xs font-medium outline-none focus:border-teal-600"
-              />
-              {historySearch && (
+          {/* Search & Filters + Quick Campus Tabs */}
+          <div className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="inline-flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200/80">
+                {(
+                  [
+                    { id: 'ALL', label: 'Semua Log', count: historyKampusCounts.all },
+                    { id: 'PUTRA', label: 'Kampus Putra', count: historyKampusCounts.putra },
+                    { id: 'PUTRI', label: 'Kampus Putri', count: historyKampusCounts.putri },
+                  ] as const
+                ).map((item) => {
+                  const active = historyKampusFilter === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setHistoryKampusFilter(item.id)}
+                      className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors whitespace-nowrap ${
+                        active
+                          ? item.id === 'PUTRI'
+                            ? 'bg-fuchsia-600 text-white shadow-xs'
+                            : item.id === 'PUTRA'
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'bg-slate-900 text-white shadow-xs'
+                          : 'text-slate-600 hover:bg-white hover:text-slate-900'
+                      }`}
+                    >
+                      {item.label}{' '}
+                      <span className="font-mono-num opacity-85">
+                        ({item.count.toLocaleString('id-ID')})
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {(historySearch ||
+                historyKampusFilter !== 'ALL' ||
+                historySemesterFilter !== 'ALL' ||
+                historyLabFilter !== 'ALL' ||
+                historyStatusFilter !== 'ALL') && (
                 <button
                   type="button"
-                  onClick={() => setHistorySearch('')}
-                  className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700"
-                  title="Reset pencarian"
+                  onClick={() => {
+                    setHistorySearch('');
+                    setHistoryKampusFilter('ALL');
+                    setHistorySemesterFilter('ALL');
+                    setHistoryLabFilter('ALL');
+                    setHistoryStatusFilter('ALL');
+                  }}
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="h-3.5 w-3.5" />
+                  <span>Reset Filter</span>
                 </button>
               )}
             </div>
-            <select
-              value={historyKampusFilter}
-              onChange={(e) => setHistoryKampusFilter(e.target.value as 'ALL' | LabkomKampus)}
-              className="border border-slate-200 rounded-lg px-3 py-2 text-xs font-semibold bg-white"
-            >
-              <option value="ALL">Semua Kampus</option>
-              <option value="PUTRA">Kampus Putra</option>
-              <option value="PUTRI">Kampus Putri</option>
-            </select>
-            <select
-              value={historySemesterFilter}
-              onChange={(e) => setHistorySemesterFilter(e.target.value as SemesterFilter)}
-              className="border border-slate-200 rounded-lg px-3 py-2 text-xs font-semibold bg-white"
-            >
-              <option value="ALL">Semua Semester</option>
-              <option value="GANJIL">Semester Ganjil (Jul–Des)</option>
-              <option value="GENAP">Semester Genap (Jan–Jun)</option>
-            </select>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5">
+              <div className="relative lg:col-span-5">
+                <Search className="h-4 w-4 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                  placeholder="Cari ID, peminjam, email, guru, kelas, mapel, lokasi, jam, tanggal..."
+                  className="w-full border border-slate-200 rounded-lg pl-9 pr-8 py-2 text-xs font-medium outline-none focus:border-teal-600"
+                />
+                {historySearch && (
+                  <button
+                    type="button"
+                    onClick={() => setHistorySearch('')}
+                    className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700"
+                    title="Reset pencarian"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              <select
+                value={historyLabFilter}
+                onChange={(e) => setHistoryLabFilter(e.target.value)}
+                className="lg:col-span-3 border border-slate-200 rounded-lg px-3 py-2 text-xs font-semibold bg-white"
+              >
+                <option value="ALL">Semua Lab / Ruangan</option>
+                {historyLabOptions.map((lab) => (
+                  <option key={lab} value={lab}>
+                    {lab}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={historyStatusFilter}
+                onChange={(e) => setHistoryStatusFilter(e.target.value)}
+                className="lg:col-span-2 border border-slate-200 rounded-lg px-3 py-2 text-xs font-semibold bg-white"
+              >
+                <option value="ALL">Semua Status</option>
+                {historyStatusOptions.map((st) => (
+                  <option key={st} value={st}>
+                    {st}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={historySemesterFilter}
+                onChange={(e) => setHistorySemesterFilter(e.target.value as SemesterFilter)}
+                className="lg:col-span-2 border border-slate-200 rounded-lg px-3 py-2 text-xs font-semibold bg-white"
+              >
+                <option value="ALL">Semua Semester</option>
+                <option value="GANJIL">Semester Ganjil (Jul–Des)</option>
+                <option value="GENAP">Semester Genap (Jan–Jun)</option>
+              </select>
+            </div>
           </div>
 
           {/* Visualisasi Data Peminjam (Putra vs Putri, Top Peminjam, Penggunaan Ruangan) */}
@@ -4326,181 +4836,392 @@ export const LabkomRuangModule: React.FC<Props> = ({
             </div>
           </div>
 
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          {/* Detailed Data Grid (All Booking Logs Putra & Putri + Admin Edit & Delete) */}
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+            <div className="px-4 py-3 border-b border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <h4 className="text-xs font-bold uppercase tracking-wide text-slate-800">
+                  Data Grid Log Peminjaman (Putra &amp; Putri)
+                </h4>
+                <span className="text-[11px] font-semibold text-slate-600 font-mono-num">
+                  Menampilkan {historyPageMeta.startNum.toLocaleString('id-ID')}–
+                  {historyPageMeta.endNum.toLocaleString('id-ID')} dari{' '}
+                  {filteredHistory.length.toLocaleString('id-ID')} log
+                </span>
+                <span className="inline-flex items-center gap-1 rounded bg-blue-50 text-blue-800 border border-blue-200 px-2 py-0.5 text-[10px] font-bold font-mono-num">
+                  Putra: {historyVisualStats.putra.toLocaleString('id-ID')}
+                </span>
+                <span className="inline-flex items-center gap-1 rounded bg-fuchsia-50 text-fuchsia-800 border border-fuchsia-200 px-2 py-0.5 text-[10px] font-bold font-mono-num">
+                  Putri: {historyVisualStats.putri.toLocaleString('id-ID')}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-600">
+                  <span>Baris/hal:</span>
+                  <select
+                    value={String(historyPageSize)}
+                    onChange={(e) =>
+                      setHistoryPageSize(
+                        e.target.value === 'ALL' ? 'ALL' : Number(e.target.value),
+                      )
+                    }
+                    className="border border-slate-200 rounded-md px-2 py-1 text-xs font-semibold bg-white text-slate-800"
+                  >
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="250">250</option>
+                    <option value="ALL">Semua</option>
+                  </select>
+                </label>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setTab('form')}
+                    className="inline-flex items-center gap-1 rounded-md bg-teal-600 hover:bg-teal-700 text-white px-2.5 py-1 text-[11px] font-bold"
+                  >
+                    <Plus className="h-3 w-3" />
+                    <span>Tambah Booking</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
             <div className="overflow-x-auto">
-              <table className="w-full text-left min-w-[860px] border-collapse">
-                <thead className="bg-slate-50 border-b border-slate-200">
+              <table className="w-full text-left min-w-[1220px] border-collapse">
+                <thead className="bg-slate-100/90 border-b border-slate-200">
                   <tr>
-                    <th className="p-3.5 w-10 text-center">
+                    <th className="p-3 w-10 text-center">
                       {isAdmin && (
                         <input
                           type="checkbox"
                           checked={
-                            filteredHistory.slice(0, historyPageLimit).length > 0 &&
-                            filteredHistory
-                              .slice(0, historyPageLimit)
-                              .every((b) => historySelectedIds.has(b.id))
+                            historyPageMeta.rows.length > 0 &&
+                            historyPageMeta.rows.every((b) => historySelectedIds.has(b.id))
                           }
                           onChange={(e) => {
-                            const visible = filteredHistory.slice(0, historyPageLimit);
                             if (e.target.checked) {
-                              setHistorySelectedIds(new Set(visible.map((v) => v.id)));
+                              setHistorySelectedIds((prev) => {
+                                const next = new Set(prev);
+                                historyPageMeta.rows.forEach((v) => next.add(v.id));
+                                return next;
+                              });
                             } else {
-                              setHistorySelectedIds(new Set());
+                              setHistorySelectedIds((prev) => {
+                                const next = new Set(prev);
+                                historyPageMeta.rows.forEach((v) => next.delete(v.id));
+                                return next;
+                              });
                             }
                           }}
+                          title="Pilih semua baris di halaman ini"
                           className="accent-teal-600"
                         />
                       )}
                     </th>
-                    <th className="p-3.5 text-[11px] font-bold text-slate-500 uppercase">Kampus</th>
-                    <th className="p-3.5 text-[11px] font-bold text-slate-500 uppercase">
-                      Peminjam &amp; Guru
+                    <th className="p-3 text-[11px] font-bold text-slate-500 uppercase w-12 text-center">
+                      No
                     </th>
-                    <th className="p-3.5 text-[11px] font-bold text-slate-500 uppercase">
-                      Lokasi &amp; Waktu
+                    <th className="p-3 text-[11px] font-bold text-slate-600 uppercase whitespace-nowrap">
+                      ID &amp; Timestamp
                     </th>
-                    <th className="p-3.5 text-[11px] font-bold text-slate-500 uppercase">
-                      Semester &amp; Status
+                    {(
+                      [
+                        { key: 'kampus', label: 'Kampus' },
+                        { key: 'namaPeminjam', label: 'Peminjam & Email' },
+                        { key: 'guru', label: 'Guru' },
+                        { key: 'kelas', label: 'Kelas' },
+                        { key: 'mapel', label: 'Mapel / Kegiatan' },
+                        { key: 'lab', label: 'Lokasi' },
+                        { key: 'tanggal', label: 'Tanggal & Semester' },
+                        { key: 'jamKe', label: 'Jam / Sesi' },
+                      ] as const
+                    ).map((col) => {
+                      const activeSort = historySortKey === col.key;
+                      return (
+                        <th
+                          key={col.key}
+                          className="p-3 text-[11px] font-bold text-slate-600 uppercase whitespace-nowrap"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleHistorySort(col.key)}
+                            className={`inline-flex items-center gap-1 hover:text-teal-700 transition-colors ${
+                              activeSort ? 'text-teal-700' : ''
+                            }`}
+                          >
+                            <span>{col.label}</span>
+                            {activeSort ? (
+                              historySortDir === 'asc' ? (
+                                <ArrowUp className="h-3 w-3" />
+                              ) : (
+                                <ArrowDown className="h-3 w-3" />
+                              )
+                            ) : (
+                              <ArrowUpDown className="h-3 w-3 opacity-40" />
+                            )}
+                          </button>
+                        </th>
+                      );
+                    })}
+                    <th className="p-3 text-[11px] font-bold text-slate-600 uppercase whitespace-nowrap">
+                      Keterangan
                     </th>
-                    <th className="p-3.5 text-[11px] font-bold text-slate-500 uppercase text-center">
+                    <th className="p-3 text-[11px] font-bold text-slate-600 uppercase whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => toggleHistorySort('status')}
+                        className={`inline-flex items-center gap-1 hover:text-teal-700 transition-colors ${
+                          historySortKey === 'status' ? 'text-teal-700' : ''
+                        }`}
+                      >
+                        <span>Status</span>
+                        {historySortKey === 'status' ? (
+                          historySortDir === 'asc' ? (
+                            <ArrowUp className="h-3 w-3" />
+                          ) : (
+                            <ArrowDown className="h-3 w-3" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="h-3 w-3 opacity-40" />
+                        )}
+                      </button>
+                    </th>
+                    <th className="p-3 text-[11px] font-bold text-slate-600 uppercase text-center sticky right-0 bg-slate-100/95 border-l border-slate-200 whitespace-nowrap">
                       Aksi Admin
                     </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredHistory.slice(0, historyPageLimit).map((r, idx) => {
-                    const sem = getAcademicSemester(r.tanggal);
-                    return (
-                      <tr
-                        key={`${r.id}__${r.kampus}__${r.lab}__${r.tanggal}__${r.jamKe}__${idx}`}
-                        className="hover:bg-slate-50"
-                      >
-                        <td className="p-3.5 text-center">
-                          {isAdmin && (
-                            <input
-                              type="checkbox"
-                              checked={historySelectedIds.has(r.id)}
-                              onChange={() => {
-                                setHistorySelectedIds((prev) => {
-                                  const next = new Set(prev);
-                                  if (next.has(r.id)) next.delete(r.id);
-                                  else next.add(r.id);
-                                  return next;
-                                });
-                              }}
-                              className="accent-teal-600"
-                            />
-                          )}
-                        </td>
-                        <td className="p-3.5">
-                          <span
-                            className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                              r.kampus === 'PUTRA'
-                                ? 'bg-blue-100 text-blue-800'
-                                : 'bg-fuchsia-100 text-fuchsia-800'
-                            }`}
-                          >
-                            {r.kampus}
-                          </span>
-                        </td>
-                        <td className="p-3.5">
-                          <div className="text-xs font-bold text-slate-900">{r.namaPeminjam}</div>
-                          <div className="text-[11px] text-slate-500">
-                            {r.guru} · {r.kelas}
-                          </div>
-                          {r.keterangan && (
-                            <div className="text-[10px] text-slate-400 truncate max-w-[240px]">
-                              {r.keterangan}
+                  {historyPageMeta.rows.length === 0 ? (
+                    <tr>
+                      <td colSpan={14} className="p-8 text-center text-xs text-slate-500">
+                        Tidak ada log peminjaman yang sesuai dengan filter saat ini.
+                      </td>
+                    </tr>
+                  ) : (
+                    historyPageMeta.rows.map((r, idx) => {
+                      const sem = getAcademicSemester(r.tanggal);
+                      const rowNum = historyPageMeta.startNum + idx;
+                      const statusLabel = r.status || 'Disetujui';
+                      const statusCls =
+                        statusLabel === 'Dibatalkan'
+                          ? 'bg-rose-50 text-rose-700 border-rose-200'
+                          : statusLabel === 'Menunggu'
+                          ? 'bg-amber-50 text-amber-800 border-amber-200'
+                          : statusLabel === 'Selesai'
+                          ? 'bg-blue-50 text-blue-700 border-blue-200'
+                          : 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                      return (
+                        <tr
+                          key={`${r.id}__${r.kampus}__${r.lab}__${r.tanggal}__${r.jamKe}__${idx}`}
+                          className="hover:bg-slate-50/90 transition-colors group"
+                        >
+                          <td className="p-3 text-center">
+                            {isAdmin && (
+                              <input
+                                type="checkbox"
+                                checked={historySelectedIds.has(r.id)}
+                                onChange={() => {
+                                  setHistorySelectedIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(r.id)) next.delete(r.id);
+                                    else next.add(r.id);
+                                    return next;
+                                  });
+                                }}
+                                className="accent-teal-600"
+                              />
+                            )}
+                          </td>
+                          <td className="p-3 text-center text-[11px] font-mono-num text-slate-400">
+                            {rowNum}
+                          </td>
+                          <td className="p-3 max-w-[170px]">
+                            <div
+                              className="text-[11px] font-mono-num font-semibold text-slate-700 truncate"
+                              title={r.id}
+                            >
+                              {r.id}
                             </div>
-                          )}
-                        </td>
-                        <td className="p-3.5">
-                          <div className="flex items-center gap-2 mb-1">
+                            <div className="text-[10px] font-mono-num text-slate-400 truncate">
+                              {r.timestamp || '-'}
+                            </div>
+                          </td>
+                          <td className="p-3 whitespace-nowrap">
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                r.kampus === 'PUTRA'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : 'bg-fuchsia-100 text-fuchsia-800'
+                              }`}
+                            >
+                              {r.kampus}
+                            </span>
+                          </td>
+                          <td className="p-3 max-w-[200px]">
+                            <div className="text-xs font-bold text-slate-900 truncate" title={r.namaPeminjam}>
+                              {r.namaPeminjam || '-'}
+                            </div>
+                            {r.email && (
+                              <div className="text-[10px] text-slate-400 truncate" title={r.email}>
+                                {r.email}
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-3 max-w-[160px]">
+                            <div className="text-xs font-medium text-slate-800 truncate" title={r.guru}>
+                              {r.guru || '-'}
+                            </div>
+                          </td>
+                          <td className="p-3 whitespace-nowrap">
+                            <span className="inline-block rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                              {r.kelas || '-'}
+                            </span>
+                          </td>
+                          <td className="p-3 max-w-[160px]">
+                            <div className="text-xs font-semibold text-slate-700 truncate" title={r.mapel}>
+                              {r.mapel || '-'}
+                            </div>
+                          </td>
+                          <td className="p-3 whitespace-nowrap">
                             <span
                               className={`${
                                 ROOM_COLORS[getColorIdx(r.lab)]
-                              } text-white text-[10px] font-bold px-2 py-0.5 rounded`}
+                              } text-white text-[10px] font-bold px-2 py-0.5 rounded inline-block`}
                             >
                               {r.lab}
                             </span>
-                            <span className="bg-slate-100 text-slate-800 text-[10px] font-bold px-2 py-0.5 rounded font-mono-num">
+                          </td>
+                          <td className="p-3 whitespace-nowrap">
+                            <div className="text-xs font-mono-num font-bold text-slate-800">
+                              {r.tanggal}
+                            </div>
+                            <div className="text-[10px] font-semibold text-slate-500">
+                              {sem.semester} · {sem.tahunAjaran}
+                            </div>
+                          </td>
+                          <td className="p-3 whitespace-nowrap">
+                            <span className="bg-slate-100 border border-slate-200 text-slate-800 text-[10px] font-bold px-2 py-0.5 rounded font-mono-num">
                               JAM {r.jamKe}
                             </span>
-                          </div>
-                          <div className="text-[11px] font-semibold text-slate-700">
-                            {r.mapel} · <span className="font-mono-num">{r.tanggal}</span>
-                          </div>
-                        </td>
-                        <td className="p-3.5">
-                          <div className="text-xs font-semibold text-slate-700">
-                            {sem.semester} ({sem.tahunAjaran})
-                          </div>
-                          <span className="inline-block mt-0.5 text-[10px] font-semibold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded">
-                            {r.status || 'Disetujui'}
-                          </span>
-                        </td>
-                        <td className="p-3.5 text-center">
-                          {isAdmin ? (
-                            confirmDeleteId === r.id ? (
-                              <div className="inline-flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  disabled={submitting}
-                                  onClick={() => handleDeleteBooking(r.id)}
-                                  className="rounded bg-rose-600 text-white px-2.5 py-1 text-[10px] font-bold"
-                                >
-                                  Ya Hapus
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setConfirmDeleteId(null)}
-                                  className="rounded bg-slate-200 text-slate-700 px-2 py-1 text-[10px] font-semibold"
-                                >
-                                  Batal
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="inline-flex items-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => openEditBookingModal(r)}
-                                  className="inline-flex items-center gap-1 rounded-md bg-amber-50 text-amber-800 border border-amber-200 px-2.5 py-1.5 text-[11px] font-bold hover:bg-amber-100"
-                                >
-                                  <Edit3 className="h-3 w-3" />
-                                  <span>Edit</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setConfirmDeleteId(r.id)}
-                                  className="inline-flex items-center gap-1 rounded-md bg-rose-50 text-rose-700 border border-rose-200 px-2.5 py-1.5 text-[11px] font-bold hover:bg-rose-100"
-                                >
-                                  <Trash2 className="h-3 w-3" />
-                                  <span>Hapus</span>
-                                </button>
-                              </div>
-                            )
-                          ) : (
-                            <span className="text-[10px] font-semibold text-slate-400">
-                              Admin Only
+                          </td>
+                          <td className="p-3 max-w-[210px]">
+                            <div
+                              className="text-[11px] text-slate-600 truncate"
+                              title={r.keterangan || '-'}
+                            >
+                              {r.keterangan || '—'}
+                            </div>
+                          </td>
+                          <td className="p-3 whitespace-nowrap">
+                            <span
+                              className={`inline-block text-[10px] font-bold border px-2 py-0.5 rounded ${statusCls}`}
+                            >
+                              {statusLabel}
                             </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                          </td>
+                          <td className="p-3 text-center sticky right-0 bg-white group-hover:bg-slate-50 border-l border-slate-200 whitespace-nowrap">
+                            {isAdmin ? (
+                              confirmDeleteId === r.id ? (
+                                <div className="inline-flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    disabled={submitting}
+                                    onClick={() => handleDeleteBooking(r.id)}
+                                    className="rounded bg-rose-600 hover:bg-rose-700 text-white px-2.5 py-1 text-[10px] font-bold"
+                                  >
+                                    Ya Hapus
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteId(null)}
+                                    className="rounded bg-slate-200 hover:bg-slate-300 text-slate-700 px-2 py-1 text-[10px] font-semibold"
+                                  >
+                                    Batal
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="inline-flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditBookingModal(r)}
+                                    title="Edit data peminjaman ini"
+                                    className="inline-flex items-center gap-1 rounded-md bg-amber-50 text-amber-800 border border-amber-200 px-2.5 py-1 text-[11px] font-bold hover:bg-amber-100"
+                                  >
+                                    <Edit3 className="h-3 w-3" />
+                                    <span>Edit</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteId(r.id)}
+                                    title="Hapus data peminjaman ini"
+                                    className="inline-flex items-center gap-1 rounded-md bg-rose-50 text-rose-700 border border-rose-200 px-2.5 py-1 text-[11px] font-bold hover:bg-rose-100"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                    <span>Hapus</span>
+                                  </button>
+                                </div>
+                              )
+                            ) : (
+                              <span className="text-[10px] font-semibold text-slate-400">
+                                Admin Only
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
-            {filteredHistory.length > historyPageLimit && (
-              <div className="p-3 border-t border-slate-100 text-center">
-                <button
-                  type="button"
-                  onClick={() => setHistoryPageLimit((n) => n + 100)}
-                  className="text-xs font-semibold text-teal-700 hover:text-teal-900"
-                >
-                  Tampilkan 100 baris lagi ({filteredHistory.length - historyPageLimit} tersisa)
-                </button>
+
+            {historyPageSize !== 'ALL' && filteredHistory.length > 0 && (
+              <div className="px-4 py-3 border-t border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="text-xs text-slate-600 font-mono-num">
+                  Halaman <span className="font-bold text-slate-900">{historyPageMeta.page}</span>{' '}
+                  dari <span className="font-bold text-slate-900">{historyPageMeta.totalPages}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={historyPageMeta.page <= 1}
+                    onClick={() => setHistoryPage(1)}
+                    className="px-2.5 py-1 rounded-md border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                  >
+                    Awal
+                  </button>
+                  <button
+                    type="button"
+                    disabled={historyPageMeta.page <= 1}
+                    onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                    <span>Sebelumnya</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={historyPageMeta.page >= historyPageMeta.totalPages}
+                    onClick={() =>
+                      setHistoryPage((p) => Math.min(historyPageMeta.totalPages, p + 1))
+                    }
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                  >
+                    <span>Berikutnya</span>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={historyPageMeta.page >= historyPageMeta.totalPages}
+                    onClick={() => setHistoryPage(historyPageMeta.totalPages)}
+                    className="px-2.5 py-1 rounded-md border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                  >
+                    Akhir
+                  </button>
+                </div>
               </div>
             )}
           </div>

@@ -1980,27 +1980,28 @@ export function downloadLabkomLogTemplateClient(params: {
 
   const wb = XLSX.utils.book_new();
   const sheets: Array<{ name: string; rows: string[][] }> = [
+    { name: 'Data_Pinjam', rows: [bookingHeader, ...putraRows] },
+    { name: 'Data_Pinjam_Putri', rows: [bookingHeader, ...putriRows] },
+    { name: 'Referensi_Master', rows: refRows },
     {
-      name: '0_Panduan',
+      name: 'Panduan',
       rows: [
         ['TEMPLATE LOG PEMINJAMAN LABKOM & RUANGAN SMA (PUTRA & PUTRI)'],
         ['Tanggal Unduh', today],
         ['Log Putra Saat Ini', String(existingPutra.length)],
         ['Log Putri Saat Ini', String(existingPutri.length)],
         [''],
-        ['PETUNJUK PENGISIAN'],
+        ['PETUNJUK PENGISIAN & UPLOAD'],
         ['1. Sheet "Data_Pinjam" digunakan untuk log peminjaman Kampus PUTRA.'],
         ['2. Sheet "Data_Pinjam_Putri" digunakan untuk log peminjaman Kampus PUTRI.'],
-        ['3. Untuk menambah baris baru, biarkan kolom ID kosong (sistem membuat ID otomatis).'],
-        ['4. Untuk mengedit baris yang sudah ada via upload, pertahankan nilai kolom ID lalu pilih mode "Update & Tambah (Upsert)" saat upload.'],
-        ['5. Format kolom Tanggal yang didukung: YYYY-MM-DD (misal 2026-11-18) atau DD/MM/YYYY.'],
-        ['6. Nilai kolom Kampus harus PUTRA atau PUTRI. Jam_Ke dapat diisi angka jam (1..10) atau sesi ruang (PAGI/SIANG/SORE/MALAM).'],
-        ['7. Gunakan sheet "Referensi_Master" untuk menyalin nama Guru, Kelas, Mapel, dan Lab/Ruangan yang seragam.'],
+        ['3. PENTING: Unggah langsung file .xlsx ini tanpa mengubahnya ke .csv agar kedua sheet (Putra & Putri) terbaca sekaligus. Jika menyimpan sebagai .csv, hanya sheet aktif yang tersimpan.'],
+        ['4. Untuk menambah baris baru, biarkan kolom ID kosong (sistem membuat ID otomatis).'],
+        ['5. Untuk mengedit baris yang sudah ada via upload, pertahankan nilai kolom ID lalu pilih mode "Update & Tambah (Upsert)" saat upload.'],
+        ['6. Format kolom Tanggal yang didukung: YYYY-MM-DD (misal 2026-11-18) atau DD/MM/YYYY.'],
+        ['7. Nilai kolom Kampus harus PUTRA atau PUTRI. Jam_Ke dapat diisi angka jam (1..10) atau sesi ruang (PAGI/SIANG/SORE/MALAM).'],
+        ['8. Gunakan sheet "Referensi_Master" untuk menyalin nama Guru, Kelas, Mapel, dan Lab/Ruangan yang seragam.'],
       ],
     },
-    { name: 'Data_Pinjam', rows: [bookingHeader, ...putraRows] },
-    { name: 'Data_Pinjam_Putri', rows: [bookingHeader, ...putriRows] },
-    { name: 'Referensi_Master', rows: refRows },
   ];
 
   for (const sh of sheets) {
