@@ -852,6 +852,131 @@ function registerApiRoutes() {
     res.json(store.getQuranHalaqahRecap({ guru, kelompok, gender }));
   });
 
+  // ==============================================================
+  // PEMINJAMAN LABKOM & RUANG SMA (SIM RUANGAN AS-SYIFA)
+  // ==============================================================
+  app.get('/api/labkom/state', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(store.getLabkomState());
+  });
+
+  app.post('/api/labkom/bookings', (req, res) => {
+    const result = store.createLabkomBooking(req.body || {});
+    if (!result.ok) return res.status(409).json(result);
+    res.json({ ...result, state: store.getLabkomState(), counts: store.getSystemCounts() });
+  });
+
+  app.post('/api/labkom/bookings/bulk', (req, res) => {
+    const result = store.createLabkomBulkBooking(req.body || {});
+    if (!result.ok) return res.status(409).json(result);
+    res.json({ ...result, state: store.getLabkomState(), counts: store.getSystemCounts() });
+  });
+
+  app.post('/api/labkom/bookings/delete-many', (req, res) => {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+    if (ids.length === 0) return res.status(400).json({ error: 'Pilih minimal 1 data.' });
+    const result = store.deleteLabkomBookingsBulk(ids);
+    res.json({ ok: true, ...result, state: store.getLabkomState(), counts: store.getSystemCounts() });
+  });
+
+  app.put('/api/labkom/bookings/:id', (req, res) => {
+    const result = store.updateLabkomBooking(req.params.id, req.body || {});
+    if (!result.ok) {
+      const status = result.error?.includes('tidak ditemukan') ? 404 : 409;
+      return res.status(status).json(result);
+    }
+    res.json({ ...result, state: store.getLabkomState(), counts: store.getSystemCounts() });
+  });
+
+  app.delete('/api/labkom/bookings/:id', (req, res) => {
+    const deleted = store.deleteLabkomBooking(req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'Data booking tidak ditemukan.' });
+    res.json({ ok: true, deleted: true, state: store.getLabkomState(), counts: store.getSystemCounts() });
+  });
+
+  app.post('/api/labkom/bookings/import', (req, res) => {
+    const result = store.importLabkomFromCsvOrRows(req.body || {});
+    res.json({ ...result, state: store.getLabkomState(), counts: store.getSystemCounts() });
+  });
+
+  app.post('/api/labkom/fixed', (req, res) => {
+    const result = store.createLabkomFixedSchedule(req.body || {});
+    if (!result.ok) return res.status(400).json(result);
+    res.json({ ...result, state: store.getLabkomState() });
+  });
+
+  app.delete('/api/labkom/fixed/:id', (req, res) => {
+    const deleted = store.deleteLabkomFixedSchedule(req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'Jadwal tetap tidak ditemukan.' });
+    res.json({ ok: true, deleted: true, state: store.getLabkomState() });
+  });
+
+  app.post('/api/labkom/ploting', (req, res) => {
+    const result = store.saveLabkomPloting(req.body || {});
+    if (!result.ok) return res.status(400).json({ error: 'Data ploting tidak valid.' });
+    res.json({ ...result, state: store.getLabkomState() });
+  });
+
+  app.delete('/api/labkom/ploting/:id', (req, res) => {
+    const deleted = store.deleteLabkomPloting(req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'Data ploting tidak ditemukan.' });
+    res.json({ ok: true, deleted: true, state: store.getLabkomState() });
+  });
+
+  app.post('/api/labkom/master', (req, res) => {
+    const result = store.saveLabkomMaster(req.body || {});
+    if (!result.ok) return res.status(400).json(result);
+    res.json({ ...result, state: store.getLabkomState() });
+  });
+
+  app.post('/api/labkom/master/sync-from-bookings', (_req, res) => {
+    const result = store.syncLabkomMastersFromBookings();
+    res.json({ ...result, state: store.getLabkomState() });
+  });
+
+  app.post('/api/labkom/master/import', (req, res) => {
+    const result = store.importLabkomMastersBulk(req.body || {});
+    if (!result.ok) return res.status(400).json(result);
+    res.json({ ...result, state: store.getLabkomState() });
+  });
+
+  app.put('/api/labkom/master/:id', (req, res) => {
+    const cascade = req.body?.cascade !== false;
+    const result = store.updateLabkomMaster(req.params.id, String(req.body?.nilai || ''), {
+      cascade,
+    });
+    if (!result) return res.status(404).json({ error: 'Master data tidak ditemukan atau nilai kosong.' });
+    res.json({
+      ok: true,
+      item: result.item,
+      updatedBookings: result.updatedBookings,
+      updatedFixed: result.updatedFixed,
+      updatedPlotings: result.updatedPlotings,
+      state: store.getLabkomState(),
+    });
+  });
+
+  app.delete('/api/labkom/master/:id', (req, res) => {
+    const deleted = store.deleteLabkomMaster(req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'Master data tidak ditemukan.' });
+    res.json({ ok: true, deleted: true, state: store.getLabkomState() });
+  });
+
+  app.put('/api/labkom/settings', (req, res) => {
+    const result = store.updateLabkomSettings(req.body || {});
+    res.json({ ...result, state: store.getLabkomState() });
+  });
+
+  app.post('/api/labkom/telegram', async (req, res) => {
+    const text = String(req.body?.text || '').trim();
+    if (!text) return res.status(400).json({ ok: false, message: 'Teks broadcast kosong.' });
+    const result = await store.sendLabkomTelegram(text);
+    if (!result.ok) {
+      return res.status(result.needsConfig ? 400 : 502).json(result);
+    }
+    res.json(result);
+  });
+
   app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const message = err instanceof Error ? err.message : 'Terjadi kesalahan internal server.';
     if (!res.headersSent) {

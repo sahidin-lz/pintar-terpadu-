@@ -227,39 +227,43 @@ export const UjianModule: React.FC<UjianModuleProps> = ({
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-4">
-        <div className="inline-flex rounded-lg bg-slate-100 p-1">
+        <div className="grid grid-cols-2 sm:inline-flex gap-1 rounded-xl bg-slate-100 p-1 border border-slate-200/80 w-full sm:w-auto">
           <button
             type="button"
             onClick={() => setSubTab('pelaksanaan')}
-            className={`rounded-md px-4 py-2 text-xs font-semibold transition-colors ${
-              subTab === 'pelaksanaan' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            className={`rounded-lg px-2.5 sm:px-4 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap truncate ${
+              subTab === 'pelaksanaan'
+                ? 'bg-amber-600 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
             }`}
           >
-            Pelaksanaan Ujian & Berita Acara
+            Pelaksanaan Ujian
           </button>
           <button
             type="button"
             onClick={() => setSubTab('susulan')}
-            className={`rounded-md px-4 py-2 text-xs font-semibold transition-colors ${
-              subTab === 'susulan' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            className={`rounded-lg px-2.5 sm:px-4 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap truncate ${
+              subTab === 'susulan'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
             }`}
           >
-            Rekap Tersimpan & Daftar Susulan
+            Rekap &amp; Susulan
           </button>
         </div>
 
-        <div className="inline-flex rounded-lg bg-slate-100 p-1">
+        <div className="grid grid-cols-2 sm:inline-flex gap-1 rounded-xl bg-slate-100 p-1 border border-slate-200/80 w-full sm:w-auto">
           {(['Putri', 'Putra'] as const).map((g) => (
             <button
               key={g}
               type="button"
               onClick={() => setGender(g)}
-              className={`rounded-md px-3.5 py-1.5 text-xs font-semibold ${
+              className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap transition-colors ${
                 gender === g
                   ? g === 'Putri'
                     ? 'bg-rose-600 text-white shadow-sm'
                     : 'bg-sky-600 text-white shadow-sm'
-                  : 'text-slate-600'
+                  : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
               }`}
             >
               Wilayah {g}

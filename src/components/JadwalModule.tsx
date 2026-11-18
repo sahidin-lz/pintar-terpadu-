@@ -608,37 +608,43 @@ export const JadwalModule: React.FC<JadwalModuleProps> = ({
   return (
     <div className="space-y-6">
       {/* Sub-navigation (Area Terproteksi Guru & Admin) */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-4">
-        <div className="inline-flex flex-wrap items-center gap-1 rounded-lg bg-slate-100 p-1">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between border-b border-slate-200 pb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 lg:inline-flex items-center gap-1 rounded-xl bg-slate-100 p-1 border border-slate-200/80 w-full lg:w-auto">
           <button
             type="button"
             onClick={() => setSubTab('mengajar')}
-            className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
-              subTab === 'mengajar' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
+              subTab === 'mengajar'
+                ? 'bg-teal-600 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
             }`}
           >
-            <CalendarPlus className="h-3.5 w-3.5 text-teal-700" />
-            Peta Jadwal JP &amp; Perubahan
+            <CalendarPlus className={`h-3.5 w-3.5 shrink-0 ${subTab === 'mengajar' ? 'text-white' : 'text-teal-600'}`} />
+            <span className="truncate">Peta Jadwal &amp; Perubahan JP</span>
           </button>
           <button
             type="button"
             onClick={() => setSubTab('pindah')}
-            className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
-              subTab === 'pindah' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
+              subTab === 'pindah'
+                ? 'bg-violet-600 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
             }`}
           >
-            <ArrowRightLeft className="h-3.5 w-3.5 text-violet-700" />
-            Pindah Kelas Siswa
+            <ArrowRightLeft className={`h-3.5 w-3.5 shrink-0 ${subTab === 'pindah' ? 'text-white' : 'text-violet-600'}`} />
+            <span className="truncate">Pindah Kelas Siswa</span>
           </button>
           <button
             type="button"
             onClick={() => setSubTab('asrama')}
-            className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
-              subTab === 'asrama' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
+              subTab === 'asrama'
+                ? 'bg-sky-600 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
             }`}
           >
-            <Home className="h-3.5 w-3.5 text-sky-700" />
-            Penugasan Kamar Musyrif/ah
+            <Home className={`h-3.5 w-3.5 shrink-0 ${subTab === 'asrama' ? 'text-white' : 'text-sky-600'}`} />
+            <span className="truncate">Kamar Musyrif/ah</span>
           </button>
         </div>
 

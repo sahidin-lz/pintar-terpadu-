@@ -4,6 +4,12 @@ import * as XLSX from 'xlsx';
 import type {
   AnalyticsTerpadu,
   Gender,
+  LabkomBooking,
+  LabkomFixedSchedule,
+  LabkomKampus,
+  LabkomMasterItem,
+  LabkomMasterKategori,
+  LabkomPloting,
   MonthlyWaliKelasReport,
   RoomMapping,
   ScheduleItem,
@@ -1331,3 +1337,694 @@ export function downloadMasterDatabaseExcelClient(ctx: ClientTemplateContext): D
   setTimeout(() => URL.revokeObjectURL(url), 4000);
   return spec;
 }
+
+// ==============================================================
+// LABKOM & RUANG SMA — DIRECT PDF & EXCEL EXPORTS (CLIENT-SIDE)
+// ==============================================================
+
+export function downloadLabkomRekapPdf(params: {
+  kampus: LabkomKampus;
+  isLab: boolean;
+  semesterLabel: string;
+  bulanLabel: string;
+  excludeInformatika: boolean;
+  guruAktif: Array<[string, number]>;
+  topItems: Array<[string, number]>;
+  guruBelum: string[];
+}): string {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const unitLabel = params.isLab ? 'JP' : 'Sesi';
+  const tipeLabel = params.isLab ? 'LABKOM' : 'RUANGAN';
+  const yStart = drawSchoolHeader(
+    doc,
+    `REKAP PEMINJAMAN ${tipeLabel} · KAMPUS ${params.kampus}`,
+    `Periode: ${params.semesterLabel} · Bulan: ${params.bulanLabel}${params.excludeInformatika ? ' (Non-Informatika)' : ''}`,
+  );
+
+  const totalUnit = params.guruAktif.reduce((acc, g) => acc + g[1], 0);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(30, 41, 59);
+  doc.text(
+    `Guru Aktif: ${params.guruAktif.length}   |   Belum Menggunakan: ${params.guruBelum.length}   |   Total Pemakaian: ${totalUnit} ${unitLabel}`,
+    14,
+    yStart + 2,
+  );
+
+  autoTable(doc, {
+    startY: yStart + 6,
+    head: [['No', 'Nama Guru / Pembina', `Jumlah ${unitLabel}`]],
+    body:
+      params.guruAktif.length > 0
+        ? params.guruAktif.map(([nama, count], idx) => [String(idx + 1), nama, `${count} ${unitLabel}`])
+        : [['-', 'Belum ada penggunaan pada filter periode ini.', '-']],
+    theme: 'grid',
+    styles: { fontSize: 8.5, cellPadding: 2.2 },
+    headStyles: { fillColor: [15, 118, 110], textColor: 255, fontStyle: 'bold' },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 14 },
+      2: { halign: 'center', cellWidth: 32 },
+    },
+  });
+
+  const yAfterGuru = getFinalY(doc, yStart + 40) + 6;
+  autoTable(doc, {
+    startY: yAfterGuru,
+    head: [['No', params.isLab ? 'Mata Pelajaran / Agenda' : 'Nama Ruangan', `Total ${unitLabel}`]],
+    body:
+      params.topItems.length > 0
+        ? params.topItems.map(([label, count], idx) => [String(idx + 1), label, `${count} ${unitLabel}`])
+        : [['-', 'Tidak ada data pada filter ini.', '-']],
+    theme: 'grid',
+    styles: { fontSize: 8.5, cellPadding: 2.2 },
+    headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: 'bold' },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 14 },
+      2: { halign: 'center', cellWidth: 32 },
+    },
+  });
+
+  if (params.guruBelum.length > 0) {
+    const yAfterTop = getFinalY(doc, yAfterGuru + 30) + 6;
+    autoTable(doc, {
+      startY: yAfterTop,
+      head: [['No', 'Guru Belum Menggunakan Pada Periode Ini']],
+      body: params.guruBelum.map((nama, idx) => [String(idx + 1), nama]),
+      theme: 'grid',
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [190, 18, 60], textColor: 255, fontStyle: 'bold' },
+      columnStyles: { 0: { halign: 'center', cellWidth: 14 } },
+    });
+  }
+
+  const filename = `Rekap_${tipeLabel}_${params.kampus}_${getTodayDateStr()}.pdf`;
+  doc.save(filename);
+  return filename;
+}
+
+export function downloadLabkomDenahPdf(params: {
+  kampus: LabkomKampus;
+  lokasi: string;
+  plotings: LabkomPloting[];
+}): string {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.setTextColor(15, 23, 42);
+  doc.text(`DENAH PLOTING ${params.lokasi} — KAMPUS ${params.kampus}`, pageW / 2, 13, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(71, 85, 105);
+  doc.text(`SIM PINTAR · Ruangan & Labkom SMA As-Syifa · Dicetak ${formatTanggalIndo(getTodayDateStr())}`, pageW / 2, 18.5, { align: 'center' });
+
+  // Papan tulis bar
+  doc.setFillColor(241, 245, 249);
+  doc.setDrawColor(203, 213, 225);
+  doc.roundedRect(14, 23, pageW - 28, 10, 2, 2, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(100, 116, 139);
+  doc.text('P A P A N   T U L I S   /   M E J A   G U R U', pageW / 2, 29.5, { align: 'center' });
+
+  const plotMap = new Map<number, LabkomPloting>();
+  for (const p of params.plotings) {
+    if (p.kampus === params.kampus && p.lokasi.toUpperCase() === params.lokasi.toUpperCase()) {
+      plotMap.set(p.noPc, p);
+    }
+  }
+
+  const palette: Array<[number, number, number]> = [
+    [37, 99, 235],
+    [5, 150, 105],
+    [124, 58, 237],
+    [225, 29, 72],
+    [217, 119, 6],
+    [8, 145, 178],
+    [192, 38, 211],
+  ];
+
+  const marginX = 14;
+  const gap = 3;
+  const cols = 8;
+  const rows = 5;
+  const cellW = (pageW - marginX * 2 - gap * (cols - 1)) / cols;
+  const cellH = 29;
+  const startY = 38;
+
+  let pc = 1;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = marginX + c * (cellW + gap);
+      const y = startY + r * (cellH + gap);
+      const entry = plotMap.get(pc);
+
+      if (entry) {
+        let hash = 0;
+        for (let k = 0; k < entry.namaSiswa.length; k++) {
+          hash = entry.namaSiswa.charCodeAt(k) + ((hash << 5) - hash);
+        }
+        const [cr, cg, cb] = palette[Math.abs(hash) % palette.length];
+        doc.setFillColor(cr, cg, cb);
+        doc.roundedRect(x, y, cellW, cellH, 2.5, 2.5, 'F');
+
+        doc.setFillColor(255, 255, 255);
+        doc.roundedRect(x + cellW / 2 - 4.5, y + 2.5, 9, 5, 1, 1, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8);
+        doc.setTextColor(cr, cg, cb);
+        doc.text(String(pc), x + cellW / 2, y + 6.2, { align: 'center' });
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(255, 255, 255);
+        const nameLines = doc.splitTextToSize(entry.namaSiswa.toUpperCase(), cellW - 3).slice(0, 2);
+        doc.text(nameLines, x + cellW / 2, y + 13, { align: 'center' });
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        doc.text(entry.kelas || '-', x + cellW / 2, y + 25.5, { align: 'center' });
+      } else {
+        doc.setFillColor(248, 250, 252);
+        doc.setDrawColor(203, 213, 225);
+        doc.roundedRect(x, y, cellW, cellH, 2.5, 2.5, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(11);
+        doc.setTextColor(148, 163, 184);
+        doc.text(String(pc), x + cellW / 2, y + 14.5, { align: 'center' });
+        doc.setFontSize(6.5);
+        doc.text('KOSONG', x + cellW / 2, y + 21, { align: 'center' });
+      }
+      pc++;
+    }
+  }
+
+  const filename = `Denah_${params.lokasi.replace(/\s+/g, '_')}_${params.kampus}.pdf`;
+  doc.save(filename);
+  return filename;
+}
+
+export function downloadLabkomExcelClient(params: {
+  bookings: LabkomBooking[];
+  fixedSchedules: LabkomFixedSchedule[];
+  plotings: LabkomPloting[];
+  masters: LabkomMasterItem[];
+}): string {
+  const wb = XLSX.utils.book_new();
+  const bookingHeader = [
+    'ID',
+    'Timestamp',
+    'Kampus',
+    'Email',
+    'Nama Peminjam',
+    'Guru',
+    'Kelas',
+    'Mapel',
+    'Lab',
+    'Tanggal',
+    'Jam_Ke',
+    'Keterangan',
+    'Status',
+  ];
+  const toBookingRow = (b: LabkomBooking) => [
+    b.id,
+    b.timestamp,
+    b.kampus,
+    b.email,
+    b.namaPeminjam,
+    b.guru,
+    b.kelas,
+    b.mapel,
+    b.lab,
+    b.tanggal,
+    b.jamKe,
+    b.keterangan,
+    b.status,
+  ];
+
+  const putraBookings = params.bookings.filter((b) => b.kampus === 'PUTRA').map(toBookingRow);
+  const putriBookings = params.bookings.filter((b) => b.kampus === 'PUTRI').map(toBookingRow);
+
+  const fixedRows = [
+    ['ID', 'Hari', 'Kampus', 'Guru', 'Kelas', 'Mapel', 'Lab', 'Jam_Ke'],
+    ...params.fixedSchedules.map((f) => [
+      f.id,
+      String(f.hari),
+      f.kampus,
+      f.guru,
+      f.kelas,
+      f.mapel,
+      f.lab,
+      f.jamKe,
+    ]),
+  ];
+
+  const plotRows = [
+    ['ID', 'Kampus', 'Lokasi', 'No_PC', 'Nama Siswa', 'Kelas'],
+    ...params.plotings.map((p) => [
+      p.id,
+      p.kampus,
+      p.lokasi,
+      String(p.noPc),
+      p.namaSiswa,
+      p.kelas,
+    ]),
+  ];
+
+  const mBy = (kat: string) =>
+    params.masters.filter((m) => m.kategori === kat).map((m) => [m.id, m.nilai]);
+
+  const sheets: Array<{ name: string; rows: string[][] }> = [
+    { name: 'Data_Pinjam', rows: [bookingHeader, ...putraBookings] },
+    { name: 'Data_Pinjam_Putri', rows: [bookingHeader, ...putriBookings] },
+    { name: 'Jadwal_Tetap', rows: fixedRows },
+    { name: 'Data_Ploting', rows: plotRows },
+    { name: 'Master_Guru', rows: [['ID', 'Nilai'], ...mBy('GURU')] },
+    { name: 'Master_Kelas', rows: [['ID', 'Nilai'], ...mBy('KELAS')] },
+    { name: 'Master_Mapel', rows: [['ID', 'Nilai'], ...mBy('MAPEL')] },
+    {
+      name: 'Master_Ruang',
+      rows: [
+        ['ID', 'Kategori', 'Nilai'],
+        ...params.masters
+          .filter((m) => m.kategori === 'LAB' || m.kategori === 'RUANGAN')
+          .map((m) => [m.id, m.kategori, m.nilai]),
+      ],
+    },
+    {
+      name: 'Master_Waktu',
+      rows: [
+        ['ID', 'Kategori', 'Nilai'],
+        ...params.masters
+          .filter((m) => m.kategori === 'JAM' || m.kategori === 'WAKTU_RUANG')
+          .map((m) => [m.id, m.kategori, m.nilai]),
+      ],
+    },
+  ];
+
+  for (const sh of sheets) {
+    const ws = buildSheetWithTextCellsClient(sh.rows);
+    XLSX.utils.book_append_sheet(wb, ws, sh.name);
+  }
+
+  const filename = `SIM_Ruangan_Labkom_SMA_${getTodayDateStr()}.xlsx`;
+  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array', compression: true }) as ArrayBuffer;
+  const blob = new Blob([out], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  return filename;
+}
+
+export function downloadLabkomMasterTemplateClient(params: {
+  bookings: LabkomBooking[];
+  fixedSchedules: LabkomFixedSchedule[];
+  masters: LabkomMasterItem[];
+}): { filename: string; totalItems: number; fromBookingsOnly: number } {
+  const WAKTU_SET = new Set(['PAGI', 'SIANG', 'SORE', 'MALAM']);
+  const classifyLoc = (loc: string): 'LAB' | 'RUANGAN' => {
+    const u = loc.toUpperCase();
+    return u.includes('LAB') || u.includes('BIOKIM') ? 'LAB' : 'RUANGAN';
+  };
+  const classifyJam = (jam: string): 'JAM' | 'WAKTU_RUANG' =>
+    WAKTU_SET.has(jam.trim().toUpperCase()) ? 'WAKTU_RUANG' : 'JAM';
+
+  type MasterAggRow = {
+    id: string;
+    kategori: LabkomMasterKategori;
+    nilai: string;
+    dipakaiCount: number;
+    fromBookingOnly: boolean;
+  };
+
+  const map = new Map<string, MasterAggRow>();
+  const upsert = (
+    kategori: LabkomMasterKategori,
+    rawVal: string,
+    existingId?: string,
+    incrementUsage = false,
+  ) => {
+    const clean = String(rawVal || '').trim();
+    if (!clean || clean === '-' || clean.toUpperCase() === 'TANPA KELAS') return;
+    const normVal =
+      kategori === 'LAB' ||
+      kategori === 'RUANGAN' ||
+      kategori === 'JAM' ||
+      kategori === 'WAKTU_RUANG'
+        ? clean.toUpperCase()
+        : clean;
+    const key = `${kategori}|${normVal.toUpperCase()}`;
+    const existing = map.get(key);
+    if (existing) {
+      if (existingId && existing.fromBookingOnly) {
+        existing.id = existingId;
+        existing.fromBookingOnly = false;
+      }
+      if (incrementUsage) existing.dipakaiCount++;
+    } else {
+      map.set(key, {
+        id: existingId || 'BARU_DARI_PINJAM',
+        kategori,
+        nilai: normVal,
+        dipakaiCount: incrementUsage ? 1 : 0,
+        fromBookingOnly: !existingId,
+      });
+    }
+  };
+
+  for (const m of params.masters) {
+    upsert(m.kategori, m.nilai, m.id, false);
+  }
+  for (const b of params.bookings) {
+    if (b.guru) upsert('GURU', b.guru, undefined, true);
+    if (b.kelas) upsert('KELAS', b.kelas, undefined, true);
+    if (b.mapel) upsert('MAPEL', b.mapel, undefined, true);
+    if (b.lab) upsert(classifyLoc(b.lab), b.lab, undefined, true);
+    if (b.jamKe) upsert(classifyJam(b.jamKe), b.jamKe, undefined, true);
+  }
+  for (const f of params.fixedSchedules) {
+    if (f.guru) upsert('GURU', f.guru, undefined, true);
+    if (f.kelas) upsert('KELAS', f.kelas, undefined, true);
+    if (f.mapel) upsert('MAPEL', f.mapel, undefined, true);
+    if (f.lab) upsert(classifyLoc(f.lab), f.lab, undefined, true);
+    if (f.jamKe) upsert(classifyJam(f.jamKe), f.jamKe, undefined, true);
+  }
+
+  const allRows = Array.from(map.values()).sort(
+    (a, b) =>
+      a.kategori.localeCompare(b.kategori) ||
+      a.nilai.localeCompare(b.nilai, 'id', { numeric: true }),
+  );
+  const fromBookingsOnly = allRows.filter((r) => r.fromBookingOnly).length;
+
+  const byCat = (kat: LabkomMasterKategori) => allRows.filter((r) => r.kategori === kat);
+  const countKat = (kat: LabkomMasterKategori) => String(byCat(kat).length);
+
+  const wb = XLSX.utils.book_new();
+  const sheets: Array<{ name: string; rows: string[][] }> = [
+    {
+      name: '0_Panduan',
+      rows: [
+        ['PANDUAN TEMPLATE MASTER DATA PEMINJAMAN LABKOM & RUANGAN SMA'],
+        ['Tanggal Unduh', getTodayDateStr()],
+        ['Total Data Peminjaman Saat Ini', String(params.bookings.length)],
+        ['Total Jadwal Tetap Saat Ini', String(params.fixedSchedules.length)],
+        ['Total Item Master Unik', String(allRows.length)],
+        ['Item Baru Terdeteksi dari Peminjaman', String(fromBookingsOnly)],
+        [''],
+        ['CARA PENGGUNAAN'],
+        [
+          '1. Template ini sudah terisi otomatis dari data peminjaman & jadwal tetap yang sekarang ada di sistem.',
+        ],
+        [
+          '2. Untuk MENYESUAIKAN NAMA yang salah ketik/tidak seragam (misal guru/kelas/mapel/ruang): isi kolom "Ubah_Menjadi" ATAU ubah langsung kolom "Nilai_Sekarang" tanpa menghapus kolom ID.',
+        ],
+        [
+          '3. Saat template diunggah kembali dengan opsi "Ikut sesuaikan data peminjaman", seluruh riwayat peminjaman & jadwal tetap yang memakai nama lama otomatis ikut diperbarui.',
+        ],
+        ['4. Untuk menambah item baru: tambah baris di bawahnya (biarkan kolom ID kosong).'],
+        [''],
+        ['RINGKASAN PER KATEGORI', 'Jumlah Item'],
+        ['GURU', countKat('GURU')],
+        ['KELAS', countKat('KELAS')],
+        ['MAPEL', countKat('MAPEL')],
+        ['LAB', countKat('LAB')],
+        ['RUANGAN', countKat('RUANGAN')],
+        ['JAM', countKat('JAM')],
+        ['WAKTU_RUANG', countKat('WAKTU_RUANG')],
+      ],
+    },
+    {
+      name: 'Master_Data',
+      rows: [
+        ['ID', 'Kategori', 'Nilai_Sekarang', 'Ubah_Menjadi', 'Dipakai_Di_Peminjaman'],
+        ...allRows.map((r) => [r.id, r.kategori, r.nilai, '', String(r.dipakaiCount)]),
+      ],
+    },
+    {
+      name: 'Master_Guru',
+      rows: [
+        ['ID', 'Nilai_Sekarang', 'Ubah_Menjadi', 'Dipakai_Di_Peminjaman'],
+        ...byCat('GURU').map((r) => [r.id, r.nilai, '', String(r.dipakaiCount)]),
+      ],
+    },
+    {
+      name: 'Master_Kelas',
+      rows: [
+        ['ID', 'Nilai_Sekarang', 'Ubah_Menjadi', 'Dipakai_Di_Peminjaman'],
+        ...byCat('KELAS').map((r) => [r.id, r.nilai, '', String(r.dipakaiCount)]),
+      ],
+    },
+    {
+      name: 'Master_Mapel',
+      rows: [
+        ['ID', 'Nilai_Sekarang', 'Ubah_Menjadi', 'Dipakai_Di_Peminjaman'],
+        ...byCat('MAPEL').map((r) => [r.id, r.nilai, '', String(r.dipakaiCount)]),
+      ],
+    },
+    {
+      name: 'Master_Ruang',
+      rows: [
+        ['ID', 'Kategori', 'Nilai_Sekarang', 'Ubah_Menjadi', 'Dipakai_Di_Peminjaman'],
+        ...[...byCat('LAB'), ...byCat('RUANGAN')].map((r) => [
+          r.id,
+          r.kategori,
+          r.nilai,
+          '',
+          String(r.dipakaiCount),
+        ]),
+      ],
+    },
+    {
+      name: 'Master_Waktu',
+      rows: [
+        ['ID', 'Kategori', 'Nilai_Sekarang', 'Ubah_Menjadi', 'Dipakai_Di_Peminjaman'],
+        ...[...byCat('JAM'), ...byCat('WAKTU_RUANG')].map((r) => [
+          r.id,
+          r.kategori,
+          r.nilai,
+          '',
+          String(r.dipakaiCount),
+        ]),
+      ],
+    },
+  ];
+
+  for (const sh of sheets) {
+    const ws = buildSheetWithTextCellsClient(sh.rows);
+    XLSX.utils.book_append_sheet(wb, ws, sh.name);
+  }
+
+  const filename = `Template_Master_Data_Labkom_${getTodayDateStr()}.xlsx`;
+  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array', compression: true }) as ArrayBuffer;
+  const blob = new Blob([out], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  return { filename, totalItems: allRows.length, fromBookingsOnly };
+}
+
+export function downloadLabkomLogTemplateClient(params: {
+  bookings: LabkomBooking[];
+  masters: LabkomMasterItem[];
+}): { filename: string; putraCount: number; putriCount: number } {
+  const today = getTodayDateStr();
+  const tsNow = `${today} 08:00:00`;
+  const bookingHeader = [
+    'ID',
+    'Timestamp',
+    'Kampus',
+    'Email',
+    'Nama Peminjam',
+    'Guru',
+    'Kelas',
+    'Mapel',
+    'Lab',
+    'Tanggal',
+    'Jam_Ke',
+    'Keterangan',
+    'Status',
+  ];
+
+  const sortNewest = (arr: LabkomBooking[]) =>
+    [...arr].sort(
+      (a, b) => b.tanggal.localeCompare(a.tanggal) || b.timestamp.localeCompare(a.timestamp),
+    );
+
+  const toBookingRow = (b: LabkomBooking): string[] => [
+    b.id,
+    b.timestamp,
+    b.kampus,
+    b.email,
+    b.namaPeminjam,
+    b.guru,
+    b.kelas,
+    b.mapel,
+    b.lab,
+    b.tanggal,
+    b.jamKe,
+    b.keterangan,
+    b.status,
+  ];
+
+  const existingPutra = sortNewest(params.bookings.filter((b) => b.kampus === 'PUTRA'));
+  const existingPutri = sortNewest(params.bookings.filter((b) => b.kampus === 'PUTRI'));
+
+  const firstLab =
+    params.masters.find((m) => m.kategori === 'LAB')?.nilai || 'LABKOM A';
+  const secondLab =
+    params.masters.find((m) => m.kategori === 'LAB' && m.nilai !== firstLab)?.nilai || 'LABKOM B';
+  const firstGuru =
+    params.masters.find((m) => m.kategori === 'GURU')?.nilai || 'Ustadz Ahmad';
+  const firstMapel =
+    params.masters.find((m) => m.kategori === 'MAPEL')?.nilai || 'INFORMATIKA';
+
+  const putraRows: string[][] =
+    existingPutra.length > 0
+      ? existingPutra.map(toBookingRow)
+      : [
+          [
+            '',
+            tsNow,
+            'PUTRA',
+            'guru.putra@assyifa.sch.id',
+            firstGuru,
+            firstGuru,
+            'X-A',
+            firstMapel,
+            firstLab,
+            today,
+            '1',
+            'Contoh Log Peminjaman Kampus Putra',
+            'Disetujui',
+          ],
+          [
+            '',
+            tsNow,
+            'PUTRA',
+            'guru.putra@assyifa.sch.id',
+            firstGuru,
+            firstGuru,
+            'X-A',
+            firstMapel,
+            firstLab,
+            today,
+            '2',
+            'Contoh Log Peminjaman Kampus Putra',
+            'Disetujui',
+          ],
+        ];
+
+  const putriRows: string[][] =
+    existingPutri.length > 0
+      ? existingPutri.map(toBookingRow)
+      : [
+          [
+            '',
+            tsNow,
+            'PUTRI',
+            'guru.putri@assyifa.sch.id',
+            'Ustadzah Aisyah',
+            'Ustadzah Aisyah',
+            'X-PUTRI-1',
+            firstMapel,
+            secondLab,
+            today,
+            '3',
+            'Contoh Log Peminjaman Kampus Putri',
+            'Disetujui',
+          ],
+          [
+            '',
+            tsNow,
+            'PUTRI',
+            'guru.putri@assyifa.sch.id',
+            'Ustadzah Aisyah',
+            'Ustadzah Aisyah',
+            'X-PUTRI-1',
+            firstMapel,
+            secondLab,
+            today,
+            '4',
+            'Contoh Log Peminjaman Kampus Putri',
+            'Disetujui',
+          ],
+        ];
+
+  const refRows: string[][] = [
+    ['Kategori', 'Nilai_Referensi'],
+    ...[...params.masters]
+      .sort(
+        (a, b) =>
+          a.kategori.localeCompare(b.kategori) ||
+          a.nilai.localeCompare(b.nilai, 'id', { numeric: true }),
+      )
+      .map((m) => [m.kategori, m.nilai]),
+  ];
+
+  const wb = XLSX.utils.book_new();
+  const sheets: Array<{ name: string; rows: string[][] }> = [
+    {
+      name: '0_Panduan',
+      rows: [
+        ['TEMPLATE LOG PEMINJAMAN LABKOM & RUANGAN SMA (PUTRA & PUTRI)'],
+        ['Tanggal Unduh', today],
+        ['Log Putra Saat Ini', String(existingPutra.length)],
+        ['Log Putri Saat Ini', String(existingPutri.length)],
+        [''],
+        ['PETUNJUK PENGISIAN'],
+        ['1. Sheet "Data_Pinjam" digunakan untuk log peminjaman Kampus PUTRA.'],
+        ['2. Sheet "Data_Pinjam_Putri" digunakan untuk log peminjaman Kampus PUTRI.'],
+        ['3. Untuk menambah baris baru, biarkan kolom ID kosong (sistem membuat ID otomatis).'],
+        ['4. Untuk mengedit baris yang sudah ada via upload, pertahankan nilai kolom ID lalu pilih mode "Update & Tambah (Upsert)" saat upload.'],
+        ['5. Format kolom Tanggal yang didukung: YYYY-MM-DD (misal 2026-11-18) atau DD/MM/YYYY.'],
+        ['6. Nilai kolom Kampus harus PUTRA atau PUTRI. Jam_Ke dapat diisi angka jam (1..10) atau sesi ruang (PAGI/SIANG/SORE/MALAM).'],
+        ['7. Gunakan sheet "Referensi_Master" untuk menyalin nama Guru, Kelas, Mapel, dan Lab/Ruangan yang seragam.'],
+      ],
+    },
+    { name: 'Data_Pinjam', rows: [bookingHeader, ...putraRows] },
+    { name: 'Data_Pinjam_Putri', rows: [bookingHeader, ...putriRows] },
+    { name: 'Referensi_Master', rows: refRows },
+  ];
+
+  for (const sh of sheets) {
+    const ws = buildSheetWithTextCellsClient(sh.rows);
+    XLSX.utils.book_append_sheet(wb, ws, sh.name);
+  }
+
+  const filename = `Template_Log_Peminjaman_Labkom_Putra_Putri_${today}.xlsx`;
+  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array', compression: true }) as ArrayBuffer;
+  const blob = new Blob([out], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  return {
+    filename,
+    putraCount: existingPutra.length,
+    putriCount: existingPutri.length,
+  };
+}
+

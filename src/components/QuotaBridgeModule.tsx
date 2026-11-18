@@ -262,7 +262,9 @@ export const QuotaBridgeModule: React.FC<QuotaBridgeModuleProps> = ({ notify }) 
                   Integrasi Firebase Cloud &amp; Firestore ({firebaseConfig.projectId})
                 </h3>
                 <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 border border-emerald-200">
-                  Terhubung · Analytics {firebaseConfig.measurementId}
+                  {firebaseConfig.measurementId
+                    ? `Terhubung · Analytics ${firebaseConfig.measurementId}`
+                    : `Terhubung · Firestore DB (${firebaseConfig.firestoreDatabaseId})`}
                 </span>
               </div>
               <p className="mt-1 text-xs text-slate-600">

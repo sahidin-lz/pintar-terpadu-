@@ -473,8 +473,81 @@ export interface SystemCounts {
   attendanceLogs: number;
   pembinaanRecords: number;
   examLogs: number;
+  labkomBookings?: number;
   byWilayah?: {
     Putra: { students: number; rooms: number; schedules: number; pembinaanRecords: number };
     Putri: { students: number; rooms: number; schedules: number; pembinaanRecords: number };
   };
 }
+
+export type SemesterType = 'Ganjil' | 'Genap';
+export type SemesterFilter = 'ALL' | 'GANJIL' | 'GENAP';
+
+export type LabkomKampus = 'PUTRA' | 'PUTRI';
+export type LabkomMasterKategori =
+  | 'GURU'
+  | 'KELAS'
+  | 'MAPEL'
+  | 'LAB'
+  | 'RUANGAN'
+  | 'JAM'
+  | 'WAKTU_RUANG';
+
+export interface LabkomMasterItem {
+  id: string;
+  kategori: LabkomMasterKategori;
+  nilai: string;
+}
+
+export interface LabkomBooking {
+  id: string;
+  timestamp: string;
+  kampus: LabkomKampus;
+  email: string;
+  namaPeminjam: string;
+  guru: string;
+  kelas: string;
+  mapel: string;
+  lab: string;
+  tanggal: string; // YYYY-MM-DD
+  jamKe: string;
+  keterangan: string;
+  status: string;
+}
+
+export interface LabkomFixedSchedule {
+  id: string;
+  hari: number; // 1=Senin .. 7=Minggu
+  kampus: LabkomKampus;
+  guru: string;
+  kelas: string;
+  mapel: string;
+  lab: string;
+  jamKe: string;
+}
+
+export interface LabkomPloting {
+  id: string;
+  kampus: LabkomKampus;
+  lokasi: string;
+  noPc: number; // 1..40
+  namaSiswa: string;
+  kelas: string;
+}
+
+export interface LabkomStudentOption {
+  nama: string;
+  kelas: string;
+}
+
+export interface LabkomStatePayload {
+  bookings: LabkomBooking[];
+  fixedSchedules: LabkomFixedSchedule[];
+  plotings: LabkomPloting[];
+  masters: LabkomMasterItem[];
+  broadcastTemplate: string;
+  telegramConfigured: boolean;
+  siswaPutra: LabkomStudentOption[];
+  siswaPutri: LabkomStudentOption[];
+}
+

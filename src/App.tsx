@@ -18,6 +18,7 @@ import {
   LogIn,
   LogOut,
   Menu,
+  Monitor,
   ShieldCheck,
   Upload,
   UserCheck,
@@ -28,6 +29,7 @@ import {
 import { AkunGuruModule } from './components/AkunGuruModule';
 import { ImportSimModule } from './components/ImportSimModule';
 import { JadwalModule } from './components/JadwalModule';
+import { LabkomRuangModule } from './components/LabkomRuangModule';
 import { LoginPortal, type LoginPortalTab } from './components/LoginPortal';
 import { MonitoringLaporanModule } from './components/MonitoringLaporanModule';
 import { ParentPortalModule } from './components/ParentPortalModule';
@@ -37,6 +39,7 @@ import { QuotaBridgeModule } from './components/QuotaBridgeModule';
 import { UjianModule } from './components/UjianModule';
 import { WaliKelasModule } from './components/WaliKelasModule';
 import type { DashboardStats, ReportOptions, RoomMapping, SystemCounts, TeacherPublic } from './types';
+import { getAcademicSemester } from './utils/semesterHelpers';
 import {
   loadPersistedModule,
   loadPersistedQuickGuru,
@@ -49,6 +52,7 @@ import {
 const VALID_MODULES: readonly ActiveModule[] = [
   'presensi',
   'walikelas',
+  'labkom',
   'jadwal',
   'akunguru',
   'ujian',
@@ -62,6 +66,7 @@ const VALID_MODULES: readonly ActiveModule[] = [
 type ActiveModule =
   | 'presensi'
   | 'walikelas'
+  | 'labkom'
   | 'jadwal'
   | 'akunguru'
   | 'ujian'
@@ -87,67 +92,102 @@ interface ToastItem {
 
 const MODULE_META: Record<
   ActiveModule,
-  { title: string; group: string; tileBg: string; tileActive: string }
+  {
+    title: string;
+    group: string;
+    tileBg: string;
+    tileActive: string;
+    rowActive: string;
+    headerAccent: string;
+  }
 > = {
   presensi: {
     title: 'Input Presensi Harian (Tanpa Login)',
     group: 'Halaman Tanpa Login',
     tileBg: 'bg-emerald-50 text-emerald-700',
     tileActive: 'bg-emerald-600 text-white',
+    rowActive: 'bg-emerald-50/90 text-emerald-950 border-emerald-200 shadow-xs',
+    headerAccent: 'border-t-2 border-t-emerald-500',
   },
   walikelas: {
     title: 'Input Pembinaan Santri (Tanpa Login)',
     group: 'Halaman Tanpa Login',
     tileBg: 'bg-violet-50 text-violet-700',
     tileActive: 'bg-violet-600 text-white',
+    rowActive: 'bg-violet-50/90 text-violet-950 border-violet-200 shadow-xs',
+    headerAccent: 'border-t-2 border-t-violet-500',
+  },
+  labkom: {
+    title: 'Peminjaman Labkom, Ruang SMA & Denah 40 PC',
+    group: 'Halaman Tanpa Login',
+    tileBg: 'bg-blue-50 text-blue-700',
+    tileActive: 'bg-blue-600 text-white',
+    rowActive: 'bg-blue-50/90 text-blue-950 border-blue-200 shadow-xs',
+    headerAccent: 'border-t-2 border-t-blue-500',
   },
   monitoring: {
     title: 'Monitoring Live, Analisis & Laporan Progres',
     group: 'Halaman Tanpa Login',
     tileBg: 'bg-indigo-50 text-indigo-700',
     tileActive: 'bg-indigo-600 text-white',
+    rowActive: 'bg-indigo-50/90 text-indigo-950 border-indigo-200 shadow-xs',
+    headerAccent: 'border-t-2 border-t-indigo-500',
   },
   parentportal: {
     title: 'Portal Wali Santri (Cek NIS & Tanggal Lahir - Read Only)',
     group: 'Halaman Tanpa Login',
     tileBg: 'bg-teal-50 text-teal-700',
     tileActive: 'bg-teal-700 text-white',
+    rowActive: 'bg-teal-50/90 text-teal-950 border-teal-200 shadow-xs',
+    headerAccent: 'border-t-2 border-t-teal-600',
   },
   ujian: {
     title: 'Ujian & Berita Acara',
     group: 'Halaman Tanpa Login',
     tileBg: 'bg-amber-50 text-amber-700',
     tileActive: 'bg-amber-600 text-white',
+    rowActive: 'bg-amber-50/90 text-amber-950 border-amber-200 shadow-xs',
+    headerAccent: 'border-t-2 border-t-amber-500',
   },
   piket: {
     title: 'Piket Guru & Inval',
     group: 'Halaman Tanpa Login',
     tileBg: 'bg-rose-50 text-rose-700',
     tileActive: 'bg-rose-600 text-white',
+    rowActive: 'bg-rose-50/90 text-rose-950 border-rose-200 shadow-xs',
+    headerAccent: 'border-t-2 border-t-rose-500',
   },
   jadwal: {
     title: 'Jadwal Mengajar, Perubahan JP & Pindah Kelas',
     group: 'Area Login (Guru & Admin)',
     tileBg: 'bg-cyan-50 text-cyan-700',
     tileActive: 'bg-cyan-600 text-white',
+    rowActive: 'bg-cyan-50/90 text-cyan-950 border-cyan-200 shadow-xs',
+    headerAccent: 'border-t-2 border-t-cyan-500',
   },
   akunguru: {
     title: "Dashboard RBAC: Guru, Wali Kelas, Musyrif & Pengampu Al-Qur'an",
     group: 'Area Login (Guru & Admin)',
     tileBg: 'bg-sky-50 text-sky-700',
     tileActive: 'bg-sky-600 text-white',
+    rowActive: 'bg-sky-50/90 text-sky-950 border-sky-200 shadow-xs',
+    headerAccent: 'border-t-2 border-t-sky-500',
   },
   import: {
     title: 'Admin Super, Template & Upload SIM',
     group: 'Area Login (Guru & Admin)',
     tileBg: 'bg-teal-50 text-teal-700',
     tileActive: 'bg-teal-600 text-white',
+    rowActive: 'bg-teal-50/90 text-teal-950 border-teal-200 shadow-xs',
+    headerAccent: 'border-t-2 border-t-teal-500',
   },
   quota: {
     title: 'Arsitektur Anti-Kuota & Google Sheets',
     group: 'Area Login (Guru & Admin)',
     tileBg: 'bg-orange-50 text-orange-700',
     tileActive: 'bg-orange-600 text-white',
+    rowActive: 'bg-orange-50/90 text-orange-950 border-orange-200 shadow-xs',
+    headerAccent: 'border-t-2 border-t-orange-500',
   },
 };
 
@@ -383,6 +423,7 @@ export default function App() {
       items: [
         { id: 'presensi', label: 'Input Presensi', icon: BookCheck },
         { id: 'walikelas', label: 'Input Pembinaan', icon: ShieldCheck },
+        { id: 'labkom', label: 'Labkom & Ruang SMA', icon: Monitor },
         { id: 'monitoring', label: 'Monitoring & Laporan', icon: BarChart3 },
         { id: 'parentportal', label: 'Portal Wali Santri (Cek NIS)', icon: Users },
         { id: 'ujian', label: 'Ujian & Susulan', icon: ClipboardCheck },
@@ -572,7 +613,7 @@ export default function App() {
                           onClick={() => handleSelectModule(item.id)}
                           className={`flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-xs font-semibold border transition-colors whitespace-nowrap ${
                             active
-                              ? 'bg-teal-50/90 text-teal-900 border-teal-200/80 shadow-xs'
+                              ? meta.rowActive
                               : 'border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                           }`}
                         >
@@ -604,7 +645,11 @@ export default function App() {
           </div>
           <div className="font-mono-num text-[10px] text-slate-500">
             Putra: {bootstrap?.counts?.byWilayah?.Putra.students ?? 0} · Putri:{' '}
-            {bootstrap?.counts?.byWilayah?.Putri.students ?? 0}
+            {bootstrap?.counts?.byWilayah?.Putri.students ?? 0} · Labkom:{' '}
+            {bootstrap?.counts?.labkomBookings ?? 0}
+          </div>
+          <div className="text-[10px] font-medium text-slate-500">
+            {getAcademicSemester().labelLengkap}
           </div>
         </div>
       </aside>
@@ -612,7 +657,9 @@ export default function App() {
       {/* Main Content Shell */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top Bar Clear: Hanya tombol Menu di kiri & Login Guru / Admin Super di kanan */}
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-4 border-b border-slate-200/90 bg-white/95 backdrop-blur-sm px-4 sm:px-6 lg:px-8">
+        <header
+          className={`sticky top-0 z-20 flex h-14 sm:h-16 items-center justify-between gap-2 sm:gap-4 border-b border-slate-200/90 bg-white/95 backdrop-blur-sm px-3 sm:px-6 lg:px-8 ${MODULE_META[activeModule].headerAccent}`}
+        >
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
@@ -629,6 +676,8 @@ export default function App() {
               >
                 {activeModule === 'walikelas' ? (
                   <ShieldCheck className="h-3.5 w-3.5" />
+                ) : activeModule === 'labkom' ? (
+                  <Monitor className="h-3.5 w-3.5" />
                 ) : activeModule === 'import' ? (
                   <Upload className="h-3.5 w-3.5" />
                 ) : activeModule === 'jadwal' ? (
@@ -649,6 +698,12 @@ export default function App() {
                 <h1 className="font-display font-semibold text-slate-900 truncate">
                   {MODULE_META[activeModule].title}
                 </h1>
+                <span className="hidden xl:inline text-slate-300" aria-hidden="true">
+                  ·
+                </span>
+                <span className="hidden xl:inline text-xs font-medium text-teal-700 whitespace-nowrap">
+                  {getAcademicSemester().labelLengkap}
+                </span>
               </div>
             </div>
           </div>
@@ -722,6 +777,14 @@ export default function App() {
               unlockedTeacher={unlockedTeacher}
               teachers={bootstrap?.teachers || []}
               onOpenImport={() => setActiveModule('import')}
+              onRequestLogin={() => openLoginPortal('guru')}
+              notify={notify}
+            />
+          )}
+
+          {activeModule === 'labkom' && (
+            <LabkomRuangModule
+              currentUser={unlockedTeacher}
               onRequestLogin={() => openLoginPortal('guru')}
               notify={notify}
             />

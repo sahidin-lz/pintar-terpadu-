@@ -328,7 +328,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
     <div className="space-y-6">
       {/* Division Switcher & Zero-Login Teacher Attribution Notice */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-4">
-        <div className="inline-flex flex-wrap items-center gap-1 rounded-xl bg-slate-100 p-1">
+        <div className="grid grid-cols-3 sm:inline-flex items-center gap-1 rounded-xl bg-slate-100 p-1 border border-slate-200/80 w-full sm:w-auto">
           {(
             [
               {
@@ -336,18 +336,21 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
                 label: 'Asrama',
                 icon: Home,
                 activeCls: 'bg-indigo-600 text-white shadow-sm',
+                iconInactiveCls: 'text-indigo-600',
               },
               {
                 id: 'Belajar',
                 label: 'Akademik',
                 icon: BookOpen,
                 activeCls: 'bg-sky-600 text-white shadow-sm',
+                iconInactiveCls: 'text-sky-600',
               },
               {
                 id: 'Al-Quran',
                 label: "Al-Qur'an",
                 icon: BookMarked,
                 activeCls: 'bg-emerald-600 text-white shadow-sm',
+                iconInactiveCls: 'text-emerald-600',
               },
             ] as const
           ).map((tab) => {
@@ -358,12 +361,12 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
                 key={tab.id}
                 type="button"
                 onClick={() => setJenis(tab.id)}
-                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-lg px-2.5 sm:px-4 py-2 text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
                   active ? tab.activeCls : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
                 }`}
               >
-                <Icon className="h-3.5 w-3.5" />
-                {tab.label}
+                <Icon className={`h-3.5 w-3.5 shrink-0 ${active ? 'text-white' : tab.iconInactiveCls}`} />
+                <span className="truncate">{tab.label}</span>
               </button>
             );
           })}

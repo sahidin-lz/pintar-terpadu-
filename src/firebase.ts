@@ -15,11 +15,13 @@ import {
   getDocFromServer,
   getDocs,
   getFirestore,
+  initializeFirestore,
   query,
   serverTimestamp,
   setDoc,
   where,
   writeBatch,
+  type Firestore,
 } from 'firebase/firestore';
 import firebaseAppletConfig from '../firebase-applet-config.json';
 import type {
@@ -32,30 +34,36 @@ import type {
   UserRole,
 } from './types';
 
-// Your web app's Firebase configuration (synced with firebase-applet-config.json & user config)
+// Your web app's Firebase configuration (synced directly with firebase-applet-config.json)
 export const firebaseConfig = {
   ...firebaseAppletConfig,
-  apiKey: firebaseAppletConfig.apiKey || 'AIzaSyDKM2T2p5Z9GyvwIIO-fqZCylN47gg8zJ8',
-  authDomain: firebaseAppletConfig.authDomain || 'sim-pintar.firebaseapp.com',
-  projectId: firebaseAppletConfig.projectId || 'sim-pintar',
-  storageBucket: firebaseAppletConfig.storageBucket || 'sim-pintar.firebasestorage.app',
-  messagingSenderId: firebaseAppletConfig.messagingSenderId || '407439251615',
-  appId: firebaseAppletConfig.appId || '1:407439251615:web:839a3c61ae0a3abdae2aaa',
-  measurementId: firebaseAppletConfig.measurementId || 'G-9CWBXKYVJ0',
-  firestoreDatabaseId:
-    firebaseAppletConfig.firestoreDatabaseId ||
-    'ai-studio-pintarterpadusis-8bfff33f-92e4-440d-b055-3b4c74e2d5e5',
 };
 
 // Initialize Firebase
 export const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+function createFirestoreClient(): Firestore {
+  const databaseId = firebaseConfig.firestoreDatabaseId || '(default)';
+  try {
+    return initializeFirestore(
+      app,
+      {
+        experimentalForceLongPolling: true,
+      },
+      databaseId
+    );
+  } catch {
+    return getFirestore(app, databaseId);
+  }
+}
+
+export const db: Firestore = createFirestoreClient();
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
-// Initialize Firebase Analytics safely in browser environments
+// Initialize Firebase Analytics safely only when measurementId is configured
 export let analytics: Analytics | null = null;
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && firebaseConfig.measurementId) {
   isSupported()
     .then((supported) => {
       if (supported) {
@@ -135,7 +143,7 @@ async function testConnection() {
   }
 }
 
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && navigator.onLine !== false) {
   testConnection();
 }
 

@@ -1186,66 +1186,84 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
       </div>
 
       {/* Role Progress Tabs */}
-      <div className="inline-flex flex-wrap items-center gap-1 rounded-lg bg-slate-100 p-1">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5 rounded-xl bg-slate-100 p-1.5 border border-slate-200/80 w-full">
         <button
           type="button"
           onClick={() => setProgressTab('mengajar')}
-          className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition-colors ${
-            progressTab === 'mengajar' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
+            progressTab === 'mengajar'
+              ? 'bg-teal-600 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
           }`}
         >
-          <BookOpen className="h-3.5 w-3.5 text-teal-700" />
-          Rekap &amp; Progres Guru Mengajar
+          <BookOpen className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'mengajar' ? 'text-white' : 'text-teal-600'}`} />
+          <span className="truncate">Guru Mengajar</span>
         </button>
         <button
           type="button"
           onClick={() => setProgressTab('walikelas')}
-          className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition-colors ${
-            progressTab === 'walikelas' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
+            progressTab === 'walikelas'
+              ? 'bg-sky-600 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
           }`}
         >
-          <ShieldCheck className="h-3.5 w-3.5 text-sky-700" />
-          Progres Wali Kelas ({recap?.waliProgress.totalSantri ?? 0})
+          <ShieldCheck className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'walikelas' ? 'text-white' : 'text-sky-600'}`} />
+          <span className="truncate font-mono-num">
+            Wali Kelas ({recap?.waliProgress.totalSantri ?? 0})
+          </span>
         </button>
         <button
           type="button"
           onClick={() => setProgressTab('musyrif')}
-          className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-            progressTab === 'musyrif' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
+            progressTab === 'musyrif'
+              ? 'bg-emerald-600 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
           }`}
         >
-          <Home className="h-3.5 w-3.5 text-emerald-700" />
-          Progres Musyrif / Musyrifah ({recap?.musyrifProgress.totalKamar ?? 0} Kamar)
+          <Home className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'musyrif' ? 'text-white' : 'text-emerald-600'}`} />
+          <span className="truncate font-mono-num">
+            Musyrif ({recap?.musyrifProgress.totalKamar ?? 0})
+          </span>
         </button>
         <button
           type="button"
           onClick={() => setProgressTab('quran')}
-          className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-            progressTab === 'quran' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
+            progressTab === 'quran'
+              ? 'bg-amber-600 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
           }`}
         >
-          <BookOpen className="h-3.5 w-3.5 text-amber-700" />
-          Dasbor Pengampu Al-Qur&apos;an ({halaqahRows.length})
+          <BookOpen className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'quran' ? 'text-white' : 'text-amber-600'}`} />
+          <span className="truncate font-mono-num">
+            Al-Qur&apos;an ({halaqahRows.length})
+          </span>
         </button>
         <button
           type="button"
           onClick={() => setProgressTab('whatsapp')}
-          className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-            progressTab === 'whatsapp' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
+            progressTab === 'whatsapp'
+              ? 'bg-green-600 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
           }`}
         >
-          <ShieldCheck className="h-3.5 w-3.5 text-emerald-700" />
-          WhatsApp Gateway ({waLogs.length})
+          <ShieldCheck className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'whatsapp' ? 'text-white' : 'text-green-600'}`} />
+          <span className="truncate font-mono-num">WhatsApp ({waLogs.length})</span>
         </button>
         <button
           type="button"
           onClick={() => setProgressTab('upload')}
-          className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-            progressTab === 'upload' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
+            progressTab === 'upload'
+              ? 'bg-violet-600 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
           }`}
         >
-          <Upload className="h-3.5 w-3.5 text-violet-700" />
-          Upload Template &amp; Input Langsung
+          <Upload className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'upload' ? 'text-white' : 'text-violet-600'}`} />
+          <span className="truncate">Upload &amp; Input</span>
         </button>
       </div>
 

@@ -372,36 +372,61 @@ export const ParentPortalModule: React.FC = () => {
           </div>
 
           {/* Sub-Tab Navigasi Portofolio */}
-          <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5 rounded-xl bg-slate-100 p-1.5 border border-slate-200/80">
             {[
-              { id: 'ringkasan', label: 'Ringkasan & Notifikasi WA', icon: MessageSquare },
+              {
+                id: 'ringkasan',
+                label: 'Ringkasan & WA',
+                icon: MessageSquare,
+                activeCls: 'bg-teal-600 text-white shadow-sm',
+                iconCls: 'text-teal-600',
+              },
               {
                 id: 'presensi',
-                label: `Catatan Ketidakhadiran (${portfolio.recentAbsenIssues.length})`,
+                label: `Ketidakhadiran (${portfolio.recentAbsenIssues.length})`,
                 icon: CheckCircle2,
+                activeCls: 'bg-sky-600 text-white shadow-sm',
+                iconCls: 'text-sky-600',
               },
-              { id: 'quran', label: `Progres Halaqah Al-Qur'an (${halaqahLogs.length})`, icon: BookOpen },
+              {
+                id: 'quran',
+                label: `Al-Qur'an (${halaqahLogs.length})`,
+                icon: BookOpen,
+                activeCls: 'bg-emerald-600 text-white shadow-sm',
+                iconCls: 'text-emerald-600',
+              },
               {
                 id: 'pembinaan',
-                label: `Catatan Pembinaan & Poin (${portfolio.riwayatPembinaan.length})`,
+                label: `Pembinaan (${portfolio.riwayatPembinaan.length})`,
                 icon: FileText,
+                activeCls: 'bg-violet-600 text-white shadow-sm',
+                iconCls: 'text-violet-600',
               },
-              { id: 'lampiran', label: `Dokumen & Bukti Lampiran (${attachments.length})`, icon: Paperclip },
-            ].map((t) => {
+              {
+                id: 'lampiran',
+                label: `Lampiran (${attachments.length})`,
+                icon: Paperclip,
+                activeCls: 'bg-amber-600 text-white shadow-sm',
+                iconCls: 'text-amber-600',
+              },
+            ].map((t, idx) => {
               const Icon = t.icon;
+              const isActive = activeTab === t.id;
               return (
                 <button
                   key={t.id}
                   type="button"
                   onClick={() => setActiveTab(t.id as typeof activeTab)}
-                  className={`px-3.5 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition cursor-pointer whitespace-nowrap shrink-0 border ${
-                    activeTab === t.id
-                      ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
-                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  className={`${
+                    idx === 4 ? 'col-span-2 sm:col-span-1' : ''
+                  } px-2.5 py-2 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap min-w-0 ${
+                    isActive
+                      ? t.activeCls
+                      : 'bg-white/70 text-slate-700 hover:bg-white hover:text-slate-900'
                   }`}
                 >
-                  <Icon className="w-3.5 h-3.5" />
-                  {t.label}
+                  <Icon className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-white' : t.iconCls}`} />
+                  <span className="truncate font-mono-num">{t.label}</span>
                 </button>
               );
             })}

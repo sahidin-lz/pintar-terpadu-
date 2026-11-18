@@ -13,6 +13,13 @@ import type {
   ExamLog,
   Gender,
   IbadahChecklist,
+  LabkomBooking,
+  LabkomFixedSchedule,
+  LabkomKampus,
+  LabkomMasterItem,
+  LabkomMasterKategori,
+  LabkomPloting,
+  LabkomStatePayload,
   MonitoringData,
   MonthlyWaliKelasReport,
   PembinaanAnalisisSummary,
@@ -40,6 +47,15 @@ import type {
   WhatsAppLogEntry,
   WilayahFilter,
 } from '../src/types';
+import {
+  classifyLocationCategory,
+  classifyTimeCategory,
+  DEFAULT_LABKOM_BROADCAST_TEMPLATE,
+  ensureBaselineMasters,
+  loadLabkomSeedData,
+  parseLabkomCsvContent,
+  parseLabkomTanggalToIso,
+} from './labkomSeed.js';
 
 export interface DatabaseSchema {
   students: Student[];
@@ -53,12 +69,19 @@ export interface DatabaseSchema {
   pembinaanRecords: PembinaanRecord[];
   attachments?: CloudAttachmentItem[];
   whatsappLogs?: WhatsAppLogEntry[];
+  labkomBookings?: LabkomBooking[];
+  labkomFixedSchedules?: LabkomFixedSchedule[];
+  labkomPlotings?: LabkomPloting[];
+  labkomMasters?: LabkomMasterItem[];
   settings: {
     gasBridgeUrl: string;
     lastSyncedAt: string | null;
     lastModifiedAt?: string | null;
     explicitEmpty?: boolean;
     whatsappConfig?: WhatsAppGatewayConfig;
+    labkomBroadcastTemplate?: string;
+    labkomTelegramToken?: string;
+    labkomTelegramChatId?: string;
   };
 }
 
@@ -191,6 +214,10 @@ function createInitialDatabase(): DatabaseSchema {
     pembinaanRecords: [],
     attachments: [],
     whatsappLogs: [],
+    labkomBookings: [],
+    labkomFixedSchedules: [],
+    labkomPlotings: [],
+    labkomMasters: [],
     settings: {
       gasBridgeUrl: '',
       lastSyncedAt: null,
@@ -201,6 +228,7 @@ function createInitialDatabase(): DatabaseSchema {
         autoNotifyAlfa: true,
         autoNotifyEskalasi: true,
       },
+      labkomBroadcastTemplate: DEFAULT_LABKOM_BROADCAST_TEMPLATE,
     },
   };
 }
@@ -251,6 +279,26 @@ class PintarStore {
       peran: t.peran || ('Guru' as UserRole),
     }));
     const base = createInitialDatabase();
+    const isExplicitEmpty = Boolean(parsed.settings?.explicitEmpty);
+    const hasLabkomBookings = Array.isArray(parsed.labkomBookings) && parsed.labkomBookings.length > 0;
+    const hasLabkomMasters = Array.isArray(parsed.labkomMasters) && parsed.labkomMasters.length > 0;
+
+    let labkomBookings = Array.isArray(parsed.labkomBookings) ? parsed.labkomBookings : [];
+    let labkomMasters = Array.isArray(parsed.labkomMasters) ? parsed.labkomMasters : [];
+
+    if (!isExplicitEmpty && (!hasLabkomBookings || !hasLabkomMasters)) {
+      const extraGurus = normalizedTeachers
+        .filter((t) => t.peran !== 'Admin Super')
+        .map((t) => t.nama);
+      const extraKelas = Array.from(
+        new Set((parsed.students || []).map((s) => s.kelas).filter((k) => k && k !== '-')),
+      );
+      const seed = loadLabkomSeedData(extraGurus, extraKelas);
+      if (!hasLabkomBookings) labkomBookings = seed.bookings;
+      if (!hasLabkomMasters) labkomMasters = seed.masters;
+    }
+    labkomMasters = ensureBaselineMasters(labkomMasters);
+
     return {
       ...base,
       ...parsed,
@@ -264,10 +312,16 @@ class PintarStore {
       pembinaanRecords: Array.isArray(parsed.pembinaanRecords) ? parsed.pembinaanRecords : [],
       attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
       whatsappLogs: Array.isArray(parsed.whatsappLogs) ? parsed.whatsappLogs : [],
+      labkomBookings,
+      labkomFixedSchedules: Array.isArray(parsed.labkomFixedSchedules) ? parsed.labkomFixedSchedules : [],
+      labkomPlotings: Array.isArray(parsed.labkomPlotings) ? parsed.labkomPlotings : [],
+      labkomMasters,
       teachers: ensureSuperAdmin(normalizedTeachers),
       settings: {
         ...base.settings,
         ...(parsed.settings || {}),
+        labkomBroadcastTemplate:
+          parsed.settings?.labkomBroadcastTemplate || DEFAULT_LABKOM_BROADCAST_TEMPLATE,
       },
     };
   }
@@ -382,6 +436,7 @@ class PintarStore {
       attendanceLogs: this.db.attendanceLogs.length,
       pembinaanRecords: this.db.pembinaanRecords.length,
       examLogs: this.db.examLogs.length,
+      labkomBookings: (this.db.labkomBookings || []).length,
       byWilayah: {
         Putra: {
           students: this.db.students.filter((s) => s.gender === 'Putra').length,
@@ -406,7 +461,8 @@ class PintarStore {
       this.db.schedules.length +
       this.db.attendanceLogs.length +
       this.db.examLogs.length +
-      this.db.pembinaanRecords.length;
+      this.db.pembinaanRecords.length +
+      (this.db.labkomBookings || []).length;
     return {
       storageEngine: 'Local Atomic Store + RAM Cache (Zero Daily Quota Limit)',
       externalQuotaUsedToday: 0,
@@ -1860,6 +1916,10 @@ class PintarStore {
       pembinaanRecords: this.db.pembinaanRecords,
       attachments: this.db.attachments || [],
       whatsappLogs: this.db.whatsappLogs || [],
+      labkomBookings: this.db.labkomBookings || [],
+      labkomFixedSchedules: this.db.labkomFixedSchedules || [],
+      labkomPlotings: this.db.labkomPlotings || [],
+      labkomMasters: this.db.labkomMasters || [],
       settings: this.db.settings,
     };
   }
@@ -1877,6 +1937,10 @@ class PintarStore {
       pembinaanRecords: PembinaanRecord[];
       attachments: CloudAttachmentItem[];
       whatsappLogs: WhatsAppLogEntry[];
+      labkomBookings: LabkomBooking[];
+      labkomFixedSchedules: LabkomFixedSchedule[];
+      labkomPlotings: LabkomPloting[];
+      labkomMasters: LabkomMasterItem[];
       settings: Partial<DatabaseSchema['settings']>;
     }>,
     mode: 'merge' | 'replace' = 'merge',
@@ -1935,6 +1999,14 @@ class PintarStore {
       }
       if (Array.isArray(snapshot.attachments)) this.db.attachments = snapshot.attachments;
       if (Array.isArray(snapshot.whatsappLogs)) this.db.whatsappLogs = snapshot.whatsappLogs;
+      if (Array.isArray(snapshot.labkomBookings)) this.db.labkomBookings = snapshot.labkomBookings;
+      if (Array.isArray(snapshot.labkomFixedSchedules)) {
+        this.db.labkomFixedSchedules = snapshot.labkomFixedSchedules;
+      }
+      if (Array.isArray(snapshot.labkomPlotings)) this.db.labkomPlotings = snapshot.labkomPlotings;
+      if (Array.isArray(snapshot.labkomMasters)) {
+        this.db.labkomMasters = ensureBaselineMasters(snapshot.labkomMasters);
+      }
     } else {
       // Safe non-destructive merge: add missing items & enrich missing fields without wiping any data
       if (Array.isArray(snapshot.students)) {
@@ -2086,6 +2158,57 @@ class PintarStore {
             seenWa.add(wa.id);
           }
         }
+      }
+
+      if (Array.isArray(snapshot.labkomBookings)) {
+        if (!this.db.labkomBookings) this.db.labkomBookings = [];
+        const seenLb = new Set(this.db.labkomBookings.map((b) => b.id));
+        for (const lb of snapshot.labkomBookings) {
+          if (!seenLb.has(lb.id)) {
+            this.db.labkomBookings.push(lb);
+            seenLb.add(lb.id);
+          }
+        }
+      }
+
+      if (Array.isArray(snapshot.labkomFixedSchedules)) {
+        if (!this.db.labkomFixedSchedules) this.db.labkomFixedSchedules = [];
+        const seenLf = new Set(this.db.labkomFixedSchedules.map((f) => f.id));
+        for (const lf of snapshot.labkomFixedSchedules) {
+          if (!seenLf.has(lf.id)) {
+            this.db.labkomFixedSchedules.push(lf);
+            seenLf.add(lf.id);
+          }
+        }
+      }
+
+      if (Array.isArray(snapshot.labkomPlotings)) {
+        if (!this.db.labkomPlotings) this.db.labkomPlotings = [];
+        const seenLp = new Set(
+          this.db.labkomPlotings.map((p) => `${p.kampus}|${p.lokasi}|${p.noPc}`),
+        );
+        for (const lp of snapshot.labkomPlotings) {
+          const sig = `${lp.kampus}|${lp.lokasi}|${lp.noPc}`;
+          if (!seenLp.has(sig)) {
+            this.db.labkomPlotings.push(lp);
+            seenLp.add(sig);
+          }
+        }
+      }
+
+      if (Array.isArray(snapshot.labkomMasters)) {
+        if (!this.db.labkomMasters) this.db.labkomMasters = [];
+        const seenLm = new Set(
+          this.db.labkomMasters.map((m) => `${m.kategori}|${m.nilai.toUpperCase()}`),
+        );
+        for (const lm of snapshot.labkomMasters) {
+          const sig = `${lm.kategori}|${lm.nilai.toUpperCase()}`;
+          if (!seenLm.has(sig)) {
+            this.db.labkomMasters.push(lm);
+            seenLm.add(sig);
+          }
+        }
+        this.db.labkomMasters = ensureBaselineMasters(this.db.labkomMasters);
       }
     }
 
@@ -2813,7 +2936,9 @@ class PintarStore {
   }) {
     const { jenis, param1, param2, semester, divisi, wilayah = 'Semua' } = params;
     const matchW = (g: Gender) => wilayah === 'Semua' || g === wilayah;
-    const isReqGanjil = semester.includes('Ganjil');
+    const isAllSem = semester === 'ALL' || semester.toUpperCase().includes('SEMUA');
+    const isReqGanjil = semester.toUpperCase().includes('GANJIL');
+    const isReqGenap = semester.toUpperCase().includes('GENAP');
     const isReqMonth = semester.includes('Bulan');
     const reqMonthIdx = isReqMonth ? parseInt(semester.split(' ')[1], 10) : 0;
 
@@ -2823,8 +2948,12 @@ class PintarStore {
     }
 
     const matchPeriod = (tgl: string) => {
+      if (isAllSem) return true;
       const m = parseInt(tgl.split('-')[1], 10);
+      if (!m || Number.isNaN(m)) return false;
       if (isReqMonth) return m === reqMonthIdx;
+      if (isReqGenap) return m >= 1 && m <= 6;
+      if (isReqGanjil) return m >= 7 && m <= 12;
       return (m >= 7) === isReqGanjil;
     };
 
@@ -4527,6 +4656,1109 @@ class PintarStore {
       totalSantri: rows.length,
       rows,
     };
+  }
+
+  // ==============================================================
+  // SIM RUANGAN & LABKOM SMA (GANJIL / GENAP, BOOKING, DENAH 40 PC, BROADCAST)
+  // ==============================================================
+  private ensureLabkomInitialized() {
+    if (!Array.isArray(this.db.labkomBookings)) this.db.labkomBookings = [];
+    if (!Array.isArray(this.db.labkomFixedSchedules)) this.db.labkomFixedSchedules = [];
+    if (!Array.isArray(this.db.labkomPlotings)) this.db.labkomPlotings = [];
+    if (!Array.isArray(this.db.labkomMasters)) this.db.labkomMasters = [];
+    this.db.labkomMasters = ensureBaselineMasters(this.db.labkomMasters);
+  }
+
+  private getDayNumber1To7(dateStr: string): number {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const dt = new Date(y, (m || 1) - 1, d || 1);
+    const day = dt.getDay();
+    return day === 0 ? 7 : day;
+  }
+
+  public getLabkomState(): LabkomStatePayload {
+    this.ensureLabkomInitialized();
+
+    // Sync any newly added teachers/classes from main school DB into master list dynamically (non-destructive)
+    const guruSet = new Set(
+      this.db.labkomMasters!
+        .filter((m) => m.kategori === 'GURU')
+        .map((m) => m.nilai.toUpperCase()),
+    );
+    const mergedMasters = [...this.db.labkomMasters!];
+    for (const t of this.db.teachers) {
+      if (t.peran === 'Admin Super') continue;
+      if (t.nama && !guruSet.has(t.nama.toUpperCase())) {
+        mergedMasters.push({ id: `LM_T_${t.id}`, kategori: 'GURU', nilai: t.nama });
+        guruSet.add(t.nama.toUpperCase());
+      }
+    }
+
+    const siswaPutra = this.db.students
+      .filter((s) => s.gender === 'Putra')
+      .map((s) => ({ nama: s.nama, kelas: s.kelas }))
+      .sort((a, b) => a.kelas.localeCompare(b.kelas) || a.nama.localeCompare(b.nama));
+
+    const siswaPutri = this.db.students
+      .filter((s) => s.gender === 'Putri')
+      .map((s) => ({ nama: s.nama, kelas: s.kelas }))
+      .sort((a, b) => a.kelas.localeCompare(b.kelas) || a.nama.localeCompare(b.nama));
+
+    const tgToken = process.env.TELEGRAM_BOT_TOKEN || this.db.settings.labkomTelegramToken || '';
+    const tgChatId = process.env.TELEGRAM_CHAT_ID || this.db.settings.labkomTelegramChatId || '';
+
+    return {
+      bookings: this.db.labkomBookings!,
+      fixedSchedules: this.db.labkomFixedSchedules!,
+      plotings: this.db.labkomPlotings!,
+      masters: mergedMasters,
+      broadcastTemplate:
+        this.db.settings.labkomBroadcastTemplate || DEFAULT_LABKOM_BROADCAST_TEMPLATE,
+      telegramConfigured: Boolean(tgToken && tgChatId),
+      siswaPutra,
+      siswaPutri,
+    };
+  }
+
+  private checkLabkomConflict(
+    kampus: LabkomKampus,
+    lab: string,
+    tanggalIso: string,
+    jamKe: string,
+    excludeBookingId?: string,
+  ): string | null {
+    this.ensureLabkomInitialized();
+    const normLab = lab.trim().toUpperCase();
+    const normJam = jamKe.trim().toUpperCase();
+    const dayNum = this.getDayNumber1To7(tanggalIso);
+
+    const fixedClash = this.db.labkomFixedSchedules!.find(
+      (f) =>
+        f.kampus === kampus &&
+        f.hari === dayNum &&
+        f.lab.trim().toUpperCase() === normLab &&
+        f.jamKe.trim().toUpperCase() === normJam,
+    );
+    if (fixedClash) {
+      return `${tanggalIso} (${normLab} Jam ${normJam}) terblokir Jadwal Tetap / KBM: ${fixedClash.mapel} (${fixedClash.guru} · ${fixedClash.kelas})`;
+    }
+
+    const bookingClash = this.db.labkomBookings!.find(
+      (b) =>
+        b.id !== excludeBookingId &&
+        b.kampus === kampus &&
+        b.tanggal === tanggalIso &&
+        b.lab.trim().toUpperCase() === normLab &&
+        b.jamKe.trim().toUpperCase() === normJam,
+    );
+    if (bookingClash) {
+      return `${tanggalIso} (${normLab} Jam ${normJam}) sudah dibooking oleh ${bookingClash.namaPeminjam || bookingClash.guru} (${bookingClash.mapel} · ${bookingClash.kelas})`;
+    }
+
+    return null;
+  }
+
+  public createLabkomBooking(payload: {
+    kampus: LabkomKampus;
+    email: string;
+    namaPeminjam: string;
+    guru: string;
+    kelas: string;
+    lab: string;
+    mapel: string;
+    tanggal: string;
+    jamKe: string | string[];
+    keterangan?: string;
+  }): { ok: boolean; error?: string; created?: LabkomBooking[] } {
+    this.ensureLabkomInitialized();
+    const tanggalIso = parseLabkomTanggalToIso(payload.tanggal);
+    if (!tanggalIso) return { ok: false, error: 'Tanggal booking tidak valid.' };
+
+    const jamList = (
+      Array.isArray(payload.jamKe)
+        ? payload.jamKe
+        : String(payload.jamKe || '')
+            .split(',')
+            .map((j) => j.trim())
+    ).filter(Boolean);
+
+    if (jamList.length === 0) {
+      return { ok: false, error: 'Pilih minimal satu jam / slot waktu.' };
+    }
+
+    const kampus: LabkomKampus = payload.kampus === 'PUTRI' ? 'PUTRI' : 'PUTRA';
+    const lab = String(payload.lab || '').trim().toUpperCase();
+    if (!lab) return { ok: false, error: 'Lokasi Labkom / Ruangan wajib dipilih.' };
+
+    const conflicts: string[] = [];
+    for (const jam of jamList) {
+      const msg = this.checkLabkomConflict(kampus, lab, tanggalIso, jam);
+      if (msg) conflicts.push(msg);
+    }
+    if (conflicts.length > 0) {
+      return { ok: false, error: `Bentrok jadwal:\n${conflicts.join('\n')}` };
+    }
+
+    const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const created: LabkomBooking[] = jamList.map((jam, idx) => ({
+      id: `TRX-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000)}`,
+      timestamp: ts,
+      kampus,
+      email: String(payload.email || '').trim(),
+      namaPeminjam: String(payload.namaPeminjam || '').trim(),
+      guru: String(payload.guru || '-').trim(),
+      kelas: String(payload.kelas || '-').trim(),
+      mapel: String(payload.mapel || '-').trim(),
+      lab,
+      tanggal: tanggalIso,
+      jamKe: jam.toUpperCase(),
+      keterangan: String(payload.keterangan || '').trim(),
+      status: 'Disetujui',
+    }));
+
+    this.db.labkomBookings!.unshift(...created);
+    this.batchedWrites++;
+    this.persist();
+    return { ok: true, created };
+  }
+
+  public createLabkomBulkBooking(payload: {
+    kampus: LabkomKampus;
+    email: string;
+    namaPeminjam: string;
+    guru: string;
+    kelas: string;
+    lab: string;
+    mapel: string;
+    tanggalList: string[];
+    jamKe: string | string[];
+    keterangan?: string;
+  }): { ok: boolean; error?: string; conflicts?: string[]; createdCount?: number } {
+    this.ensureLabkomInitialized();
+    const kampus: LabkomKampus = payload.kampus === 'PUTRI' ? 'PUTRI' : 'PUTRA';
+    const lab = String(payload.lab || '').trim().toUpperCase();
+    const jamList = (
+      Array.isArray(payload.jamKe)
+        ? payload.jamKe
+        : String(payload.jamKe || '')
+            .split(',')
+            .map((j) => j.trim())
+    ).filter(Boolean);
+
+    const tglList = (payload.tanggalList || [])
+      .map((t) => parseLabkomTanggalToIso(t))
+      .filter(Boolean);
+
+    if (!lab || tglList.length === 0 || jamList.length === 0) {
+      return { ok: false, error: 'Lengkapi lokasi, rentang tanggal/hari, dan jam aktif.' };
+    }
+
+    const conflicts: string[] = [];
+    for (const tgl of tglList) {
+      for (const jam of jamList) {
+        const msg = this.checkLabkomConflict(kampus, lab, tgl, jam);
+        if (msg) conflicts.push(msg);
+      }
+    }
+
+    if (conflicts.length > 0) {
+      return {
+        ok: false,
+        conflicts,
+        error: `Terdapat ${conflicts.length} slot bentrok:\n${conflicts.slice(0, 6).join('\n')}${conflicts.length > 6 ? '\n...' : ''}`,
+      };
+    }
+
+    const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const created: LabkomBooking[] = [];
+    let counter = 0;
+    for (const tgl of tglList) {
+      for (const jam of jamList) {
+        created.push({
+          id: `TRX-M-${Date.now()}-${counter++}-${Math.floor(Math.random() * 1000)}`,
+          timestamp: ts,
+          kampus,
+          email: String(payload.email || '').trim(),
+          namaPeminjam: String(payload.namaPeminjam || '').trim(),
+          guru: String(payload.guru || '-').trim(),
+          kelas: String(payload.kelas || '-').trim(),
+          mapel: String(payload.mapel || '-').trim(),
+          lab,
+          tanggal: tgl,
+          jamKe: jam.toUpperCase(),
+          keterangan: String(payload.keterangan || '').trim(),
+          status: 'Disetujui',
+        });
+      }
+    }
+
+    this.db.labkomBookings!.unshift(...created);
+    this.batchedWrites++;
+    this.persist();
+    return { ok: true, createdCount: created.length };
+  }
+
+  public updateLabkomBooking(
+    id: string,
+    payload: {
+      kampus?: LabkomKampus;
+      email?: string;
+      namaPeminjam?: string;
+      guru?: string;
+      kelas?: string;
+      mapel?: string;
+      lab?: string;
+      tanggal?: string;
+      jamKe?: string;
+      keterangan?: string;
+      status?: string;
+    },
+  ): { ok: boolean; error?: string; booking?: LabkomBooking } {
+    this.ensureLabkomInitialized();
+    const idx = this.db.labkomBookings!.findIndex((b) => b.id === id);
+    if (idx < 0) {
+      return { ok: false, error: 'Data peminjaman tidak ditemukan.' };
+    }
+    const existing = this.db.labkomBookings![idx];
+
+    const kampus: LabkomKampus =
+      payload.kampus !== undefined
+        ? payload.kampus === 'PUTRI'
+          ? 'PUTRI'
+          : 'PUTRA'
+        : existing.kampus;
+    const lab =
+      payload.lab !== undefined
+        ? String(payload.lab || '').trim().toUpperCase()
+        : existing.lab;
+    const tanggal =
+      payload.tanggal !== undefined
+        ? parseLabkomTanggalToIso(String(payload.tanggal || ''))
+        : existing.tanggal;
+    const jamKe =
+      payload.jamKe !== undefined
+        ? String(payload.jamKe || '').trim().toUpperCase()
+        : existing.jamKe;
+
+    if (!lab || !tanggal || !jamKe) {
+      return { ok: false, error: 'Lokasi, tanggal, dan jam ke wajib diisi dengan valid.' };
+    }
+
+    // Check fixed schedule conflict
+    const dayNum = (() => {
+      const [y, m, d] = tanggal.split('-').map(Number);
+      const dt = new Date(y, (m || 1) - 1, d || 1);
+      const day = dt.getDay();
+      return day === 0 ? 7 : day;
+    })();
+    const fixedConflict = this.db.labkomFixedSchedules!.find(
+      (f) =>
+        f.kampus === kampus &&
+        f.hari === dayNum &&
+        f.lab.toUpperCase() === lab &&
+        f.jamKe.toUpperCase() === jamKe,
+    );
+    if (fixedConflict) {
+      return {
+        ok: false,
+        error: `Slot bentrok dengan Jadwal Tetap (${fixedConflict.mapel} - ${fixedConflict.guru}) pada ${tanggal} Jam ${jamKe}.`,
+      };
+    }
+
+    // Check booking conflict excluding this booking id
+    const bookConflict = this.db.labkomBookings!.find(
+      (b) =>
+        b.id !== id &&
+        b.kampus === kampus &&
+        b.lab.toUpperCase() === lab &&
+        b.tanggal === tanggal &&
+        b.jamKe.toUpperCase() === jamKe,
+    );
+    if (bookConflict) {
+      return {
+        ok: false,
+        error: `Slot sudah dipinjam oleh ${bookConflict.namaPeminjam || bookConflict.guru} (${bookConflict.mapel}) pada ${tanggal} Jam ${jamKe}.`,
+      };
+    }
+
+    const updated: LabkomBooking = {
+      ...existing,
+      kampus,
+      email: payload.email !== undefined ? String(payload.email || '').trim() : existing.email,
+      namaPeminjam:
+        payload.namaPeminjam !== undefined
+          ? String(payload.namaPeminjam || '').trim() || '-'
+          : existing.namaPeminjam,
+      guru: payload.guru !== undefined ? String(payload.guru || '').trim() || '-' : existing.guru,
+      kelas: payload.kelas !== undefined ? String(payload.kelas || '').trim() || '-' : existing.kelas,
+      mapel: payload.mapel !== undefined ? String(payload.mapel || '').trim() || '-' : existing.mapel,
+      lab,
+      tanggal,
+      jamKe,
+      keterangan:
+        payload.keterangan !== undefined ? String(payload.keterangan || '').trim() : existing.keterangan,
+      status: payload.status !== undefined ? String(payload.status || '').trim() || 'Disetujui' : existing.status,
+    };
+
+    this.db.labkomBookings![idx] = updated;
+    this.batchedWrites++;
+    this.persist();
+    return { ok: true, booking: updated };
+  }
+
+  public deleteLabkomBooking(id: string): boolean {
+    this.ensureLabkomInitialized();
+    const before = this.db.labkomBookings!.length;
+    this.db.labkomBookings = this.db.labkomBookings!.filter((b) => b.id !== id);
+    if (this.db.labkomBookings.length !== before) {
+      this.batchedWrites++;
+      this.persist();
+      return true;
+    }
+    return false;
+  }
+
+  public deleteLabkomBookingsBulk(ids: string[]): { deleted: number } {
+    this.ensureLabkomInitialized();
+    const idSet = new Set(ids);
+    const before = this.db.labkomBookings!.length;
+    this.db.labkomBookings = this.db.labkomBookings!.filter((b) => !idSet.has(b.id));
+    const deleted = before - this.db.labkomBookings.length;
+    if (deleted > 0) {
+      this.batchedWrites++;
+      this.persist();
+    }
+    return { deleted };
+  }
+
+  public importLabkomFromCsvOrRows(payload: {
+    csvText?: string;
+    rows?: Array<Partial<LabkomBooking>>;
+    kampus?: LabkomKampus | 'AUTO';
+    replaceKampus?: boolean;
+    mode?: 'append' | 'upsert' | 'replace';
+    autoSyncMasters?: boolean;
+  }): { ok: boolean; added: number; updated: number; skipped: number } {
+    this.ensureLabkomInitialized();
+    const forcedKampus: LabkomKampus | undefined =
+      payload.kampus === 'PUTRI' ? 'PUTRI' : payload.kampus === 'PUTRA' ? 'PUTRA' : undefined;
+
+    let incoming: LabkomBooking[] = [];
+    if (payload.csvText) {
+      incoming = parseLabkomCsvContent(payload.csvText, forcedKampus);
+    } else if (Array.isArray(payload.rows)) {
+      const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
+      incoming = payload.rows
+        .map((r, i) => {
+          const tgl = parseLabkomTanggalToIso(String(r.tanggal || ''));
+          const lab = String(r.lab || '').trim().toUpperCase();
+          const jam = String(r.jamKe || '').trim().toUpperCase();
+          if (!tgl || !lab || !jam) return null;
+          const rowKampusRaw = String(r.kampus || '').trim().toUpperCase();
+          const resolvedKampus: LabkomKampus =
+            rowKampusRaw === 'PUTRI'
+              ? 'PUTRI'
+              : rowKampusRaw === 'PUTRA'
+              ? 'PUTRA'
+              : forcedKampus || 'PUTRA';
+          return {
+            id: String(r.id || '').trim() || `TRX-IMP-${Date.now()}-${i}`,
+            timestamp: String(r.timestamp || '').trim() || ts,
+            kampus: resolvedKampus,
+            email: String(r.email || '').trim(),
+            namaPeminjam: String(r.namaPeminjam || r.guru || '-').trim(),
+            guru: String(r.guru || '-').trim(),
+            kelas: String(r.kelas || '-').trim(),
+            mapel: String(r.mapel || '-').trim(),
+            lab,
+            tanggal: tgl,
+            jamKe: jam,
+            keterangan: String(r.keterangan || '').trim(),
+            status: String(r.status || 'Disetujui').trim(),
+          };
+        })
+        .filter((x): x is LabkomBooking => Boolean(x));
+    }
+
+    const effectiveMode = payload.replaceKampus ? 'replace' : payload.mode || 'append';
+    if (effectiveMode === 'replace') {
+      const targetKampuses = new Set<LabkomKampus>(incoming.map((x) => x.kampus));
+      if (forcedKampus) targetKampuses.add(forcedKampus);
+      if (targetKampuses.size > 0) {
+        this.db.labkomBookings = this.db.labkomBookings!.filter(
+          (b) => !targetKampuses.has(b.kampus),
+        );
+      }
+    }
+
+    const byIdIndex = new Map<string, number>();
+    const bySlotIndex = new Map<string, number>();
+    this.db.labkomBookings!.forEach((b, idx) => {
+      byIdIndex.set(b.id, idx);
+      bySlotIndex.set(`${b.kampus}|${b.lab}|${b.tanggal}|${b.jamKe}`, idx);
+    });
+
+    let added = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const item of incoming) {
+      const slotKey = `${item.kampus}|${item.lab}|${item.tanggal}|${item.jamKe}`;
+      const existingIdx = byIdIndex.get(item.id) ?? bySlotIndex.get(slotKey);
+
+      if (existingIdx !== undefined) {
+        if (effectiveMode === 'upsert') {
+          const prev = this.db.labkomBookings![existingIdx];
+          const mergedItem: LabkomBooking = {
+            ...item,
+            id: prev.id,
+          };
+          this.db.labkomBookings![existingIdx] = mergedItem;
+          bySlotIndex.set(slotKey, existingIdx);
+          updated++;
+        } else {
+          skipped++;
+        }
+        continue;
+      }
+
+      const newIdx = this.db.labkomBookings!.length;
+      this.db.labkomBookings!.push(item);
+      byIdIndex.set(item.id, newIdx);
+      bySlotIndex.set(slotKey, newIdx);
+      added++;
+    }
+
+    if (payload.autoSyncMasters) {
+      this.syncLabkomMastersFromBookings();
+    } else {
+      this.batchedWrites++;
+      this.persist();
+    }
+
+    return { ok: true, added, updated, skipped };
+  }
+
+  public createLabkomFixedSchedule(payload: {
+    kampus: LabkomKampus;
+    hari: number;
+    lab: string;
+    guru: string;
+    kelas: string;
+    mapel: string;
+    jamKe: string | string[];
+  }): { ok: boolean; error?: string; created?: LabkomFixedSchedule[] } {
+    this.ensureLabkomInitialized();
+    const kampus: LabkomKampus = payload.kampus === 'PUTRI' ? 'PUTRI' : 'PUTRA';
+    const hari = Number(payload.hari);
+    const lab = String(payload.lab || '').trim().toUpperCase();
+    const jamList = (
+      Array.isArray(payload.jamKe)
+        ? payload.jamKe
+        : String(payload.jamKe || '')
+            .split(',')
+            .map((j) => j.trim())
+    ).filter(Boolean);
+
+    if (!hari || hari < 1 || hari > 7 || !lab || jamList.length === 0) {
+      return { ok: false, error: 'Lengkapi kampus, hari (1-7), lokasi, dan minimal 1 jam.' };
+    }
+
+    const created: LabkomFixedSchedule[] = [];
+    for (let i = 0; i < jamList.length; i++) {
+      const jam = jamList[i].toUpperCase();
+      const exists = this.db.labkomFixedSchedules!.some(
+        (f) => f.kampus === kampus && f.hari === hari && f.lab === lab && f.jamKe === jam,
+      );
+      if (exists) continue;
+      const item: LabkomFixedSchedule = {
+        id: `JT-${Date.now()}-${i}-${Math.floor(Math.random() * 1000)}`,
+        hari,
+        kampus,
+        guru: String(payload.guru || '-').trim(),
+        kelas: String(payload.kelas || '-').trim(),
+        mapel: String(payload.mapel || '-').trim(),
+        lab,
+        jamKe: jam,
+      };
+      this.db.labkomFixedSchedules!.push(item);
+      created.push(item);
+    }
+
+    this.batchedWrites++;
+    this.persist();
+    return { ok: true, created };
+  }
+
+  public deleteLabkomFixedSchedule(id: string): boolean {
+    this.ensureLabkomInitialized();
+    const before = this.db.labkomFixedSchedules!.length;
+    this.db.labkomFixedSchedules = this.db.labkomFixedSchedules!.filter((f) => f.id !== id);
+    if (this.db.labkomFixedSchedules.length !== before) {
+      this.batchedWrites++;
+      this.persist();
+      return true;
+    }
+    return false;
+  }
+
+  public saveLabkomPloting(payload: {
+    kampus: LabkomKampus;
+    lokasi: string;
+    noPc: number;
+    namaSiswa: string;
+    kelas: string;
+  }): { ok: boolean; ploting?: LabkomPloting | null } {
+    this.ensureLabkomInitialized();
+    const kampus: LabkomKampus = payload.kampus === 'PUTRI' ? 'PUTRI' : 'PUTRA';
+    const lokasi = String(payload.lokasi || '').trim().toUpperCase();
+    const noPc = Number(payload.noPc);
+    if (!lokasi || !noPc || noPc < 1 || noPc > 60) {
+      return { ok: false };
+    }
+
+    // Clear existing entry at this PC / Chair position
+    this.db.labkomPlotings = this.db.labkomPlotings!.filter(
+      (p) => !(p.kampus === kampus && p.lokasi === lokasi && p.noPc === noPc),
+    );
+
+    const nama = String(payload.namaSiswa || '').trim();
+    const kelas = String(payload.kelas || '').trim();
+    if (!nama || nama === '-' || nama === '--KOSONGKAN--') {
+      this.batchedWrites++;
+      this.persist();
+      return { ok: true, ploting: null };
+    }
+
+    const entry: LabkomPloting = {
+      id: `PLT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      kampus,
+      lokasi,
+      noPc,
+      namaSiswa: nama,
+      kelas: kelas || '-',
+    };
+    this.db.labkomPlotings!.push(entry);
+    this.batchedWrites++;
+    this.persist();
+    return { ok: true, ploting: entry };
+  }
+
+  public deleteLabkomPloting(id: string): boolean {
+    this.ensureLabkomInitialized();
+    const before = this.db.labkomPlotings!.length;
+    this.db.labkomPlotings = this.db.labkomPlotings!.filter((p) => p.id !== id);
+    if (this.db.labkomPlotings.length !== before) {
+      this.batchedWrites++;
+      this.persist();
+      return true;
+    }
+    return false;
+  }
+
+  private normalizeLabkomMasterValue(kategori: LabkomMasterKategori, nilai: string): string {
+    const clean = String(nilai || '').trim();
+    if (!clean) return '';
+    if (
+      kategori === 'LAB' ||
+      kategori === 'RUANGAN' ||
+      kategori === 'JAM' ||
+      kategori === 'WAKTU_RUANG'
+    ) {
+      return clean.toUpperCase();
+    }
+    return clean;
+  }
+
+  private cascadeUpdateLabkomMasterReference(
+    kategori: LabkomMasterKategori,
+    oldNilai: string,
+    newNilai: string,
+  ): { updatedBookings: number; updatedFixed: number; updatedPlotings: number } {
+    const oldNorm = oldNilai.trim().toUpperCase();
+    const cleanNew = this.normalizeLabkomMasterValue(kategori, newNilai);
+    if (!oldNorm || !cleanNew || oldNorm === cleanNew.toUpperCase()) {
+      return { updatedBookings: 0, updatedFixed: 0, updatedPlotings: 0 };
+    }
+
+    let updatedBookings = 0;
+    let updatedFixed = 0;
+    let updatedPlotings = 0;
+
+    for (const b of this.db.labkomBookings || []) {
+      if (kategori === 'GURU' && (b.guru || '').trim().toUpperCase() === oldNorm) {
+        b.guru = cleanNew;
+        updatedBookings++;
+      } else if (kategori === 'KELAS' && (b.kelas || '').trim().toUpperCase() === oldNorm) {
+        b.kelas = cleanNew;
+        updatedBookings++;
+      } else if (kategori === 'MAPEL' && (b.mapel || '').trim().toUpperCase() === oldNorm) {
+        b.mapel = cleanNew;
+        updatedBookings++;
+      } else if (
+        (kategori === 'LAB' || kategori === 'RUANGAN') &&
+        (b.lab || '').trim().toUpperCase() === oldNorm
+      ) {
+        b.lab = cleanNew.toUpperCase();
+        updatedBookings++;
+      } else if (
+        (kategori === 'JAM' || kategori === 'WAKTU_RUANG') &&
+        (b.jamKe || '').trim().toUpperCase() === oldNorm
+      ) {
+        b.jamKe = cleanNew.toUpperCase();
+        updatedBookings++;
+      }
+    }
+
+    for (const f of this.db.labkomFixedSchedules || []) {
+      if (kategori === 'GURU' && (f.guru || '').trim().toUpperCase() === oldNorm) {
+        f.guru = cleanNew;
+        updatedFixed++;
+      } else if (kategori === 'KELAS' && (f.kelas || '').trim().toUpperCase() === oldNorm) {
+        f.kelas = cleanNew;
+        updatedFixed++;
+      } else if (kategori === 'MAPEL' && (f.mapel || '').trim().toUpperCase() === oldNorm) {
+        f.mapel = cleanNew;
+        updatedFixed++;
+      } else if (
+        (kategori === 'LAB' || kategori === 'RUANGAN') &&
+        (f.lab || '').trim().toUpperCase() === oldNorm
+      ) {
+        f.lab = cleanNew.toUpperCase();
+        updatedFixed++;
+      } else if (
+        (kategori === 'JAM' || kategori === 'WAKTU_RUANG') &&
+        (f.jamKe || '').trim().toUpperCase() === oldNorm
+      ) {
+        f.jamKe = cleanNew.toUpperCase();
+        updatedFixed++;
+      }
+    }
+
+    for (const p of this.db.labkomPlotings || []) {
+      if (kategori === 'KELAS' && (p.kelas || '').trim().toUpperCase() === oldNorm) {
+        p.kelas = cleanNew;
+        updatedPlotings++;
+      } else if (
+        (kategori === 'LAB' || kategori === 'RUANGAN') &&
+        (p.lokasi || '').trim().toUpperCase() === oldNorm
+      ) {
+        p.lokasi = cleanNew.toUpperCase();
+        updatedPlotings++;
+      }
+    }
+
+    return { updatedBookings, updatedFixed, updatedPlotings };
+  }
+
+  public saveLabkomMaster(payload: {
+    kategori: LabkomMasterKategori;
+    nilai: string;
+  }): { ok: boolean; item?: LabkomMasterItem; error?: string } {
+    this.ensureLabkomInitialized();
+    const normalizedNilai = this.normalizeLabkomMasterValue(payload.kategori, payload.nilai);
+    if (!normalizedNilai) return { ok: false, error: 'Nilai master data wajib diisi.' };
+
+    const exists = this.db.labkomMasters!.some(
+      (m) =>
+        m.kategori === payload.kategori &&
+        m.nilai.trim().toUpperCase() === normalizedNilai.toUpperCase(),
+    );
+    if (exists) {
+      return { ok: false, error: `Data "${normalizedNilai}" sudah ada pada kategori ${payload.kategori}.` };
+    }
+
+    const item: LabkomMasterItem = {
+      id: `LM_${payload.kategori}_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      kategori: payload.kategori,
+      nilai: normalizedNilai,
+    };
+    this.db.labkomMasters!.push(item);
+    this.batchedWrites++;
+    this.persist();
+    return { ok: true, item };
+  }
+
+  public updateLabkomMaster(
+    id: string,
+    nilai: string,
+    options?: { cascade?: boolean },
+  ): {
+    item: LabkomMasterItem;
+    updatedBookings: number;
+    updatedFixed: number;
+    updatedPlotings: number;
+  } | null {
+    this.ensureLabkomInitialized();
+    const cleanInput = String(nilai || '').trim();
+    if (!cleanInput) return null;
+
+    let idx = this.db.labkomMasters!.findIndex((m) => m.id === id);
+    if (idx < 0 && id.startsWith('LM_T_')) {
+      const teacherId = id.slice(5);
+      const t = this.db.teachers.find((item) => item.id === teacherId);
+      if (t) {
+        this.db.labkomMasters!.push({ id, kategori: 'GURU', nilai: t.nama });
+        idx = this.db.labkomMasters!.length - 1;
+      }
+    }
+    if (idx < 0) return null;
+
+    const current = this.db.labkomMasters![idx];
+    const oldNilai = current.nilai;
+    const cleanNew = this.normalizeLabkomMasterValue(current.kategori, cleanInput);
+    if (!cleanNew) return null;
+
+    const duplicateIdx = this.db.labkomMasters!.findIndex(
+      (m, i) =>
+        i !== idx &&
+        m.kategori === current.kategori &&
+        m.nilai.trim().toUpperCase() === cleanNew.toUpperCase(),
+    );
+
+    let resultItem: LabkomMasterItem;
+    if (duplicateIdx >= 0) {
+      // Merge into existing master item with the target name
+      resultItem = this.db.labkomMasters![duplicateIdx];
+      this.db.labkomMasters!.splice(idx, 1);
+    } else {
+      resultItem = { ...current, nilai: cleanNew };
+      this.db.labkomMasters![idx] = resultItem;
+    }
+
+    let cascadeCounts = { updatedBookings: 0, updatedFixed: 0, updatedPlotings: 0 };
+    if (options?.cascade !== false) {
+      cascadeCounts = this.cascadeUpdateLabkomMasterReference(
+        current.kategori,
+        oldNilai,
+        cleanNew,
+      );
+    }
+
+    this.batchedWrites++;
+    this.persist();
+    return {
+      item: resultItem,
+      ...cascadeCounts,
+    };
+  }
+
+  public deleteLabkomMaster(id: string): boolean {
+    this.ensureLabkomInitialized();
+    const before = this.db.labkomMasters!.length;
+    this.db.labkomMasters = this.db.labkomMasters!.filter((m) => m.id !== id);
+    if (this.db.labkomMasters.length !== before) {
+      this.batchedWrites++;
+      this.persist();
+      return true;
+    }
+    return false;
+  }
+
+  public syncLabkomMastersFromBookings(): {
+    ok: boolean;
+    added: number;
+    total: number;
+    byKategori: Record<LabkomMasterKategori, number>;
+  } {
+    this.ensureLabkomInitialized();
+    const byKategori: Record<LabkomMasterKategori, number> = {
+      GURU: 0,
+      KELAS: 0,
+      MAPEL: 0,
+      LAB: 0,
+      RUANGAN: 0,
+      JAM: 0,
+      WAKTU_RUANG: 0,
+    };
+
+    const existingKeys = new Set(
+      this.db.labkomMasters!.map((m) => `${m.kategori}|${m.nilai.trim().toUpperCase()}`),
+    );
+    let seq = 0;
+
+    const addIfMissing = (kategori: LabkomMasterKategori, rawVal: string) => {
+      const clean = this.normalizeLabkomMasterValue(kategori, rawVal);
+      if (!clean || clean === '-' || clean === 'TANPA KELAS') return;
+      const key = `${kategori}|${clean.toUpperCase()}`;
+      if (existingKeys.has(key)) return;
+      existingKeys.add(key);
+      this.db.labkomMasters!.push({
+        id: `LM_${kategori}_SYNC_${Date.now()}_${seq++}`,
+        kategori,
+        nilai: clean,
+      });
+      byKategori[kategori]++;
+    };
+
+    for (const b of this.db.labkomBookings || []) {
+      if (b.guru) addIfMissing('GURU', b.guru);
+      if (b.kelas) addIfMissing('KELAS', b.kelas);
+      if (b.mapel) addIfMissing('MAPEL', b.mapel);
+      if (b.lab) addIfMissing(classifyLocationCategory(b.lab), b.lab);
+      if (b.jamKe) addIfMissing(classifyTimeCategory(b.jamKe), b.jamKe);
+    }
+
+    for (const f of this.db.labkomFixedSchedules || []) {
+      if (f.guru) addIfMissing('GURU', f.guru);
+      if (f.kelas) addIfMissing('KELAS', f.kelas);
+      if (f.mapel) addIfMissing('MAPEL', f.mapel);
+      if (f.lab) addIfMissing(classifyLocationCategory(f.lab), f.lab);
+      if (f.jamKe) addIfMissing(classifyTimeCategory(f.jamKe), f.jamKe);
+    }
+
+    for (const t of this.db.teachers) {
+      if (t.peran !== 'Admin Super' && t.nama) addIfMissing('GURU', t.nama);
+    }
+    for (const s of this.db.students) {
+      if (s.kelas) addIfMissing('KELAS', s.kelas);
+    }
+
+    const beforeBaseline = this.db.labkomMasters!.length;
+    this.db.labkomMasters = ensureBaselineMasters(this.db.labkomMasters!);
+    const baselineAdded = this.db.labkomMasters.length - beforeBaseline;
+
+    const added =
+      Object.values(byKategori).reduce((acc, v) => acc + v, 0) + Math.max(0, baselineAdded);
+    if (added > 0) {
+      this.batchedWrites++;
+      this.persist();
+    }
+
+    return {
+      ok: true,
+      added,
+      total: this.db.labkomMasters!.length,
+      byKategori,
+    };
+  }
+
+  public importLabkomMastersBulk(payload: {
+    items: Array<{
+      id?: string;
+      kategori: LabkomMasterKategori;
+      nilai: string;
+      renameFrom?: string;
+    }>;
+    mode?: 'merge' | 'replace';
+    cascade?: boolean;
+  }): {
+    ok: boolean;
+    added: number;
+    renamed: number;
+    updatedBookings: number;
+    updatedFixed: number;
+    updatedPlotings: number;
+    total: number;
+    error?: string;
+  } {
+    this.ensureLabkomInitialized();
+    const validCategories = new Set<LabkomMasterKategori>([
+      'GURU',
+      'KELAS',
+      'MAPEL',
+      'LAB',
+      'RUANGAN',
+      'JAM',
+      'WAKTU_RUANG',
+    ]);
+
+    const rawItems = Array.isArray(payload.items) ? payload.items : [];
+    const cleaned = rawItems
+      .map((row) => {
+        const kat = String(row.kategori || '').trim().toUpperCase() as LabkomMasterKategori;
+        if (!validCategories.has(kat)) return null;
+        const nilai = this.normalizeLabkomMasterValue(kat, row.nilai);
+        if (!nilai || nilai === '-') return null;
+        const renameFrom = row.renameFrom ? String(row.renameFrom).trim() : '';
+        return {
+          id: row.id ? String(row.id).trim() : '',
+          kategori: kat,
+          nilai,
+          renameFrom,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => Boolean(x));
+
+    if (cleaned.length === 0) {
+      return {
+        ok: false,
+        added: 0,
+        renamed: 0,
+        updatedBookings: 0,
+        updatedFixed: 0,
+        updatedPlotings: 0,
+        total: this.db.labkomMasters!.length,
+        error: 'Tidak ada baris Master Data yang valid pada file yang diunggah.',
+      };
+    }
+
+    const mode = payload.mode === 'replace' ? 'replace' : 'merge';
+    const shouldCascade = payload.cascade !== false;
+    let renamed = 0;
+    let updatedBookings = 0;
+    let updatedFixed = 0;
+    let updatedPlotings = 0;
+    let added = 0;
+    let seq = 0;
+
+    // 1. Apply any explicit or ID-matched renames
+    for (const row of cleaned) {
+      let oldName = row.renameFrom;
+      if (!oldName && row.id) {
+        const matched = this.db.labkomMasters!.find(
+          (m) => m.id === row.id && m.kategori === row.kategori,
+        );
+        if (matched && matched.nilai.trim().toUpperCase() !== row.nilai.toUpperCase()) {
+          oldName = matched.nilai;
+        }
+      }
+      if (oldName && oldName.trim().toUpperCase() !== row.nilai.toUpperCase()) {
+        renamed++;
+        // Update matching master entry if exists
+        const oldUpper = oldName.trim().toUpperCase();
+        this.db.labkomMasters = this.db.labkomMasters!.map((m) =>
+          m.kategori === row.kategori && m.nilai.trim().toUpperCase() === oldUpper
+            ? { ...m, nilai: row.nilai }
+            : m,
+        );
+        if (shouldCascade) {
+          const c = this.cascadeUpdateLabkomMasterReference(row.kategori, oldName, row.nilai);
+          updatedBookings += c.updatedBookings;
+          updatedFixed += c.updatedFixed;
+          updatedPlotings += c.updatedPlotings;
+        }
+      }
+    }
+
+    if (mode === 'replace') {
+      const uploadedCats = new Set(cleaned.map((c) => c.kategori));
+      const preservedOtherCats = this.db.labkomMasters!.filter(
+        (m) => !uploadedCats.has(m.kategori),
+      );
+      const seenKey = new Set<string>();
+      const rebuilt: LabkomMasterItem[] = [...preservedOtherCats];
+      for (const m of rebuilt) {
+        seenKey.add(`${m.kategori}|${m.nilai.trim().toUpperCase()}`);
+      }
+      for (const row of cleaned) {
+        const key = `${row.kategori}|${row.nilai.toUpperCase()}`;
+        if (seenKey.has(key)) continue;
+        seenKey.add(key);
+        const existingId =
+          row.id &&
+          !row.id.startsWith('BARU') &&
+          !row.id.startsWith('AUTO') &&
+          !rebuilt.some((x) => x.id === row.id)
+            ? row.id
+            : `LM_${row.kategori}_IMP_${Date.now()}_${seq++}`;
+        rebuilt.push({
+          id: existingId,
+          kategori: row.kategori,
+          nilai: row.nilai,
+        });
+        added++;
+      }
+      this.db.labkomMasters = rebuilt;
+    } else {
+      const seenKey = new Set(
+        this.db.labkomMasters!.map((m) => `${m.kategori}|${m.nilai.trim().toUpperCase()}`),
+      );
+      for (const row of cleaned) {
+        const key = `${row.kategori}|${row.nilai.toUpperCase()}`;
+        if (seenKey.has(key)) continue;
+        seenKey.add(key);
+        this.db.labkomMasters!.push({
+          id: `LM_${row.kategori}_IMP_${Date.now()}_${seq++}`,
+          kategori: row.kategori,
+          nilai: row.nilai,
+        });
+        added++;
+      }
+    }
+
+    this.batchedWrites++;
+    this.persist();
+    return {
+      ok: true,
+      added,
+      renamed,
+      updatedBookings,
+      updatedFixed,
+      updatedPlotings,
+      total: this.db.labkomMasters!.length,
+    };
+  }
+
+  public updateLabkomSettings(payload: {
+    broadcastTemplate?: string;
+    telegramBotToken?: string;
+    telegramChatId?: string;
+  }) {
+    if (payload.broadcastTemplate !== undefined) {
+      this.db.settings.labkomBroadcastTemplate =
+        payload.broadcastTemplate.trim() || DEFAULT_LABKOM_BROADCAST_TEMPLATE;
+    }
+    if (payload.telegramBotToken !== undefined) {
+      this.db.settings.labkomTelegramToken = payload.telegramBotToken.trim();
+    }
+    if (payload.telegramChatId !== undefined) {
+      this.db.settings.labkomTelegramChatId = payload.telegramChatId.trim();
+    }
+    this.batchedWrites++;
+    this.persist();
+    return {
+      ok: true,
+      broadcastTemplate:
+        this.db.settings.labkomBroadcastTemplate || DEFAULT_LABKOM_BROADCAST_TEMPLATE,
+      telegramConfigured: Boolean(
+        (process.env.TELEGRAM_BOT_TOKEN || this.db.settings.labkomTelegramToken) &&
+          (process.env.TELEGRAM_CHAT_ID || this.db.settings.labkomTelegramChatId),
+      ),
+    };
+  }
+
+  public async sendLabkomTelegram(text: string): Promise<{
+    ok: boolean;
+    needsConfig?: boolean;
+    message: string;
+  }> {
+    const token = process.env.TELEGRAM_BOT_TOKEN || this.db.settings.labkomTelegramToken || '';
+    const chatId = process.env.TELEGRAM_CHAT_ID || this.db.settings.labkomTelegramChatId || '';
+
+    if (!token || !chatId) {
+      return {
+        ok: false,
+        needsConfig: true,
+        message:
+          'Bot Token & Chat ID Telegram belum dikonfigurasi. Atur di Pengaturan Bot Telegram atau gunakan tombol Salin Teks.',
+      };
+    }
+
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+          parse_mode: 'Markdown',
+        }),
+      });
+      if (!response.ok) {
+        const errBody = await response.text().catch(() => '');
+        return {
+          ok: false,
+          message: `Telegram API merespons status ${response.status}${errBody ? `: ${errBody}` : ''}`,
+        };
+      }
+      return { ok: true, message: 'Broadcast jadwal berhasil dikirim ke Telegram.' };
+    } catch (err) {
+      return {
+        ok: false,
+        message: `Gagal terhubung ke Telegram API: ${(err as Error).message}`,
+      };
+    }
   }
 }
 

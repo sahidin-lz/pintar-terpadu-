@@ -40,6 +40,7 @@ import {
   printHtmlDocument,
   shiftDateStr,
 } from '../utils/exportHelpers';
+import { getAcademicSemester } from '../utils/semesterHelpers';
 import { loadSubTab, saveSubTab } from '../utils/sessionPersistence';
 
 interface Props {
@@ -102,7 +103,9 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
   const [repDivisi, setRepDivisi] = useState('Akademik');
   const [repParam1, setRepParam1] = useState('SEMUA');
   const [repParam2, setRepParam2] = useState('SEMUA MAPEL');
-  const [repSemester, setRepSemester] = useState('Ganjil (Jul-Des)');
+  const [repSemester, setRepSemester] = useState(() =>
+    getAcademicSemester().semester === 'Ganjil' ? 'Ganjil (Jul-Des)' : 'Genap (Jan-Jun)',
+  );
   const [individuStudents, setIndividuStudents] = useState<string[]>([]);
   const [reportResult, setReportResult] = useState<{
     laporan: string[][];
@@ -653,18 +656,32 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
           </p>
         </div>
 
-        <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1">
+        <div className="grid grid-cols-3 sm:inline-flex gap-1 rounded-xl border border-slate-200 bg-slate-100 p-1 w-full sm:w-auto">
           {[
-            { id: 'monitoring', label: 'Matriks Real-Time' },
-            { id: 'statistik', label: 'Dasbor Analisis & Ringkasan Bulanan' },
-            { id: 'download', label: 'Pusat Unduh PDF/CSV' },
+            {
+              id: 'monitoring',
+              label: 'Matriks Live',
+              activeCls: 'bg-teal-600 text-white shadow-sm',
+            },
+            {
+              id: 'statistik',
+              label: 'Analisis Bulanan',
+              activeCls: 'bg-indigo-600 text-white shadow-sm',
+            },
+            {
+              id: 'download',
+              label: 'Unduh PDF/CSV',
+              activeCls: 'bg-emerald-600 text-white shadow-sm',
+            },
           ].map((t) => (
             <button
               key={t.id}
               type="button"
               onClick={() => setSubTab(t.id as typeof subTab)}
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-colors ${
-                subTab === t.id ? 'bg-teal-700 text-white' : 'text-slate-600 hover:text-slate-900'
+              className={`rounded-lg px-2 sm:px-3.5 py-2 text-[11px] sm:text-xs font-semibold whitespace-nowrap truncate transition-colors ${
+                subTab === t.id
+                  ? t.activeCls
+                  : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
               }`}
             >
               {t.label}
@@ -1745,6 +1762,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                     onChange={(e) => setRepSemester(e.target.value)}
                     className="h-9 w-full rounded-lg border border-slate-200 px-2.5 text-xs font-medium"
                   >
+                    <option value="Semua Semester">Semua Semester (Ganjil &amp; Genap)</option>
                     <option value="Ganjil (Jul-Des)">Ganjil (Jul - Des)</option>
                     <option value="Genap (Jan-Jun)">Genap (Jan - Jun)</option>
                     {NAMA_BULAN_INDO.map((bln, i) => (
