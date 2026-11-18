@@ -90,6 +90,20 @@ export function buildWorkbookFromSpec(spec: DatabaseWorkbookSpec): XLSX.WorkBook
     );
     const ws = XLSX.utils.aoa_to_sheet(cleanRows);
     ws['!cols'] = computeColWidths(cleanRows);
+    const range = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null;
+    if (range) {
+      for (let r = range.s.r; r <= range.e.r; r++) {
+        for (let c = range.s.c; c <= range.e.c; c++) {
+          const addr = XLSX.utils.encode_cell({ r, c });
+          const cell = ws[addr];
+          if (cell) {
+            cell.t = 's';
+            cell.z = '@';
+            cell.v = String(cell.v ?? '');
+          }
+        }
+      }
+    }
     XLSX.utils.book_append_sheet(wb, ws, sheet.name);
   }
   return wb;

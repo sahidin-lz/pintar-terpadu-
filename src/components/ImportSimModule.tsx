@@ -47,6 +47,7 @@ interface ImportSimModuleProps {
   kelasList?: string[];
   rooms?: RoomMapping[];
   onDataUpdated: () => void;
+  onExplicitReset?: () => void;
   onAdminLogin?: (teacher: TeacherPublic) => void;
   notify: (msg: string, type?: 'success' | 'error' | 'info') => void;
 }
@@ -54,6 +55,27 @@ interface ImportSimModuleProps {
 type AdminTab = 'excel_upload' | 'pegawai_amanah' | 'kelola';
 
 const AMANAH_ROLES: UserRole[] = ['Guru', 'Wali Kelas', 'Musyrif', 'Musyrifah', 'Admin SIM'];
+
+async function parseJsonSafe<T = Record<string, unknown>>(res: Response): Promise<T> {
+  const rawText = await res.text();
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {};
+  } catch {
+    if (!res.ok) {
+      const cleanSnippet = rawText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
+      throw new Error(`Server mengembalikan respons HTTP ${res.status}${cleanSnippet ? `: ${cleanSnippet}` : ''}`);
+    }
+    throw new Error('Respons server bukan format JSON yang valid.');
+  }
+  if (!res.ok) {
+    const errMsg =
+      (parsed && typeof parsed.error === 'string' && parsed.error) ||
+      `Permintaan gagal (HTTP ${res.status})`;
+    throw new Error(errMsg);
+  }
+  return parsed as T;
+}
 
 export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   currentUser,
@@ -63,6 +85,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   kelasList = [],
   rooms = [],
   onDataUpdated,
+  onExplicitReset,
   onAdminLogin,
   notify,
 }) => {
@@ -82,6 +105,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const [componentUploadStatus, setComponentUploadStatus] = useState<Record<string, string>>({});
   const [workbookSpec, setWorkbookSpec] = useState<DatabaseWorkbookSpec | null>(null);
   const [loadingSpec, setLoadingSpec] = useState<boolean>(false);
+  const [specError, setSpecError] = useState<string | null>(null);
 
   // Active tab & Excel upload state
   const [activeTab, setActiveTab] = useState<AdminTab>('excel_upload');
@@ -158,13 +182,15 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
 
   const loadWorkbookSpec = useCallback(async () => {
     setLoadingSpec(true);
+    setSpecError(null);
     try {
       const res = await fetch('/api/templates/workbook-data');
-      if (!res.ok) throw new Error('Gagal memuat data template.');
-      const data: DatabaseWorkbookSpec = await res.json();
+      const data = await parseJsonSafe<DatabaseWorkbookSpec>(res);
       setWorkbookSpec(data);
       return data;
-    } catch {
+    } catch (err) {
+      const msg = (err as Error).message || 'Gagal memuat data template terpadu dari server.';
+      setSpecError(msg);
       return null;
     } finally {
       setLoadingSpec(false);
@@ -269,16 +295,18 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   };
 
   const handleDownloadExcelTemplate = async () => {
-    const spec = workbookSpec || (await loadWorkbookSpec());
-    if (!spec) {
-      notify('Gagal menyiapkan file Excel template dari server.', 'error');
-      return;
-    }
     try {
-      triggerExcelDownloadFromSpec(spec);
-      notify(`Mengunduh ${spec.filename} (Format Excel .xlsx terkompresi — siap dibuka di Excel/WPS/Sheets).`, 'success');
-    } catch {
-      notify('Gagal membuat file Excel di browser.', 'error');
+      const spec = workbookSpec || (await loadWorkbookSpec());
+      if (spec) {
+        triggerExcelDownloadFromSpec(spec);
+        notify(`Mengunduh ${spec.filename} (Format Excel .xlsx terkompresi — siap dibuka di Excel/WPS/Sheets).`, 'success');
+        return;
+      }
+      // Fallback: download directly from server XLSX endpoint if JSON spec failed
+      window.location.href = '/api/templates/xlsx';
+      notify('Mengunduh file Template_Database_PINTAR_SIM.xlsx dari server...', 'info');
+    } catch (err) {
+      notify((err as Error).message || 'Gagal membuat file Excel template.', 'error');
     }
   };
 
@@ -331,7 +359,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
         ];
 
         const payload = {
-          santriRows: key === 'santri' ? cleanSantri : cleanSantri,
+          santriRows: cleanSantri,
           teacherRows: combinedTeachers,
           scheduleRows: parsed.scheduleRows,
           ruanganUjian: parsed.ruanganUjian,
@@ -360,8 +388,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Gagal menyimpan file komponen ${title}.`);
+        await parseJsonSafe(res);
 
         if (auth.currentUser) {
           fetch('/api/firebase/snapshot')
@@ -374,15 +401,16 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
         setExcelWorkbook(parsed);
         onDataUpdated();
         await loadWorkbookSpec();
+        loadAdminEntities();
 
         const summaryBadge = `Tersimpan (${totalDetected} baris dari ${file.name})`;
         setComponentUploadStatus((prev) => ({ ...prev, [key]: summaryBadge }));
         notify(
-          `Komponen "${title}" berhasil diupload! (${totalDetected} baris diproses & disimpan ke database).`,
+          `Komponen "${title}" berhasil diupload! (${totalDetected} baris diproses & disimpan tanpa menghapus data sebelumnya).`,
           'success'
         );
       } catch (err) {
-        notify((err as Error).message, 'error');
+        notify((err as Error).message || `Gagal menyimpan file komponen ${title}.`, 'error');
       } finally {
         setUploadingComponentKey(null);
       }
@@ -393,47 +421,79 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const handleLoadServerTemplateToPreview = async () => {
     const spec = workbookSpec || (await loadWorkbookSpec());
     if (!spec) {
-      notify('Gagal memuat template Excel dari server.', 'error');
+      notify(specError || 'Gagal memuat template Excel dari server. Coba klik "Segarkan Data Template".', 'error');
       return;
     }
-    const parsed = parseDatabaseWorkbookFromSpec(spec);
-    setExcelWorkbook(parsed);
-    setActiveTab('excel_upload');
-    notify('Template Database Excel berhasil dimuat ke pratinjau. Siap diupload sekaligus.', 'success');
+    try {
+      const parsed = parseDatabaseWorkbookFromSpec(spec);
+      setExcelWorkbook(parsed);
+      setActiveTab('excel_upload');
+      notify('Template Database Excel berhasil dimuat ke pratinjau. Siap diperiksa atau disimpan.', 'success');
+    } catch (err) {
+      notify((err as Error).message || 'Gagal memproses pratinjau template terpadu.', 'error');
+    }
   };
 
   const handleDirectCommitWorkbookSpec = async () => {
     setImporting(true);
     try {
-      const spec = workbookSpec || (await loadWorkbookSpec());
-      if (!spec) throw new Error('Gagal memuat spesifikasi Excel dari server.');
-      const parsed = parseDatabaseWorkbookFromSpec(spec);
-      const cleanSantri = parsed.santriRows.filter(
-        (r) => !r.warning || r.warning !== 'Nama identik dengan Nama Kelas'
-      );
-      const combinedTeachers = [
-        ...parsed.pegawaiRows,
-        ...parsed.musyrifRows,
-        ...parsed.waliKelasRows,
-        ...parsed.guruRows,
-      ];
-      const res = await fetch('/api/import/all-in-one', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          santriRows: cleanSantri,
-          teacherRows: combinedTeachers,
-          scheduleRows: parsed.scheduleRows,
-          ruanganUjian: parsed.ruanganUjian,
-          pembinaanRows: parsed.pembinaanRows,
-          replaceExisting: false,
-          autoCreateAccounts: true,
-          autoCreateQuranSchedules: true,
-          defaultPin: defaultPin || '1234',
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal menyimpan database Excel.');
+      // If an edited Excel workbook is loaded in preview, upload it safely via /api/import/all-in-one
+      if (excelWorkbook) {
+        const cleanSantri = excelWorkbook.santriRows.filter(
+          (r) => !r.warning || r.warning !== 'Nama identik dengan Nama Kelas'
+        );
+        const combinedTeachers = [
+          ...excelWorkbook.pegawaiRows,
+          ...excelWorkbook.musyrifRows,
+          ...excelWorkbook.waliKelasRows,
+          ...excelWorkbook.guruRows,
+        ];
+        const res = await fetch('/api/import/all-in-one', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            santriRows: cleanSantri,
+            teacherRows: combinedTeachers,
+            scheduleRows: excelWorkbook.scheduleRows,
+            ruanganUjian: excelWorkbook.ruanganUjian,
+            pembinaanRows: excelWorkbook.pembinaanRows,
+            replaceExisting: false,
+            autoCreateAccounts,
+            autoCreateQuranSchedules,
+            defaultPin: defaultPin || '1234',
+          }),
+        });
+        const data = await parseJsonSafe<{
+          santri: { inserted: number; updated: number };
+          teachers: { added: number; updated: number };
+          schedules: { added: number; updated?: number };
+        }>(res);
+        notify(
+          `Seluruh data pratinjau berhasil disimpan! Siswa: ${data.santri.inserted} baru/${data.santri.updated} update · Akun: ${data.teachers.added + data.teachers.updated} · Jadwal: ${data.schedules.added + (data.schedules.updated || 0)}.`,
+          'success'
+        );
+      } else {
+        // Direct atomic commit & reconcile on server (no heavy browser->server roundtrip, zero data wiped)
+        const res = await fetch('/api/templates/commit-master', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            autoCreateAccounts,
+            autoCreateQuranSchedules,
+            defaultPin: defaultPin || '1234',
+          }),
+        });
+        const data = await parseJsonSafe<{
+          santri: { inserted: number; updated: number };
+          teachers: { added: number; updated: number };
+          schedules: { added: number; updated?: number };
+          counts?: SystemCounts;
+        }>(res);
+        notify(
+          `Data Template Terpadu berhasil diambil & direkonsiliasi! Total aktif: ${data.counts?.students ?? 0} santri · ${data.counts?.teachers ?? 0} akun · ${data.counts?.schedules ?? 0} jadwal · ${data.counts?.attendanceLogs ?? 0} presensi.`,
+          'success'
+        );
+      }
 
       if (auth.currentUser) {
         fetch('/api/firebase/snapshot')
@@ -445,15 +505,62 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
 
       onDataUpdated();
       await loadWorkbookSpec();
-      notify(
-        `Seluruh data Excel berhasil diambil & disimpan! Siswa: ${data.santri.inserted + data.santri.updated} · Pegawai/Akun: ${data.teachers.added + data.teachers.updated} · Jadwal: ${data.schedules.added}.`,
-        'success'
-      );
+      loadAdminEntities();
     } catch (err) {
-      notify((err as Error).message, 'error');
+      notify((err as Error).message || 'Gagal mengambil & menyimpan data template terpadu.', 'error');
     } finally {
       setImporting(false);
     }
+  };
+
+  const handleDownloadJsonBackup = async () => {
+    try {
+      const res = await fetch('/api/system/snapshot');
+      const snap = await parseJsonSafe(res);
+      const blob = new Blob([JSON.stringify(snap, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Backup_SIM_PINTAR_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      notify('Backup lengkap JSON (santri, akun, jadwal, presensi, pembinaan) berhasil diunduh.', 'success');
+    } catch (err) {
+      notify((err as Error).message || 'Gagal mengunduh backup JSON.', 'error');
+    }
+  };
+
+  const handleRestoreJsonBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const text = String(ev.target?.result || '');
+        const snapshot = JSON.parse(text);
+        const res = await fetch('/api/system/restore-snapshot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ snapshot, mode: 'merge' }),
+        });
+        const data = await parseJsonSafe<{
+          restored?: { students: number; schedules: number; attendanceLogs: number; pembinaanRecords: number };
+        }>(res);
+        onDataUpdated();
+        await loadWorkbookSpec();
+        loadAdminEntities();
+        notify(
+          `Backup dipulihkan! (+${data.restored?.students ?? 0} santri, +${data.restored?.schedules ?? 0} jadwal, +${data.restored?.attendanceLogs ?? 0} presensi, +${data.restored?.pembinaanRecords ?? 0} pembinaan)`,
+          'success'
+        );
+      } catch (err) {
+        notify((err as Error).message || 'File backup JSON tidak valid.', 'error');
+      }
+    };
+    reader.readAsText(file);
   };
 
   const staffDirectory = useMemo(
@@ -701,8 +808,12 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
           defaultPin,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal mengupload database Excel.');
+      const data = await parseJsonSafe<{
+        santri: { inserted: number; updated: number };
+        teachers: { added: number; updated: number };
+        schedules: { added: number; updated?: number };
+        ruanganUjianAdded: number;
+      }>(res);
 
       // If signed into Firebase Google Auth, automatically sync uploaded data to Firestore (sim-pintar)
       if (auth.currentUser) {
@@ -714,12 +825,13 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       }
 
       notify(
-        `Upload & Simpan selesai! Siswa: ${data.santri.inserted} baru/${data.santri.updated} update · Master Pegawai/Akun: ${data.teachers.added + data.teachers.updated} · Jadwal: ${data.schedules.added} · Ruang Ujian: ${data.ruanganUjianAdded}.`,
+        `Upload & Simpan selesai! Siswa: ${data.santri.inserted} baru/${data.santri.updated} update · Master Pegawai/Akun: ${data.teachers.added + data.teachers.updated} · Jadwal: ${data.schedules.added + (data.schedules.updated || 0)} · Ruang Ujian: ${data.ruanganUjianAdded}.`,
         'success',
       );
       setExcelWorkbook(null);
       onDataUpdated();
       loadWorkbookSpec();
+      loadAdminEntities();
       if (cleanSantri.length === 0 && combinedTeachers.length > 0) {
         setActiveTab('pegawai_amanah');
       }
@@ -1057,13 +1169,18 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   };
 
   const handleResetEmpty = async () => {
-    const res = await fetch('/api/system/reset-empty', { method: 'POST' });
-    if (res.ok) {
+    try {
+      const res = await fetch('/api/system/reset-empty', { method: 'POST' });
+      await parseJsonSafe(res);
       setConfirmReset(false);
       setExcelWorkbook(null);
+      onExplicitReset?.();
       onDataUpdated();
       loadWorkbookSpec();
+      loadAdminEntities();
       notify('Seluruh data siswa, jadwal & log dikosongkan (akun Admin Super tetap terjaga).', 'info');
+    } catch (err) {
+      notify((err as Error).message || 'Gagal mengosongkan database.', 'error');
     }
   };
 
@@ -1477,53 +1594,90 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                disabled={loadingSpec}
+                onClick={handleDownloadExcelTemplate}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-700 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:from-emerald-700 hover:to-teal-800 whitespace-nowrap disabled:opacity-50"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Unduh Semua Sheet (.xlsx)
+              </button>
+              <button
+                type="button"
+                disabled={loadingSpec}
+                onClick={handleLoadServerTemplateToPreview}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3.5 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 whitespace-nowrap disabled:opacity-50"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Muat ke Pratinjau
+              </button>
+              <button
+                type="button"
+                disabled={loadingSpec || importing}
+                onClick={handleDirectCommitWorkbookSpec}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#0B1324] px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 whitespace-nowrap disabled:opacity-50"
+              >
+                <Save className="h-3.5 w-3.5 text-teal-300" />
+                {importing ? 'Menyimpan...' : 'Ambil & Simpan Semua Data Excel'}
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadJsonBackup}
+                title="Unduh cadangan penuh seluruh data SIM & log dalam format JSON"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-sky-300 bg-white px-3 py-2 text-xs font-semibold text-sky-900 hover:bg-sky-50 whitespace-nowrap"
+              >
+                <Download className="h-3.5 w-3.5 text-sky-700" />
+                Backup JSON
+              </button>
+              <label
+                title="Pulihkan semua data santri, jadwal, presensi & pembinaan dari file Backup JSON"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-50 cursor-pointer whitespace-nowrap"
+              >
+                <Upload className="h-3.5 w-3.5 text-amber-700" />
+                Pulihkan JSON
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleRestoreJsonBackup}
+                  className="hidden"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => setTemplateMinimized((v) => !v)}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                {templateMinimized ? (
+                  <>
+                    <ChevronDown className="h-3.5 w-3.5" />
+                    Detail Sheet
+                  </>
+                ) : (
+                  <>
+                    <ChevronUp className="h-3.5 w-3.5" />
+                    Minimize
+                  </>
+                )}
+              </button>
+            </div>
+        </div>
+
+        {specError && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-300 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-900">
+            <span>
+              <b>Kendala memuat Template Terpadu:</b> {specError}
+            </span>
             <button
               type="button"
-              disabled={loadingSpec}
-              onClick={handleDownloadExcelTemplate}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-700 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:from-emerald-700 hover:to-teal-800 whitespace-nowrap disabled:opacity-50"
+              onClick={loadWorkbookSpec}
+              className="rounded-md bg-rose-700 px-3 py-1 font-semibold text-white hover:bg-rose-800 whitespace-nowrap"
             >
-              <Download className="h-3.5 w-3.5" />
-              Unduh Semua Sheet (.xlsx)
-            </button>
-            <button
-              type="button"
-              disabled={loadingSpec}
-              onClick={handleLoadServerTemplateToPreview}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3.5 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 whitespace-nowrap disabled:opacity-50"
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              Muat ke Pratinjau
-            </button>
-            <button
-              type="button"
-              disabled={loadingSpec || importing}
-              onClick={handleDirectCommitWorkbookSpec}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[#0B1324] px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 whitespace-nowrap disabled:opacity-50"
-            >
-              <Save className="h-3.5 w-3.5 text-teal-300" />
-              {importing ? 'Menyimpan...' : 'Ambil & Simpan Semua Data Excel'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setTemplateMinimized((v) => !v)}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-            >
-              {templateMinimized ? (
-                <>
-                  <ChevronDown className="h-3.5 w-3.5" />
-                  Detail Sheet
-                </>
-              ) : (
-                <>
-                  <ChevronUp className="h-3.5 w-3.5" />
-                  Minimize
-                </>
-              )}
+              Coba Muat Ulang
             </button>
           </div>
-        </div>
+        )}
 
         {!templateMinimized && dataSheets.length > 0 && (
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5 pt-1">

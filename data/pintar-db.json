@@ -4680,7 +4680,8 @@
         "Guru",
         "Wali Kelas",
         "Musyrif",
-        "Musyrifah"
+        "Musyrifah",
+        "Pengampu Al-Quran"
       ],
       "genderScope": "Semua",
       "whatsapp": "",
@@ -5943,8 +5944,19 @@
   "examLogs": [],
   "teacherAbsences": [],
   "pembinaanRecords": [],
+  "attachments": [],
+  "whatsappLogs": [],
   "settings": {
     "gasBridgeUrl": "",
-    "lastSyncedAt": null
+    "lastSyncedAt": null,
+    "whatsappConfig": {
+      "provider": "Fonnte",
+      "apiUrl": "https://api.fonnte.com/send",
+      "apiToken": "",
+      "autoNotifyAlfa": true,
+      "autoNotifyEskalasi": true
+    },
+    "lastModifiedAt": "2026-11-18T06:35:38.780Z",
+    "explicitEmpty": false
   }
 }

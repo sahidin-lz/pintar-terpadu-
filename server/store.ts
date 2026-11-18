@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import type {
   AnalyticsTerpadu,
   AttachmentCategory,
@@ -55,11 +56,30 @@ export interface DatabaseSchema {
   settings: {
     gasBridgeUrl: string;
     lastSyncedAt: string | null;
+    lastModifiedAt?: string | null;
+    explicitEmpty?: boolean;
     whatsappConfig?: WhatsAppGatewayConfig;
   };
 }
 
-const BUNDLED_DATA_DIR = path.resolve(process.cwd(), 'data');
+const THIS_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+function resolveBundledDataDir(): string {
+  const candidates = [
+    path.resolve(process.cwd(), 'data'),
+    path.resolve(THIS_DIR, '../data'),
+    path.resolve(THIS_DIR, '../../data'),
+    '/var/task/data',
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'pintar-db.json')) || fs.existsSync(path.join(dir, 'pintar-db.backup.json'))) {
+      return dir;
+    }
+  }
+  return candidates[0];
+}
+
+const BUNDLED_DATA_DIR = resolveBundledDataDir();
 const BUNDLED_DB_FILE = path.join(BUNDLED_DATA_DIR, 'pintar-db.json');
 const BUNDLED_BACKUP_FILE = path.join(BUNDLED_DATA_DIR, 'pintar-db.backup.json');
 
@@ -203,30 +223,90 @@ class PintarStore {
     this.db = this.loadFromDisk();
   }
 
+  private scoreDatabase(parsed: DatabaseSchema): number {
+    return (
+      (parsed.students?.length || 0) * 10 +
+      Math.max(0, (parsed.teachers?.length || 0) - 1) * 5 +
+      (parsed.schedules?.length || 0) * 4 +
+      (parsed.attendanceLogs?.length || 0) * 8 +
+      (parsed.pembinaanRecords?.length || 0) * 8 +
+      (parsed.examLogs?.length || 0) * 6 +
+      (parsed.rooms?.length || 0) * 2
+    );
+  }
+
+  private normalizeLoadedSchema(parsed: DatabaseSchema): DatabaseSchema {
+    const normalizedTeachers = (parsed.teachers || []).map((t) => ({
+      ...t,
+      username: t.username || makeUsername(t.nama),
+      peran: t.peran || ('Guru' as UserRole),
+    }));
+    const base = createInitialDatabase();
+    return {
+      ...base,
+      ...parsed,
+      students: Array.isArray(parsed.students) ? parsed.students : [],
+      rooms: Array.isArray(parsed.rooms) ? parsed.rooms : [],
+      ruanganUjian: Array.isArray(parsed.ruanganUjian) ? parsed.ruanganUjian : [],
+      schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
+      attendanceLogs: Array.isArray(parsed.attendanceLogs) ? parsed.attendanceLogs : [],
+      examLogs: Array.isArray(parsed.examLogs) ? parsed.examLogs : [],
+      teacherAbsences: Array.isArray(parsed.teacherAbsences) ? parsed.teacherAbsences : [],
+      pembinaanRecords: Array.isArray(parsed.pembinaanRecords) ? parsed.pembinaanRecords : [],
+      attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
+      whatsappLogs: Array.isArray(parsed.whatsappLogs) ? parsed.whatsappLogs : [],
+      teachers: ensureSuperAdmin(normalizedTeachers),
+      settings: {
+        ...base.settings,
+        ...(parsed.settings || {}),
+      },
+    };
+  }
+
   private loadFromDisk(): DatabaseSchema {
     try {
-      const candidates = [DB_FILE, DB_BACKUP_FILE, BUNDLED_DB_FILE, BUNDLED_BACKUP_FILE];
-      for (const file of candidates) {
-        if (fs.existsSync(file)) {
-          try {
-            const raw = fs.readFileSync(file, 'utf-8');
-            const parsed = JSON.parse(raw) as DatabaseSchema;
-            if (parsed && Array.isArray(parsed.students)) {
-              const normalizedTeachers = (parsed.teachers || []).map((t) => ({
-                ...t,
-                username: t.username || makeUsername(t.nama),
-                peran: t.peran || ('Guru' as UserRole),
-              }));
-              return {
-                ...createInitialDatabase(),
-                ...parsed,
-                teachers: ensureSuperAdmin(normalizedTeachers),
-              };
-            }
-          } catch {
-            // Try next candidate
+      const candidates = Array.from(
+        new Set([DB_FILE, DB_BACKUP_FILE, BUNDLED_DB_FILE, BUNDLED_BACKUP_FILE]),
+      );
+
+      let bestRuntime: { db: DatabaseSchema; score: number } | null = null;
+      let bestAny: { db: DatabaseSchema; score: number } | null = null;
+
+      for (let i = 0; i < candidates.length; i++) {
+        const file = candidates[i];
+        if (!fs.existsSync(file)) continue;
+        try {
+          const raw = fs.readFileSync(file, 'utf-8');
+          const parsed = JSON.parse(raw) as DatabaseSchema;
+          if (!parsed || !Array.isArray(parsed.students)) continue;
+
+          const normalized = this.normalizeLoadedSchema(parsed);
+          const score = this.scoreDatabase(normalized);
+
+          // Respect explicit user reset only if the runtime primary file explicitly records it
+          if (file === DB_FILE && normalized.settings?.explicitEmpty && score === 0) {
+            return normalized;
           }
+
+          if (i < 2 && score > 0 && (!bestRuntime || score > bestRuntime.score)) {
+            bestRuntime = { db: normalized, score };
+          }
+          if (!bestAny || score > bestAny.score) {
+            bestAny = { db: normalized, score };
+          }
+        } catch {
+          // Try next candidate
         }
+      }
+
+      if (bestRuntime && bestAny && bestRuntime.score >= bestAny.score) {
+        return bestRuntime.db;
+      }
+      if (bestAny && bestAny.score > 0) {
+        return bestAny.db;
+      }
+      if (bestAny) {
+        return bestAny.db;
       }
     } catch {
       // Fallback to empty DB with Super Admin
@@ -236,9 +316,25 @@ class PintarStore {
     return empty;
   }
 
-  private persist(nextDb?: DatabaseSchema) {
+  private persist(nextDb?: DatabaseSchema, options?: { explicitEmpty?: boolean }) {
     const target = nextDb || this.db;
     this.masterCache.clear();
+    if (!target.settings) {
+      target.settings = { gasBridgeUrl: '', lastSyncedAt: null };
+    }
+    target.settings.lastModifiedAt = new Date().toISOString();
+    const hasData =
+      target.students.length > 0 ||
+      target.teachers.length > 1 ||
+      target.schedules.length > 0 ||
+      target.attendanceLogs.length > 0 ||
+      target.pembinaanRecords.length > 0 ||
+      target.examLogs.length > 0;
+    if (hasData) {
+      target.settings.explicitEmpty = false;
+    } else if (options?.explicitEmpty !== undefined) {
+      target.settings.explicitEmpty = options.explicitEmpty;
+    }
     try {
       if (!fs.existsSync(RUNTIME_DATA_DIR)) {
         fs.mkdirSync(RUNTIME_DATA_DIR, { recursive: true });
@@ -247,7 +343,7 @@ class PintarStore {
       const tmpFile = `${DB_FILE}.tmp`;
       fs.writeFileSync(tmpFile, serialized, 'utf-8');
       fs.renameSync(tmpFile, DB_FILE);
-      if (target.students.length > 0 || target.teachers.length > 1 || target.schedules.length > 0) {
+      if (hasData) {
         const tmpBackup = `${DB_BACKUP_FILE}.tmp`;
         fs.writeFileSync(tmpBackup, serialized, 'utf-8');
         fs.renameSync(tmpBackup, DB_BACKUP_FILE);
@@ -701,16 +797,25 @@ class PintarStore {
       const cleanName = r.nama.trim().toUpperCase();
       if (!cleanName || cleanName === r.kelas.trim().toUpperCase()) continue;
 
-      const existing = this.db.students.find((s) => normalizeStr(s.nama) === normalizeStr(cleanName));
+      const existing =
+        this.db.students.find(
+          (s) =>
+            normalizeStr(s.nama) === normalizeStr(cleanName) &&
+            (!s.gender || !r.gender || s.gender === r.gender),
+        ) ||
+        (r.nis
+          ? this.db.students.find((s) => s.nis && s.nis === r.nis && s.gender === r.gender)
+          : undefined) ||
+        this.db.students.find((s) => normalizeStr(s.nama) === normalizeStr(cleanName));
       if (existing) {
-        existing.nis = r.nis || existing.nis;
-        existing.kelas = r.kelas.toUpperCase() || existing.kelas;
-        existing.kamar = r.kamar || existing.kamar;
-        existing.kelompokQuran = r.kelompokQuran || existing.kelompokQuran;
-        existing.pengampuQuran = r.pengampuQuran || existing.pengampuQuran;
+        if (r.nis) existing.nis = r.nis;
+        if (r.kelas) existing.kelas = r.kelas.toUpperCase();
+        if (r.kamar) existing.kamar = r.kamar;
+        if (r.kelompokQuran) existing.kelompokQuran = r.kelompokQuran;
+        if (r.pengampuQuran) existing.pengampuQuran = r.pengampuQuran;
         if (r.waliKelas) existing.waliKelas = r.waliKelas.toUpperCase();
         if (r.musyrif) existing.musyrif = r.musyrif.toUpperCase();
-        existing.gender = r.gender;
+        if (r.gender) existing.gender = r.gender;
         updated++;
       } else {
         this.db.students.push({
@@ -1285,9 +1390,16 @@ class PintarStore {
           })
         : { inserted: 0, updated: 0, accountsCreated: 0, quranSchedulesCreated: 0 };
 
+    const filteredTeachers = (payload.teacherRows || []).filter((t) => {
+      const n = (t.nama || '').trim().toUpperCase();
+      if (!n || n === '(BELUM DITENTUKAN)' || n === 'BELUM DIATUR' || n === '-') return false;
+      if (/^(UST\.|USTZ\.)\s+(WALI KELAS|MUSYRIFAH|MUSYRIF)\s+/i.test(n)) return false;
+      return true;
+    });
+
     const teacherResult =
-      payload.teacherRows && payload.teacherRows.length > 0
-        ? this.importTeachersBulk({ rows: payload.teacherRows })
+      filteredTeachers.length > 0
+        ? this.importTeachersBulk({ rows: filteredTeachers })
         : { added: 0, updated: 0 };
 
     const scheduleResult =
@@ -1296,7 +1408,7 @@ class PintarStore {
             rows: payload.scheduleRows,
             replaceExisting: payload.replaceExisting,
           })
-        : { added: 0 };
+        : { added: 0, updated: 0 };
 
     let roomsAdded = 0;
     if (payload.ruanganUjian && payload.ruanganUjian.length > 0) {
@@ -1719,8 +1831,270 @@ class PintarStore {
     this.db = createInitialDatabase();
     this.cacheHits = 0;
     this.batchedWrites = 0;
-    this.persist(this.db);
+    this.persist(this.db, { explicitEmpty: true });
     return this.getSystemCounts();
+  }
+
+  public getFullSnapshot() {
+    return {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      lastModifiedAt: this.db.settings?.lastModifiedAt || new Date().toISOString(),
+      students: this.db.students,
+      teachers: this.db.teachers.map(({ pin: _pin, ...pub }) => pub),
+      rooms: this.db.rooms,
+      ruanganUjian: this.db.ruanganUjian,
+      schedules: this.db.schedules,
+      attendanceLogs: this.db.attendanceLogs,
+      examLogs: this.db.examLogs,
+      teacherAbsences: this.db.teacherAbsences,
+      pembinaanRecords: this.db.pembinaanRecords,
+      attachments: this.db.attachments || [],
+      whatsappLogs: this.db.whatsappLogs || [],
+      settings: this.db.settings,
+    };
+  }
+
+  public restoreSnapshot(
+    snapshot: Partial<{
+      students: Student[];
+      teachers: TeacherPublic[];
+      rooms: RoomMapping[];
+      ruanganUjian: string[];
+      schedules: ScheduleItem[];
+      attendanceLogs: AttendanceLog[];
+      examLogs: ExamLog[];
+      teacherAbsences: TeacherAbsenceLog[];
+      pembinaanRecords: PembinaanRecord[];
+      attachments: CloudAttachmentItem[];
+      whatsappLogs: WhatsAppLogEntry[];
+      settings: Partial<DatabaseSchema['settings']>;
+    }>,
+    mode: 'merge' | 'replace' = 'merge',
+  ) {
+    if (!snapshot || typeof snapshot !== 'object') {
+      return { ok: false as const, error: 'Snapshot tidak valid.' };
+    }
+
+    let studentsRestored = 0;
+    let teachersRestored = 0;
+    let schedulesRestored = 0;
+    let attendanceRestored = 0;
+    let pembinaanRestored = 0;
+    let examRestored = 0;
+
+    if (mode === 'replace') {
+      const existingPinByName = new Map<string, string>();
+      for (const t of this.db.teachers) {
+        existingPinByName.set(normalizeStr(t.nama), t.pin);
+        existingPinByName.set(normalizeStr(t.username), t.pin);
+      }
+
+      if (Array.isArray(snapshot.students)) {
+        this.db.students = snapshot.students;
+        studentsRestored = snapshot.students.length;
+      }
+      if (Array.isArray(snapshot.teachers)) {
+        const restoredTeachers: TeacherRecord[] = snapshot.teachers.map((t) => ({
+          ...t,
+          pin:
+            existingPinByName.get(normalizeStr(t.nama)) ||
+            existingPinByName.get(normalizeStr(t.username)) ||
+            '1234',
+        }));
+        this.db.teachers = ensureSuperAdmin(restoredTeachers);
+        teachersRestored = restoredTeachers.length;
+      }
+      if (Array.isArray(snapshot.rooms)) this.db.rooms = snapshot.rooms;
+      if (Array.isArray(snapshot.ruanganUjian)) this.db.ruanganUjian = snapshot.ruanganUjian;
+      if (Array.isArray(snapshot.schedules)) {
+        this.db.schedules = snapshot.schedules;
+        schedulesRestored = snapshot.schedules.length;
+      }
+      if (Array.isArray(snapshot.attendanceLogs)) {
+        this.db.attendanceLogs = snapshot.attendanceLogs;
+        attendanceRestored = snapshot.attendanceLogs.length;
+      }
+      if (Array.isArray(snapshot.examLogs)) {
+        this.db.examLogs = snapshot.examLogs;
+        examRestored = snapshot.examLogs.length;
+      }
+      if (Array.isArray(snapshot.teacherAbsences)) this.db.teacherAbsences = snapshot.teacherAbsences;
+      if (Array.isArray(snapshot.pembinaanRecords)) {
+        this.db.pembinaanRecords = snapshot.pembinaanRecords;
+        pembinaanRestored = snapshot.pembinaanRecords.length;
+      }
+      if (Array.isArray(snapshot.attachments)) this.db.attachments = snapshot.attachments;
+      if (Array.isArray(snapshot.whatsappLogs)) this.db.whatsappLogs = snapshot.whatsappLogs;
+    } else {
+      // Safe non-destructive merge: add missing items & enrich missing fields without wiping any data
+      if (Array.isArray(snapshot.students)) {
+        for (const st of snapshot.students) {
+          if (!st?.nama) continue;
+          const exists = this.db.students.find(
+            (s) =>
+              s.id === st.id ||
+              (normalizeStr(s.nama) === normalizeStr(st.nama) && s.gender === st.gender),
+          );
+          if (!exists) {
+            this.db.students.push(st);
+            studentsRestored++;
+          } else {
+            if (!exists.nis && st.nis) exists.nis = st.nis;
+            if ((!exists.kelas || exists.kelas === '-') && st.kelas) exists.kelas = st.kelas;
+            if ((!exists.kamar || exists.kamar === '-') && st.kamar) exists.kamar = st.kamar;
+            if (!exists.waliKelas && st.waliKelas) exists.waliKelas = st.waliKelas;
+            if (!exists.musyrif && st.musyrif) exists.musyrif = st.musyrif;
+            if (!exists.waOrtu && st.waOrtu) exists.waOrtu = st.waOrtu;
+            if (!exists.namaOrtu && st.namaOrtu) exists.namaOrtu = st.namaOrtu;
+          }
+        }
+      }
+
+      if (Array.isArray(snapshot.teachers)) {
+        for (const t of snapshot.teachers) {
+          if (!t?.nama || t.peran === 'Admin Super') continue;
+          const exists = this.db.teachers.find(
+            (x) => normalizeStr(x.nama) === normalizeStr(t.nama) || normalizeStr(x.username) === normalizeStr(t.username),
+          );
+          if (!exists) {
+            this.db.teachers.push({
+              ...t,
+              pin: '1234',
+            });
+            teachersRestored++;
+          }
+        }
+        this.db.teachers = ensureSuperAdmin(this.db.teachers);
+      }
+
+      if (Array.isArray(snapshot.rooms)) {
+        for (const rm of snapshot.rooms) {
+          if (!rm?.kamar) continue;
+          const exists = this.db.rooms.find((r) => normalizeStr(r.kamar) === normalizeStr(rm.kamar));
+          if (!exists) {
+            this.db.rooms.push(rm);
+          } else if (!exists.musyrif && rm.musyrif) {
+            exists.musyrif = rm.musyrif;
+          }
+        }
+      }
+
+      if (Array.isArray(snapshot.ruanganUjian)) {
+        for (const r of snapshot.ruanganUjian) {
+          const clean = String(r || '').trim().toUpperCase();
+          if (clean && !this.db.ruanganUjian.includes(clean)) {
+            this.db.ruanganUjian.push(clean);
+          }
+        }
+      }
+
+      if (Array.isArray(snapshot.schedules)) {
+        for (const sc of snapshot.schedules) {
+          if (!sc?.guru || !sc?.kelas) continue;
+          const exists = this.db.schedules.some(
+            (x) =>
+              x.id === sc.id ||
+              (x.hari === sc.hari &&
+                normalizeStr(x.guru) === normalizeStr(sc.guru) &&
+                normalizeStr(x.kelas) === normalizeStr(sc.kelas) &&
+                normalizeStr(x.mapel) === normalizeStr(sc.mapel) &&
+                x.jamKe === sc.jamKe),
+          );
+          if (!exists) {
+            this.db.schedules.push(sc);
+            schedulesRestored++;
+          }
+        }
+      }
+
+      if (Array.isArray(snapshot.attendanceLogs)) {
+        const seenAtt = new Set(
+          this.db.attendanceLogs.map(
+            (l) => l.id || `${l.tanggal}|${l.jenisPresensi}|${l.kelas}|${l.mapel}|${l.namaSiswa}`,
+          ),
+        );
+        for (const log of snapshot.attendanceLogs) {
+          const sig = `${log.tanggal}|${log.jenisPresensi}|${log.kelas}|${log.mapel}|${log.namaSiswa}`;
+          if (!seenAtt.has(log.id) && !seenAtt.has(sig)) {
+            this.db.attendanceLogs.push(log);
+            seenAtt.add(log.id);
+            seenAtt.add(sig);
+            attendanceRestored++;
+          }
+        }
+      }
+
+      if (Array.isArray(snapshot.examLogs)) {
+        const seenExam = new Set(this.db.examLogs.map((e) => e.id));
+        for (const ex of snapshot.examLogs) {
+          if (!seenExam.has(ex.id)) {
+            this.db.examLogs.push(ex);
+            seenExam.add(ex.id);
+            examRestored++;
+          }
+        }
+      }
+
+      if (Array.isArray(snapshot.teacherAbsences)) {
+        const seenTA = new Set(this.db.teacherAbsences.map((a) => a.id));
+        for (const ta of snapshot.teacherAbsences) {
+          if (!seenTA.has(ta.id)) {
+            this.db.teacherAbsences.push(ta);
+            seenTA.add(ta.id);
+          }
+        }
+      }
+
+      if (Array.isArray(snapshot.pembinaanRecords)) {
+        const seenPb = new Set(this.db.pembinaanRecords.map((p) => p.id));
+        for (const pb of snapshot.pembinaanRecords) {
+          if (!seenPb.has(pb.id)) {
+            this.db.pembinaanRecords.push(pb);
+            seenPb.add(pb.id);
+            pembinaanRestored++;
+          }
+        }
+      }
+
+      if (Array.isArray(snapshot.attachments)) {
+        if (!this.db.attachments) this.db.attachments = [];
+        const seenAttF = new Set(this.db.attachments.map((a) => a.id));
+        for (const att of snapshot.attachments) {
+          if (!seenAttF.has(att.id)) {
+            this.db.attachments.push(att);
+            seenAttF.add(att.id);
+          }
+        }
+      }
+
+      if (Array.isArray(snapshot.whatsappLogs)) {
+        if (!this.db.whatsappLogs) this.db.whatsappLogs = [];
+        const seenWa = new Set(this.db.whatsappLogs.map((w) => w.id));
+        for (const wa of snapshot.whatsappLogs) {
+          if (!seenWa.has(wa.id)) {
+            this.db.whatsappLogs.push(wa);
+            seenWa.add(wa.id);
+          }
+        }
+      }
+    }
+
+    this.reconcileDatabaseRelations('1234');
+    this.batchedWrites++;
+    this.persist();
+    return {
+      ok: true as const,
+      restored: {
+        students: studentsRestored,
+        teachers: teachersRestored,
+        schedules: schedulesRestored,
+        attendanceLogs: attendanceRestored,
+        pembinaanRecords: pembinaanRestored,
+        examLogs: examRestored,
+      },
+      counts: this.getSystemCounts(),
+    };
   }
 
   // ==============================================================

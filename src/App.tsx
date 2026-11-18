@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   BarChart3,
@@ -130,6 +130,37 @@ const MODULE_META: Record<
   },
 };
 
+const DB_MIRROR_KEY = 'pintar_db_mirror_v1';
+const DB_EXPLICIT_EMPTY_KEY = 'pintar_db_explicit_empty_v1';
+const SESSION_USER_KEY = 'pintar_unlocked_teacher_v1';
+
+function scoreCounts(c?: SystemCounts | null): number {
+  if (!c) return 0;
+  return (
+    (c.students || 0) * 10 +
+    Math.max(0, (c.teachers || 0) - 1) * 5 +
+    (c.schedules || 0) * 4 +
+    (c.attendanceLogs || 0) * 8 +
+    (c.pembinaanRecords || 0) * 8 +
+    (c.examLogs || 0) * 6 +
+    (c.rooms || 0) * 2
+  );
+}
+
+function scoreSnapshot(snap: Record<string, unknown> | null): number {
+  if (!snap) return 0;
+  const arrLen = (k: string) => (Array.isArray(snap[k]) ? (snap[k] as unknown[]).length : 0);
+  return (
+    arrLen('students') * 10 +
+    Math.max(0, arrLen('teachers') - 1) * 5 +
+    arrLen('schedules') * 4 +
+    arrLen('attendanceLogs') * 8 +
+    arrLen('pembinaanRecords') * 8 +
+    arrLen('examLogs') * 6 +
+    arrLen('rooms') * 2
+  );
+}
+
 export default function App() {
   // Halaman depan langsung terbuka untuk input presensi & pembinaan tanpa login
   const [entryMode, setEntryMode] = useState<'app' | 'login'>('app');
@@ -138,9 +169,34 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
-  const [unlockedTeacher, setUnlockedTeacher] = useState<TeacherPublic | null>(null);
-  const [quickGuru, setQuickGuru] = useState<string>('');
+  const [unlockedTeacher, setUnlockedTeacher] = useState<TeacherPublic | null>(() => {
+    try {
+      const raw = sessionStorage.getItem(SESSION_USER_KEY);
+      return raw ? (JSON.parse(raw) as TeacherPublic) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [quickGuru, setQuickGuru] = useState<string>(() => {
+    try {
+      const raw = sessionStorage.getItem(SESSION_USER_KEY);
+      const parsed = raw ? (JSON.parse(raw) as TeacherPublic) : null;
+      return parsed?.nama || '';
+    } catch {
+      return '';
+    }
+  });
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const restoredOnceRef = useRef<boolean>(false);
+
+  const persistSessionUser = useCallback((teacher: TeacherPublic | null) => {
+    try {
+      if (teacher) sessionStorage.setItem(SESSION_USER_KEY, JSON.stringify(teacher));
+      else sessionStorage.removeItem(SESSION_USER_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+  }, []);
 
   const toggleGroupCollapsed = (groupName: string) => {
     setCollapsedGroups((prev) => ({ ...prev, [groupName]: !prev[groupName] }));
@@ -154,12 +210,92 @@ export default function App() {
     }, 3800);
   }, []);
 
-  const loadBootstrap = useCallback(() => {
-    fetch('/api/bootstrap')
-      .then((r) => r.json())
-      .then((data: BootstrapPayload) => setBootstrap(data))
-      .catch(() => notify('Gagal memuat data master dari server.', 'error'));
-  }, [notify]);
+  const syncBrowserMirror = useCallback(async () => {
+    try {
+      const res = await fetch('/api/system/snapshot');
+      if (!res.ok) return;
+      const snap = (await res.json()) as Record<string, unknown>;
+      if (scoreSnapshot(snap) <= 0) return;
+
+      // Strip oversized inline base64 attachments (>64KB) so localStorage stays lightweight
+      const compactAttachments = Array.isArray(snap.attachments)
+        ? snap.attachments.slice(0, 50).map((att: Record<string, unknown>) => ({
+            ...att,
+            url:
+              typeof att.url === 'string' && att.url.length > 65536
+                ? ''
+                : att.url,
+          }))
+        : [];
+
+      const compactSnap = { ...snap, attachments: compactAttachments };
+      localStorage.setItem(DB_MIRROR_KEY, JSON.stringify(compactSnap));
+      localStorage.removeItem(DB_EXPLICIT_EMPTY_KEY);
+    } catch {
+      // Ignore localStorage quota or transient network errors
+    }
+  }, []);
+
+  const handleExplicitReset = useCallback(() => {
+    try {
+      localStorage.removeItem(DB_MIRROR_KEY);
+      localStorage.setItem(DB_EXPLICIT_EMPTY_KEY, '1');
+    } catch {
+      // Ignore
+    }
+  }, []);
+
+  const loadBootstrap = useCallback(async (options?: { skipMirrorWrite?: boolean }) => {
+    try {
+      const res = await fetch('/api/bootstrap');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as BootstrapPayload;
+
+      // Check if Vercel/serverless instance cold-started with fewer records than the browser mirror
+      if (!restoredOnceRef.current) {
+        restoredOnceRef.current = true;
+        try {
+          const explicitEmpty = localStorage.getItem(DB_EXPLICIT_EMPTY_KEY) === '1';
+          const mirrorRaw = localStorage.getItem(DB_MIRROR_KEY);
+          if (!explicitEmpty && mirrorRaw) {
+            const mirrorSnap = JSON.parse(mirrorRaw) as Record<string, unknown>;
+            const mirrorScore = scoreSnapshot(mirrorSnap);
+            const serverScore = scoreCounts(data.counts);
+            const mirrorHasLogs =
+              (Array.isArray(mirrorSnap.attendanceLogs) && mirrorSnap.attendanceLogs.length > (data.counts.attendanceLogs || 0)) ||
+              (Array.isArray(mirrorSnap.pembinaanRecords) && mirrorSnap.pembinaanRecords.length > (data.counts.pembinaanRecords || 0)) ||
+              (Array.isArray(mirrorSnap.examLogs) && mirrorSnap.examLogs.length > (data.counts.examLogs || 0));
+
+            if (mirrorScore > serverScore || mirrorHasLogs) {
+              const restoreRes = await fetch('/api/system/restore-snapshot', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ snapshot: mirrorSnap, mode: 'merge' }),
+              });
+              if (restoreRes.ok) {
+                const refreshed = await fetch('/api/bootstrap');
+                if (refreshed.ok) {
+                  const refreshedData = (await refreshed.json()) as BootstrapPayload;
+                  setBootstrap(refreshedData);
+                  notify('Data sesi sebelumnya dipulihkan otomatis ke server aktif.', 'info');
+                  return;
+                }
+              }
+            }
+          }
+        } catch {
+          // Proceed with live bootstrap data
+        }
+      }
+
+      setBootstrap(data);
+      if (!options?.skipMirrorWrite && scoreCounts(data.counts) > 0) {
+        syncBrowserMirror();
+      }
+    } catch {
+      notify('Gagal memuat data master dari server.', 'error');
+    }
+  }, [notify, syncBrowserMirror]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -216,6 +352,7 @@ export default function App() {
 
   const handleLoginSuccess = (teacher: TeacherPublic) => {
     setUnlockedTeacher(teacher);
+    persistSessionUser(teacher);
     setQuickGuru(teacher.nama);
     setActiveModule(
       teacher.peran === 'Admin Super' || teacher.peran === 'Admin SIM' ? 'import' : 'akunguru',
@@ -226,6 +363,7 @@ export default function App() {
 
   const handleAccountCreated = (teacher: TeacherPublic) => {
     setUnlockedTeacher(teacher);
+    persistSessionUser(teacher);
     setQuickGuru(teacher.nama);
     setActiveModule(
       teacher.peran === 'Admin Super' || teacher.peran === 'Admin SIM' ? 'import' : 'akunguru',
@@ -236,6 +374,7 @@ export default function App() {
 
   const handleLogout = () => {
     setUnlockedTeacher(null);
+    persistSessionUser(null);
     setQuickGuru('');
     if (
       activeModule === 'akunguru' ||
@@ -587,6 +726,7 @@ export default function App() {
               unlockedTeacher={unlockedTeacher}
               onUnlock={(t) => {
                 setUnlockedTeacher(t);
+                persistSessionUser(t);
                 if (t) setQuickGuru(t.nama);
               }}
               onOpenQuickPresensi={(nama) => {
@@ -636,8 +776,10 @@ export default function App() {
               kelasList={bootstrap?.options.akademik.kelas || []}
               rooms={bootstrap?.rooms || []}
               onDataUpdated={loadBootstrap}
+              onExplicitReset={handleExplicitReset}
               onAdminLogin={(t) => {
                 setUnlockedTeacher(t);
+                persistSessionUser(t);
                 setQuickGuru(t.nama);
                 loadBootstrap();
               }}

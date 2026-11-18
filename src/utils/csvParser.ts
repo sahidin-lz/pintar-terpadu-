@@ -172,6 +172,58 @@ export interface ParsedScheduleRow {
   kategori: 'Akademik' | 'Al-Quran';
 }
 
+const EXCEL_MONTHS: Record<string, number> = {
+  jan: 1, januari: 1, january: 1,
+  feb: 2, februari: 2, february: 2,
+  mar: 3, maret: 3, march: 3,
+  apr: 4, april: 4,
+  mei: 5, may: 5,
+  jun: 6, juni: 6, june: 6,
+  jul: 7, juli: 7, july: 7,
+  agu: 8, agustus: 8, aug: 8, august: 8,
+  sep: 9, september: 9,
+  okt: 10, oktober: 10, oct: 10, october: 10,
+  nov: 11, november: 11,
+  des: 12, desember: 12, dec: 12, december: 12,
+};
+
+function normalizeJamKeValue(raw: string): string {
+  const s = (raw || '').trim();
+  if (!s) return '1-2';
+  // Normal format like "1-2" or "3 - 4" or "5"
+  if (/^\d{1,2}(\s*[-–,]\s*\d{1,2})*$/.test(s)) {
+    return s.replace(/\s+/g, '');
+  }
+  // Excel converted "1-2" -> "02-Jan" or "2-Jan" or "02-Jan-26"
+  const dayMon = s.match(/^(\d{1,2})[-/\s]([A-Za-z]+)(?:[-/\s]\d{2,4})?$/);
+  if (dayMon) {
+    const day = Number.parseInt(dayMon[1], 10);
+    const mon = EXCEL_MONTHS[dayMon[2].toLowerCase()];
+    if (mon && day >= 1 && day <= 12) {
+      return mon <= day ? `${mon}-${day}` : `${day}-${mon}`;
+    }
+  }
+  // Excel converted "1-2" -> "Jan-02" or "Jan 2"
+  const monDay = s.match(/^([A-Za-z]+)[-/\s](\d{1,2})(?:[-/\s]\d{2,4})?$/);
+  if (monDay) {
+    const mon = EXCEL_MONTHS[monDay[1].toLowerCase()];
+    const day = Number.parseInt(monDay[2], 10);
+    if (mon && day >= 1 && day <= 12) {
+      return mon <= day ? `${mon}-${day}` : `${day}-${mon}`;
+    }
+  }
+  // Excel converted "1-2" -> "2026-01-02" or "1/2/2026"
+  const isoDate = s.match(/^\d{4}-(\d{1,2})-(\d{1,2})$/);
+  if (isoDate) {
+    const a = Number.parseInt(isoDate[1], 10);
+    const b = Number.parseInt(isoDate[2], 10);
+    if (a >= 1 && a <= 12 && b >= 1 && b <= 12) {
+      return a <= b ? `${a}-${b}` : `${b}-${a}`;
+    }
+  }
+  return s;
+}
+
 export function parseScheduleRows(rows: string[][]): ParsedScheduleRow[] {
   if (rows.length === 0) return [];
   const first = rows[0].map((c) => c.toLowerCase().trim());
@@ -207,7 +259,7 @@ export function parseScheduleRows(rows: string[][]): ParsedScheduleRow[] {
       .toUpperCase();
     const kelas = (kelasIdx >= 0 ? cols[kelasIdx] || '' : cols[base + 2] || '').trim().toUpperCase();
     const mapel = (mapelIdx >= 0 ? cols[mapelIdx] || '' : cols[base + 3] || '').trim().toUpperCase();
-    const jamKe = (jamIdx >= 0 ? cols[jamIdx] || '1-2' : cols[base + 4] || '1-2').trim();
+    const jamKe = normalizeJamKeValue(jamIdx >= 0 ? cols[jamIdx] || '1-2' : cols[base + 4] || '1-2');
     const rawGender = (genderIdx >= 0 ? cols[genderIdx] || '' : cols[base + 5] || '').trim();
     const rawKat = (katIdx >= 0 ? cols[katIdx] || '' : cols[base + 6] || '').trim().toUpperCase();
 
@@ -324,7 +376,16 @@ export function parseTeacherRows(
       const col0 = (cols[0] || '').trim();
       nama = (/^\d+$/.test(col0) ? cols[1] || '' : col0).trim().toUpperCase();
     }
-    if (!nama || nama === '-' || nama === 'NAMA') continue;
+    if (
+      !nama ||
+      nama === '-' ||
+      nama === 'NAMA' ||
+      nama === '(BELUM DITENTUKAN)' ||
+      nama === 'BELUM DIATUR' ||
+      /^(UST\.|USTZ\.)\s+(WALI KELAS|MUSYRIFAH|MUSYRIF)\s+/i.test(nama)
+    ) {
+      continue;
+    }
 
     // Resolve Wilayah / GenderScope first so role defaults know Putra/Putri
     const rawGender = (wilayahIdx >= 0 ? cols[wilayahIdx] : !hasHeader ? cols[2] : '')

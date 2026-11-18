@@ -1,13 +1,13 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import { store } from './server/store';
 import {
   buildDatabaseWorkbookBuffer,
   buildDatabaseWorkbookSpec,
   buildPersonalLoginWorkbookBuffer,
   buildPersonalLoginWorkbookSpec,
+  loadAuthenticPutraRoster,
   type TemplateContext,
 } from './server/templates';
 import type { Gender, PresensiType, StatusTindakLanjut, WilayahFilter } from './src/types';
@@ -283,25 +283,50 @@ function registerApiRoutes() {
   });
 
   app.post('/api/import/all-in-one', (req, res) => {
-    const body = req.body || {};
-    const hasAnyData =
-      (Array.isArray(body.santriRows) && body.santriRows.length > 0) ||
-      (Array.isArray(body.teacherRows) && body.teacherRows.length > 0) ||
-      (Array.isArray(body.scheduleRows) && body.scheduleRows.length > 0) ||
-      (Array.isArray(body.ruanganUjian) && body.ruanganUjian.length > 0) ||
-      (Array.isArray(body.pembinaanRows) && body.pembinaanRows.length > 0);
+    try {
+      const body = req.body || {};
+      const hasAnyData =
+        (Array.isArray(body.santriRows) && body.santriRows.length > 0) ||
+        (Array.isArray(body.teacherRows) && body.teacherRows.length > 0) ||
+        (Array.isArray(body.scheduleRows) && body.scheduleRows.length > 0) ||
+        (Array.isArray(body.ruanganUjian) && body.ruanganUjian.length > 0) ||
+        (Array.isArray(body.pembinaanRows) && body.pembinaanRows.length > 0);
 
-    if (!hasAnyData) {
-      return res.status(400).json({ error: 'File Excel tidak berisi baris data valid untuk diimpor.' });
+      if (!hasAnyData) {
+        return res.status(400).json({ error: 'File Excel tidak berisi baris data valid untuk diimpor.' });
+      }
+
+      const result = store.importAllInOne(body);
+      return res.json({ ...result, counts: store.getSystemCounts(), quota: store.getQuotaMetrics() });
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message || 'Gagal memproses import data Excel.' });
     }
-
-    const result = store.importAllInOne(body);
-    res.json({ ...result, counts: store.getSystemCounts(), quota: store.getQuotaMetrics() });
   });
 
   app.post('/api/system/reset-empty', (_req, res) => {
     const counts = store.resetDatabaseEmpty();
     res.json({ ok: true, counts });
+  });
+
+  app.get('/api/system/snapshot', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(store.getFullSnapshot());
+  });
+
+  app.post('/api/system/restore-snapshot', (req, res) => {
+    try {
+      const { snapshot, mode } = req.body || {};
+      if (!snapshot || typeof snapshot !== 'object') {
+        return res.status(400).json({ error: 'Payload snapshot diperlukan untuk memulihkan data.' });
+      }
+      const result = store.restoreSnapshot(snapshot, mode === 'replace' ? 'replace' : 'merge');
+      if (!result.ok) {
+        return res.status(400).json(result);
+      }
+      return res.json({ ...result, quota: store.getQuotaMetrics() });
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message || 'Gagal memulihkan snapshot data.' });
+    }
   });
 
   // TEMPLATE DATABASE EXCEL TERPADU (.XLSX)
@@ -314,43 +339,109 @@ function registerApiRoutes() {
   });
 
   app.get('/api/templates/workbook-data', (_req, res) => {
-    res.setHeader('Cache-Control', 'no-store');
-    res.json(buildDatabaseWorkbookSpec(getTemplateContext()));
+    try {
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json(buildDatabaseWorkbookSpec(getTemplateContext()));
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message || 'Gagal menyusun data template terpadu.' });
+    }
+  });
+
+  app.post('/api/templates/commit-master', (req, res) => {
+    try {
+      const { defaultPin, autoCreateAccounts, autoCreateQuranSchedules } = req.body || {};
+      const ctx = getTemplateContext();
+      const authenticPutra = loadAuthenticPutraRoster();
+
+      // Never wipe or overwrite existing students/logs/schedules; only seed missing authentic roster items if empty or fill missing relations
+      const santriRows =
+        ctx.students.length === 0
+          ? authenticPutra.map((r) => ({
+              nis: r.no,
+              nama: r.nama,
+              kelas: r.kelas,
+              kamar: r.kamar,
+              kelompokQuran: r.kelompokQuran,
+              pengampuQuran: r.pengampuQuran,
+              gender: 'Putra' as Gender,
+            }))
+          : [];
+
+      const defaultRuangUjian =
+        ctx.ruanganUjian && ctx.ruanganUjian.length > 0
+          ? []
+          : [
+              'RUANG 01 PUTRA - AL-GHAZALI',
+              'RUANG 02 PUTRA - IBNU SINA',
+              'RUANG 01 PUTRI - KHADIJAH',
+              'RUANG 02 PUTRI - AISYAH',
+            ];
+
+      const result = store.importAllInOne({
+        santriRows,
+        ruanganUjian: defaultRuangUjian,
+        replaceExisting: false,
+        autoCreateAccounts: autoCreateAccounts ?? true,
+        autoCreateQuranSchedules: autoCreateQuranSchedules ?? true,
+        defaultPin: String(defaultPin || '1234'),
+      });
+
+      return res.json({
+        ok: true,
+        ...result,
+        counts: store.getSystemCounts(),
+        quota: store.getQuotaMetrics(),
+      });
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message || 'Gagal mengambil & menyimpan data template terpadu.' });
+    }
   });
 
   app.get('/api/templates/xlsx', (_req, res) => {
-    const built = buildDatabaseWorkbookBuffer(getTemplateContext());
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
-    res.setHeader('Content-Disposition', `attachment; filename="${built.filename}"`);
-    res.setHeader('Content-Length', String(built.buffer.length));
-    res.setHeader('Cache-Control', 'no-store');
-    return res.end(built.buffer);
+    try {
+      const built = buildDatabaseWorkbookBuffer(getTemplateContext());
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.setHeader('Content-Disposition', `attachment; filename="${built.filename}"`);
+      res.setHeader('Content-Length', String(built.buffer.length));
+      res.setHeader('Cache-Control', 'no-store');
+      return res.end(built.buffer);
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message || 'Gagal membuat file Excel template.' });
+    }
   });
 
   app.get('/api/templates/personal-data', (req, res) => {
-    const namaGuru = String(req.query.namaGuru || '');
-    const teacher = store.getTeacherByIdentifier(namaGuru);
-    if (!teacher) return res.status(404).json({ error: 'Akun pembina tidak ditemukan.' });
-    res.setHeader('Cache-Control', 'no-store');
-    return res.json(buildPersonalLoginWorkbookSpec(getTemplateContext(), teacher));
+    try {
+      const namaGuru = String(req.query.namaGuru || '');
+      const teacher = store.getTeacherByIdentifier(namaGuru);
+      if (!teacher) return res.status(404).json({ error: 'Akun pembina tidak ditemukan.' });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json(buildPersonalLoginWorkbookSpec(getTemplateContext(), teacher));
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message || 'Gagal menyusun template login personal.' });
+    }
   });
 
   app.get('/api/templates/personal-xlsx', (req, res) => {
-    const namaGuru = String(req.query.namaGuru || '');
-    const teacher = store.getTeacherByIdentifier(namaGuru);
-    if (!teacher) return res.status(404).json({ error: 'Akun pembina tidak ditemukan.' });
-    const built = buildPersonalLoginWorkbookBuffer(getTemplateContext(), teacher);
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
-    res.setHeader('Content-Disposition', `attachment; filename="${built.filename}"`);
-    res.setHeader('Content-Length', String(built.buffer.length));
-    res.setHeader('Cache-Control', 'no-store');
-    return res.end(built.buffer);
+    try {
+      const namaGuru = String(req.query.namaGuru || '');
+      const teacher = store.getTeacherByIdentifier(namaGuru);
+      if (!teacher) return res.status(404).json({ error: 'Akun pembina tidak ditemukan.' });
+      const built = buildPersonalLoginWorkbookBuffer(getTemplateContext(), teacher);
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.setHeader('Content-Disposition', `attachment; filename="${built.filename}"`);
+      res.setHeader('Content-Length', String(built.buffer.length));
+      res.setHeader('Cache-Control', 'no-store');
+      return res.end(built.buffer);
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message || 'Gagal mengunduh template login personal.' });
+    }
   });
 
   // PRESENSI HARIAN
@@ -725,6 +816,7 @@ async function startServer() {
   const distPath = path.resolve(process.cwd(), 'dist');
 
   if (!isProd || !fs.existsSync(distPath)) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',

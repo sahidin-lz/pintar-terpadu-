@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import * as XLSX from 'xlsx';
 import type { Gender, RoomMapping, ScheduleItem, Student, TeacherPublic } from '../src/types';
 
@@ -27,10 +28,21 @@ export interface WorkbookSheetSpec {
   rows: string[][];
 }
 
-const INTEGRASI_ASSET_PATH = path.resolve(
-  process.cwd(),
-  'public/assets/aistudio/Salinan_dari_integrASI__pengembangan_sistem_presensi_baru__232cd323',
-);
+const THIS_DIR = path.dirname(fileURLToPath(import.meta.url));
+const INTEGRASI_ASSET_NAME = 'Salinan_dari_integrASI__pengembangan_sistem_presensi_baru__232cd323';
+
+function resolveIntegrasiAssetPath(): string {
+  const candidates = [
+    path.resolve(process.cwd(), 'public/assets/aistudio', INTEGRASI_ASSET_NAME),
+    path.resolve(THIS_DIR, '../public/assets/aistudio', INTEGRASI_ASSET_NAME),
+    path.resolve(THIS_DIR, '../../public/assets/aistudio', INTEGRASI_ASSET_NAME),
+    path.resolve('/var/task/public/assets/aistudio', INTEGRASI_ASSET_NAME),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return candidates[0];
+}
 
 function parseCsvRowsSimple(raw: string): string[][] {
   const cleaned = raw.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -136,14 +148,15 @@ const DEFAULT_PUTRI_TEMPLATE_ROSTER: AuthenticRosterRow[] = [
 
 let cachedAuthenticPutraRoster: AuthenticRosterRow[] | null = null;
 
-function loadAuthenticPutraRoster(): AuthenticRosterRow[] {
+export function loadAuthenticPutraRoster(): AuthenticRosterRow[] {
   if (cachedAuthenticPutraRoster) return cachedAuthenticPutraRoster;
   try {
-    if (!fs.existsSync(INTEGRASI_ASSET_PATH)) {
+    const assetPath = resolveIntegrasiAssetPath();
+    if (!fs.existsSync(assetPath)) {
       cachedAuthenticPutraRoster = FALLBACK_PUTRA_ROSTER;
       return cachedAuthenticPutraRoster;
     }
-    const raw = fs.readFileSync(INTEGRASI_ASSET_PATH, 'utf-8');
+    const raw = fs.readFileSync(assetPath, 'utf-8');
     const rows = parseCsvRowsSimple(raw);
     const seenNames = new Set<string>();
     const list: AuthenticRosterRow[] = [];
@@ -373,12 +386,12 @@ export function buildDatabaseWorkbookSpec(ctx: TemplateContext): {
     const targetBody = isPutri ? musyrifahPutriBody : musyrifPutraBody;
     targetBody.push([
       String(targetBody.length + 1),
-      `${isPutri ? 'USTZ' : 'UST'}. ${isPutri ? 'MUSYRIFAH' : 'MUSYRIF'} KAMAR ${rm.toUpperCase()}`,
+      '(Belum Ditentukan)',
       sanitizeXmlText(rm),
       isPutri ? 'Putri' : 'Putra',
-      '628',
-      makeUsername(`${isPutri ? 'musyrifah' : 'musyrif'}.${rm}`),
-      '1234',
+      '',
+      '',
+      '',
     ]);
   }
 
@@ -431,17 +444,15 @@ export function buildDatabaseWorkbookSpec(ctx: TemplateContext): {
       ]);
       addedWaliNames.add(existing.nama.toUpperCase());
     } else {
-      const placeholderName = `${isPutri ? 'USTZ' : 'UST'}. WALI KELAS ${kls}`;
       targetBody.push([
         String(targetBody.length + 1),
-        placeholderName,
+        '(Belum Ditentukan)',
         sanitizeXmlText(kls),
         isPutri ? 'Putri' : 'Putra',
-        '628',
-        makeUsername(`wali.${kls}`),
-        '1234',
+        '',
+        '',
+        '',
       ]);
-      addedWaliNames.add(placeholderName.toUpperCase());
     }
   }
 
@@ -529,7 +540,7 @@ export function buildDatabaseWorkbookSpec(ctx: TemplateContext): {
     opts: { kelas?: string; kamar?: string; wa?: string; user?: string },
   ) => {
     const key = nama.trim().toUpperCase();
-    if (!key) return;
+    if (!key || key === '(BELUM DITENTUKAN)' || key === 'BELUM DIATUR') return;
     const prev = pegawaiMap.get(key);
     if (prev) {
       if (prev.amanahUtama !== role && !prev.amanahTambahan.includes(role)) {
@@ -616,9 +627,11 @@ export function buildDatabaseWorkbookSpec(ctx: TemplateContext): {
     ]);
   } else {
     for (const kls of sortedClasses) {
+      const assignedWali = waliByClass.get(kls.toUpperCase());
+      if (!assignedWali) continue;
       const klsGender = classGenderMap.get(kls) || inferGender(kls);
       jadwalBody.push([
-        `${klsGender === 'Putri' ? 'USTZ' : 'UST'}. WALI KELAS ${kls}`,
+        sanitizeXmlText(assignedWali.nama),
         'SENIN',
         sanitizeXmlText(kls),
         'BAHASA ARAB',
@@ -714,6 +727,26 @@ export function buildDatabaseWorkbookSpec(ctx: TemplateContext): {
   };
 }
 
+function buildSheetWithTextCells(rows: string[][]): XLSX.WorkSheet {
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = autoFitColumns(rows);
+  const range = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null;
+  if (range) {
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        const cell = ws[addr];
+        if (cell) {
+          cell.t = 's';
+          cell.z = '@';
+          cell.v = String(cell.v ?? '');
+        }
+      }
+    }
+  }
+  return ws;
+}
+
 export function buildDatabaseWorkbookBuffer(ctx: TemplateContext): {
   filename: string;
   buffer: Buffer;
@@ -721,8 +754,7 @@ export function buildDatabaseWorkbookBuffer(ctx: TemplateContext): {
   const spec = buildDatabaseWorkbookSpec(ctx);
   const wb = XLSX.utils.book_new();
   for (const sheet of spec.sheets) {
-    const ws = XLSX.utils.aoa_to_sheet(sheet.rows);
-    ws['!cols'] = autoFitColumns(sheet.rows);
+    const ws = buildSheetWithTextCells(sheet.rows);
     XLSX.utils.book_append_sheet(wb, ws, sheet.name);
   }
   const buffer = XLSX.write(wb, {
@@ -903,8 +935,7 @@ export function buildPersonalLoginWorkbookBuffer(
   const spec = buildPersonalLoginWorkbookSpec(ctx, teacher);
   const wb = XLSX.utils.book_new();
   for (const sheet of spec.sheets) {
-    const ws = XLSX.utils.aoa_to_sheet(sheet.rows);
-    ws['!cols'] = autoFitColumns(sheet.rows);
+    const ws = buildSheetWithTextCells(sheet.rows);
     XLSX.utils.book_append_sheet(wb, ws, sheet.name);
   }
   const buffer = XLSX.write(wb, {
