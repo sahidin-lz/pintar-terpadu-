@@ -328,11 +328,14 @@ function extractLabkomRowsFromMatrix(
       kampusCell === 'PA' ||
       kampusCell === 'IKHWAN';
 
-    const resolvedKampus: LabkomKampus = isPutriKeyword
-      ? 'PUTRI'
-      : isPutraKeyword
-      ? 'PUTRA'
-      : hintKampus || 'PUTRA';
+    const resolvedKampus: LabkomKampus =
+      hintKampus === 'PUTRI'
+        ? 'PUTRI'
+        : isPutriKeyword
+        ? 'PUTRI'
+        : isPutraKeyword
+        ? 'PUTRA'
+        : hintKampus || 'PUTRA';
 
     out.push({
       id: readStr(iId),

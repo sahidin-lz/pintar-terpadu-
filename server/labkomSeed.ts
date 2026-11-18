@@ -227,9 +227,9 @@ export function parseLabkomCsvContent(
   const rows = parseRfc4180Csv(csvText);
   if (rows.length <= 1) return [];
 
-  // Auto-detect header row within the first 8 rows (handles title/banner rows)
+  // Auto-detect header row within the first 25 rows (handles title/banner rows)
   let headerRowIdx = 0;
-  for (let idx = 0; idx < Math.min(rows.length, 8); idx++) {
+  for (let idx = 0; idx < Math.min(rows.length, 25); idx++) {
     const tokens = rows[idx].map(normalizeHeaderToken);
     const hasLoc = tokens.some((t) =>
       ['lab', 'lokasi', 'ruang', 'ruangan', 'labkom', 'ruanganyangdipinjam', 'tempat'].includes(t),

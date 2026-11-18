@@ -1984,7 +1984,7 @@ export function downloadLabkomLogTemplateClient(params: {
     { name: 'Data_Pinjam_Putri', rows: [bookingHeader, ...putriRows] },
     { name: 'Referensi_Master', rows: refRows },
     {
-      name: 'Panduan',
+      name: '0_Panduan',
       rows: [
         ['TEMPLATE LOG PEMINJAMAN LABKOM & RUANGAN SMA (PUTRA & PUTRI)'],
         ['Tanggal Unduh', today],
