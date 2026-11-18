@@ -1,17 +1,46 @@
 import type { Gender, PembinaanKategori, UserRole } from '../types';
 
+const PUTRI_NAME_MARKERS = [
+  'PUTRI',
+  'AKHWAT',
+  'MUSYRIFAH',
+  'MUSRIFAH',
+  'SANTRIWATI',
+  'SISWI',
+  'USTZ',
+  'USTADZAH',
+  'KHADIJAH',
+  'AISYAH',
+  'FATIMAH',
+  'HAFSHAH',
+  'ZAINAB',
+  'MARIYAM',
+  'MARYAM',
+  'RUQAYYAH',
+  'SUMAYYAH',
+  'SUMMAYYAH',
+  'UMMU',
+];
+
 export function inferGenderFromText(...texts: Array<string | undefined>): Gender {
   const combined = texts.filter(Boolean).join(' ').toUpperCase();
-  if (
-    combined.includes('PUTRI') ||
-    combined.includes('AKHWAT') ||
-    combined.includes('MUSYRIFAH') ||
-    combined.includes('USTZ') ||
-    /\bP\b/.test(combined)
-  ) {
+  if (PUTRI_NAME_MARKERS.some((m) => combined.includes(m)) || /\bPI\b/.test(combined)) {
     return 'Putri';
   }
   return 'Putra';
+}
+
+export function findHeaderRowIndex(
+  rows: string[][],
+  matcher: (lowerCells: string[]) => boolean,
+  maxScan = 10,
+): number {
+  const limit = Math.min(rows.length, maxScan);
+  for (let i = 0; i < limit; i++) {
+    const lower = rows[i].map((c) => String(c || '').toLowerCase().trim());
+    if (matcher(lower)) return i;
+  }
+  return -1;
 }
 
 export interface ParsedSantriSimRow {
@@ -28,7 +57,7 @@ export interface ParsedSantriSimRow {
 }
 
 function normalizePengampuName(raw: string): string {
-  const up = raw.trim().toUpperCase();
+  const up = raw.trim().toUpperCase().replace(/\s+/g, ' ');
   if (!up || up === 'TIDAK DITEMUKAN' || up === '-' || up === 'KOSONG') return '';
   if (up === 'UST, SOFYAN IMAM KELSABA' || up === 'UST. SOFYAN IMAM K') {
     return 'UST. SOFYAN IMAM KELSABA';
@@ -38,119 +67,201 @@ function normalizePengampuName(raw: string): string {
   return up;
 }
 
+function parseExplicitWilayah(raw: string): Gender | null {
+  const up = raw.trim().toUpperCase();
+  if (!up) return null;
+  if (
+    up.includes('PUTRI') ||
+    up.includes('AKHWAT') ||
+    up.includes('PEREMPUAN') ||
+    up.includes('SISWI') ||
+    up === 'P' ||
+    up === 'PI'
+  ) {
+    return 'Putri';
+  }
+  if (
+    up.includes('PUTRA') ||
+    up.includes('IKHWAN') ||
+    up.includes('LAKI') ||
+    up.includes('SISWA') ||
+    up === 'L' ||
+    up === 'PA'
+  ) {
+    return 'Putra';
+  }
+  return null;
+}
+
 export function parseSantriSimRows(rows: string[][], forcedGender?: Gender): ParsedSantriSimRow[] {
   if (rows.length === 0) return [];
-  const first = rows[0].map((c) => c.toLowerCase().trim());
-  const hasHeader =
-    first.some((c) => c.includes('nama')) &&
-    first.some(
+
+  const headerIdx = findHeaderRowIndex(rows, (cells) => {
+    const hasNameCol = cells.some(
+      (c) =>
+        c.includes('nama') ||
+        c === 'santri' ||
+        c === 'siswi' ||
+        c === 'siswa' ||
+        c.includes('nama siswa') ||
+        c.includes('nama siswi') ||
+        c.includes('nama santri') ||
+        c.includes('peserta'),
+    );
+    const hasMetaCol = cells.some(
       (c) =>
         c.includes('kelas') ||
+        c.includes('rombel') ||
         c.includes('kamar') ||
+        c.includes('asrama') ||
+        c.includes('hujroh') ||
         c.includes('wilayah') ||
         c.includes('quran') ||
-        c.includes('halaqah')
+        c.includes('halaqah') ||
+        c.includes('nis'),
     );
+    return hasNameCol && hasMetaCol;
+  });
+
+  const hasHeader = headerIdx >= 0;
+  const headerCells = hasHeader ? rows[headerIdx].map((c) => String(c || '').toLowerCase().trim()) : [];
 
   const findHeaderIdx = (...needles: string[]): number => {
     for (const n of needles) {
-      const idx = first.findIndex((h) => h.includes(n));
+      const idx = headerCells.findIndex((h) => h.includes(n));
       if (idx >= 0) return idx;
     }
     return -1;
   };
 
+  const nisColIdx = hasHeader ? findHeaderIdx('nis', 'nomor induk', 'no / nis', 'no.') : -1;
   const wilayahColIdx = hasHeader
-    ? findHeaderIdx('wilayah', 'gender', 'l/p', 'jenis kelamin')
+    ? findHeaderIdx('wilayah', 'gender', 'l/p', 'jenis kelamin', 'unit', 'kampus')
     : -1;
   const namaColIdx = hasHeader
-    ? first.findIndex((h) => h.includes('nama') && !h.includes('kelas') && !h.includes('wali') && !h.includes('ortu'))
+    ? (() => {
+        const direct = headerCells.findIndex(
+          (h) =>
+            (h.includes('nama') || h === 'santri' || h === 'siswi' || h === 'siswa' || h.includes('peserta')) &&
+            !h.includes('kelas') &&
+            !h.includes('wali') &&
+            !h.includes('ortu') &&
+            !h.includes('orang tua') &&
+            !h.includes('kamar') &&
+            !h.includes('pengampu') &&
+            !h.includes('musyrif'),
+        );
+        return direct;
+      })()
     : -1;
   const kelasColIdx = hasHeader
-    ? first.findIndex((h) => h.includes('kelas') && !h.includes('wali'))
+    ? headerCells.findIndex(
+        (h) => (h.includes('kelas') || h.includes('rombel') || h.includes('tingkat')) && !h.includes('wali'),
+      )
     : -1;
-  const kamarColIdx = hasHeader ? findHeaderIdx('kamar', 'asrama') : -1;
-  const waliColIdx = hasHeader ? findHeaderIdx('wali kelas', 'walikelas') : -1;
-  const musyrifColIdx = hasHeader ? findHeaderIdx('musyrif', 'musrif') : -1;
+  const kamarColIdx = hasHeader ? findHeaderIdx('kamar', 'asrama', 'hujroh', 'rayon') : -1;
+  const waliColIdx = hasHeader ? findHeaderIdx('wali kelas', 'walikelas', 'walas') : -1;
+  const musyrifColIdx = hasHeader ? findHeaderIdx('musyrif', 'musrif', 'murobbi', 'pembina asrama') : -1;
 
-  // Handle Kelp. Al-Quran & Pengampu Al-Quran (including Salinan_dari_integrASI where both headers say Kelp. Al-Quran)
   let kelompokColIdx = -1;
   let pengampuColIdx = -1;
   if (hasHeader) {
-    kelompokColIdx = first.findIndex(
-      (h) => (h.includes('kelp') || h.includes('kelompok') || h.includes('halaqah')) && !h.includes('pengampu')
-    );
-    pengampuColIdx = first.findIndex(
+    kelompokColIdx = headerCells.findIndex(
       (h, idx) =>
+        idx !== namaColIdx &&
+        (h.includes('kelp') || h.includes('kelompok') || h.includes('halaqah') || h.includes('tahfidz')) &&
+        !h.includes('pengampu') &&
+        !h.includes('guru'),
+    );
+    pengampuColIdx = headerCells.findIndex(
+      (h, idx) =>
+        idx !== namaColIdx &&
         idx !== kelompokColIdx &&
-        (h.includes('pengampu') || h.includes('muallim') || h.includes('ustadz') || h.includes('quran'))
+        (h.includes('pengampu') || h.includes('muallim') || h.includes('ustadz') || h.includes('quran')),
     );
   }
 
-  const dataRows = hasHeader ? rows.slice(1) : rows;
+  const dataRows = hasHeader ? rows.slice(headerIdx + 1) : rows;
   const seenNames = new Set<string>();
   const parsed: ParsedSantriSimRow[] = [];
 
   for (const cols of dataRows) {
-    const col0 = (cols[0] || '').trim();
-    const nama = (namaColIdx >= 0 ? cols[namaColIdx] || '' : cols[1] || '').trim().toUpperCase();
-    if (!nama) continue;
+    if (!cols || cols.every((c) => !String(c || '').trim())) continue;
 
-    // Detect explicit Wilayah column at index 2 (7-column template) or header index
-    const rawCol2 = (cols[2] || '').trim().toUpperCase();
+    const col0 = String(cols[0] || '').trim();
+    const rawNama = namaColIdx >= 0 ? cols[namaColIdx] || '' : cols[1] || cols[0] || '';
+    const nama = String(rawNama).trim().replace(/\s+/g, ' ').toUpperCase();
+    if (
+      !nama ||
+      nama === 'NAMA' ||
+      nama === 'NAMA SANTRI' ||
+      nama === 'NAMA SISWA' ||
+      nama === 'NAMA SISWI' ||
+      nama === 'TOTAL' ||
+      nama === 'JUMLAH' ||
+      /^\d+$/.test(nama)
+    ) {
+      continue;
+    }
+
+    const rawNis = nisColIdx >= 0 ? String(cols[nisColIdx] || '').trim() : /^\d+$/.test(col0) || /^[a-z0-9-]+$/i.test(col0) ? col0 : '';
+
+    const rawCol2 = String(cols[2] || '').trim();
     const hasExplicitWilayahAt2 =
       wilayahColIdx === 2 ||
-      (wilayahColIdx === -1 &&
-        cols.length >= 7 &&
-        (rawCol2 === 'PUTRA' || rawCol2 === 'PUTRI' || rawCol2 === 'IKHWAN' || rawCol2 === 'AKHWAT'));
+      (wilayahColIdx === -1 && cols.length >= 6 && parseExplicitWilayah(rawCol2) !== null);
 
-    const explicitWilayah =
+    const explicitWilayahRaw =
       wilayahColIdx >= 0
-        ? (cols[wilayahColIdx] || '').trim()
+        ? String(cols[wilayahColIdx] || '').trim()
         : hasExplicitWilayahAt2
-        ? (cols[2] || '').trim()
+        ? rawCol2
         : '';
+    const explicitGender = parseExplicitWilayah(explicitWilayahRaw);
 
     const offset = hasExplicitWilayahAt2 ? 1 : 0;
-    const kelas = (kelasColIdx >= 0 ? cols[kelasColIdx] || '' : cols[2 + offset] || '')
-      .trim()
-      .toUpperCase();
-    const kamar = (kamarColIdx >= 0 ? cols[kamarColIdx] || '' : cols[3 + offset] || '').trim();
-    const kelompokQuran = (
-      kelompokColIdx >= 0 ? cols[kelompokColIdx] || '' : cols[4 + offset] || ''
-    ).trim();
-    const rawPengampu = (
-      pengampuColIdx >= 0 ? cols[pengampuColIdx] || '' : cols[5 + offset] || ''
-    ).trim();
-    const pengampuQuran = normalizePengampuName(rawPengampu);
+    const rawKelas =
+      kelasColIdx >= 0 ? cols[kelasColIdx] || '' : hasHeader ? '' : cols[2 + offset] || '';
+    const kelas = String(rawKelas).trim().replace(/\s+/g, ' ').toUpperCase();
+    const rawKamar =
+      kamarColIdx >= 0 ? cols[kamarColIdx] || '' : hasHeader ? '' : cols[3 + offset] || '';
+    const kamar = String(rawKamar).trim().replace(/\s+/g, ' ');
+    const rawKelompok =
+      kelompokColIdx >= 0 ? cols[kelompokColIdx] || '' : hasHeader ? '' : cols[4 + offset] || '';
+    const kelompokQuran = String(rawKelompok).trim().replace(/\s+/g, ' ');
+    const rawPengampu =
+      pengampuColIdx >= 0 ? cols[pengampuColIdx] || '' : hasHeader ? '' : cols[5 + offset] || '';
+    const pengampuQuran = normalizePengampuName(String(rawPengampu));
 
     const waliKelas =
-      waliColIdx >= 0 ? (cols[waliColIdx] || '').trim().toUpperCase() || undefined : undefined;
+      waliColIdx >= 0
+        ? String(cols[waliColIdx] || '').trim().replace(/\s+/g, ' ').toUpperCase() || undefined
+        : undefined;
     const musyrif =
-      musyrifColIdx >= 0 ? (cols[musyrifColIdx] || '').trim().toUpperCase() || undefined : undefined;
+      musyrifColIdx >= 0
+        ? String(cols[musyrifColIdx] || '').trim().replace(/\s+/g, ' ').toUpperCase() || undefined
+        : undefined;
 
     let warning: string | undefined;
-    if (nama === kelas) {
+    if (kelas && nama === kelas) {
       warning = 'Nama identik dengan Nama Kelas';
     } else if (seenNames.has(nama)) {
       warning = 'Duplikat nama santri dalam file';
     }
     seenNames.add(nama);
 
-    const gender: Gender = explicitWilayah
-      ? explicitWilayah.toUpperCase().includes('PUTRI') ||
-        explicitWilayah.toUpperCase().includes('AKHWAT') ||
-        explicitWilayah.toUpperCase() === 'P'
-        ? 'Putri'
-        : 'Putra'
-      : forcedGender || inferGenderFromText(kelas, kamar, kelompokQuran, pengampuQuran);
+    const textInferred = inferGenderFromText(kelas, kamar, kelompokQuran, pengampuQuran, waliKelas, musyrif);
+    const gender: Gender =
+      explicitGender ||
+      forcedGender ||
+      textInferred;
 
     parsed.push({
-      nis: col0,
+      nis: rawNis,
       nama,
-      kelas,
-      kamar,
-      kelompokQuran,
+      kelas: kelas || '-',
+      kamar: kamar || '-',
+      kelompokQuran: kelompokQuran || '-',
       pengampuQuran,
       waliKelas: waliKelas && waliKelas !== '-' ? waliKelas : undefined,
       musyrif: musyrif && musyrif !== '-' ? musyrif : undefined,
@@ -190,11 +301,9 @@ const EXCEL_MONTHS: Record<string, number> = {
 function normalizeJamKeValue(raw: string): string {
   const s = (raw || '').trim();
   if (!s) return '1-2';
-  // Normal format like "1-2" or "3 - 4" or "5"
   if (/^\d{1,2}(\s*[-–,]\s*\d{1,2})*$/.test(s)) {
     return s.replace(/\s+/g, '');
   }
-  // Excel converted "1-2" -> "02-Jan" or "2-Jan" or "02-Jan-26"
   const dayMon = s.match(/^(\d{1,2})[-/\s]([A-Za-z]+)(?:[-/\s]\d{2,4})?$/);
   if (dayMon) {
     const day = Number.parseInt(dayMon[1], 10);
@@ -203,7 +312,6 @@ function normalizeJamKeValue(raw: string): string {
       return mon <= day ? `${mon}-${day}` : `${day}-${mon}`;
     }
   }
-  // Excel converted "1-2" -> "Jan-02" or "Jan 2"
   const monDay = s.match(/^([A-Za-z]+)[-/\s](\d{1,2})(?:[-/\s]\d{2,4})?$/);
   if (monDay) {
     const mon = EXCEL_MONTHS[monDay[1].toLowerCase()];
@@ -212,7 +320,6 @@ function normalizeJamKeValue(raw: string): string {
       return mon <= day ? `${mon}-${day}` : `${day}-${mon}`;
     }
   }
-  // Excel converted "1-2" -> "2026-01-02" or "1/2/2026"
   const isoDate = s.match(/^\d{4}-(\d{1,2})-(\d{1,2})$/);
   if (isoDate) {
     const a = Number.parseInt(isoDate[1], 10);
@@ -224,50 +331,55 @@ function normalizeJamKeValue(raw: string): string {
   return s;
 }
 
-export function parseScheduleRows(rows: string[][]): ParsedScheduleRow[] {
+export function parseScheduleRows(rows: string[][], forcedGender?: Gender): ParsedScheduleRow[] {
   if (rows.length === 0) return [];
-  const first = rows[0].map((c) => c.toLowerCase().trim());
-  const hasHeader = first.some(
-    (c) => c.includes('guru') || c.includes('pengajar') || c.includes('mapel') || c.includes('hari')
+
+  const headerIdx = findHeaderRowIndex(
+    rows,
+    (cells) =>
+      cells.some((c) => c.includes('guru') || c.includes('pengajar') || c.includes('pengampu') || c.includes('ustadz')) &&
+      cells.some((c) => c.includes('mapel') || c.includes('hari') || c.includes('pelajaran') || c.includes('jam')),
   );
-  const dataRows = hasHeader ? rows.slice(1) : rows;
+  const hasHeader = headerIdx >= 0;
+  const headerCells = hasHeader ? rows[headerIdx].map((c) => String(c || '').toLowerCase().trim()) : [];
+  const dataRows = hasHeader ? rows.slice(headerIdx + 1) : rows;
 
   const findCol = (...needles: string[]): number => {
     for (const n of needles) {
-      const idx = first.findIndex((h) => h.includes(n));
+      const idx = headerCells.findIndex((h) => h.includes(n));
       if (idx >= 0) return idx;
     }
     return -1;
   };
 
-  const guruIdx = hasHeader ? findCol('guru', 'pengajar', 'ustadz', 'nama') : -1;
+  const guruIdx = hasHeader ? findCol('guru', 'pengajar', 'pengampu', 'ustadz', 'nama') : -1;
   const hariIdx = hasHeader ? findCol('hari') : -1;
   const kelasIdx = hasHeader ? findCol('kelas', 'halaqah', 'rombel') : -1;
-  const mapelIdx = hasHeader ? findCol('mapel', 'mata pelajaran', 'pelajaran') : -1;
-  const jamIdx = hasHeader ? findCol('jam', 'jp') : -1;
-  const genderIdx = hasHeader ? findCol('wilayah', 'gender', 'unit') : -1;
+  const mapelIdx = hasHeader ? findCol('mapel', 'mata pelajaran', 'pelajaran', 'materi') : -1;
+  const jamIdx = hasHeader ? findCol('jam', 'jp', 'waktu') : -1;
+  const genderIdx = hasHeader ? findCol('wilayah', 'gender', 'unit', 'kampus') : -1;
   const katIdx = hasHeader ? findCol('kategori', 'jenis') : -1;
 
   const parsed: ParsedScheduleRow[] = [];
   for (const cols of dataRows) {
+    if (!cols || cols.every((c) => !String(c || '').trim())) continue;
     const hasLeadingNumber = !hasHeader && /^\d+$/.test((cols[0] || '').trim());
     const base = hasLeadingNumber ? 1 : 0;
 
-    const guru = (guruIdx >= 0 ? cols[guruIdx] || '' : cols[base] || '').trim().toUpperCase();
+    const guru = (guruIdx >= 0 ? cols[guruIdx] || '' : cols[base] || '').trim().replace(/\s+/g, ' ').toUpperCase();
     const hari = (hariIdx >= 0 ? cols[hariIdx] || 'SENIN' : cols[base + 1] || 'SENIN')
       .trim()
       .toUpperCase();
-    const kelas = (kelasIdx >= 0 ? cols[kelasIdx] || '' : cols[base + 2] || '').trim().toUpperCase();
-    const mapel = (mapelIdx >= 0 ? cols[mapelIdx] || '' : cols[base + 3] || '').trim().toUpperCase();
+    const kelas = (kelasIdx >= 0 ? cols[kelasIdx] || '' : cols[base + 2] || '').trim().replace(/\s+/g, ' ').toUpperCase();
+    const mapel = (mapelIdx >= 0 ? cols[mapelIdx] || '' : cols[base + 3] || '').trim().replace(/\s+/g, ' ').toUpperCase();
     const jamKe = normalizeJamKeValue(jamIdx >= 0 ? cols[jamIdx] || '1-2' : cols[base + 4] || '1-2');
     const rawGender = (genderIdx >= 0 ? cols[genderIdx] || '' : cols[base + 5] || '').trim();
     const rawKat = (katIdx >= 0 ? cols[katIdx] || '' : cols[base + 6] || '').trim().toUpperCase();
 
-    if (!guru || !kelas || !mapel) continue;
+    if (!guru || !kelas || !mapel || guru === 'GURU' || guru === 'NAMA GURU') continue;
 
-    const gender = rawGender
-      ? inferGenderFromText(rawGender)
-      : inferGenderFromText(kelas, guru);
+    const explicit = parseExplicitWilayah(rawGender);
+    const gender: Gender = explicit || forcedGender || inferGenderFromText(kelas, guru);
     const kategori: 'Akademik' | 'Al-Quran' =
       rawKat.includes('QUR') ||
       mapel.includes('QUR') ||
@@ -306,12 +418,13 @@ function normalizeUserRole(raw: string): UserRole | null {
   if (low.includes('wali')) return 'Wali Kelas';
   if (low.includes('musyrifah') || low.includes('musrifah')) return 'Musyrifah';
   if (low.includes('musyrif') || low.includes('musrif')) return 'Musyrif';
+  if (low.includes('qur')) return 'Pengampu Al-Quran';
   if (low.includes('guru') || low.includes('pengampu')) return 'Guru';
   return null;
 }
 
 function cleanOptionalAssignment(val: string): string | undefined {
-  const up = val.trim().toUpperCase();
+  const up = val.trim().replace(/\s+/g, ' ').toUpperCase();
   if (!up || up === '-' || up === 'KOSONG' || up === 'KOSONGKAN' || up === 'TIDAK ADA') {
     return undefined;
   }
@@ -323,45 +436,57 @@ export function parseTeacherRows(
   options?: ParseTeacherOptions,
 ): ParsedTeacherRow[] {
   if (rows.length === 0) return [];
-  const first = rows[0].map((c) => c.toLowerCase().trim());
-  const hasHeader = first.some(
-    (c) =>
-      c.includes('nama') ||
-      c.includes('peran') ||
-      c.includes('jabatan') ||
-      c.includes('amanah') ||
-      c.includes('kamar') ||
-      c.includes('kelas'),
+  const headerIdx = findHeaderRowIndex(rows, (cells) =>
+    cells.some(
+      (c) =>
+        c.includes('nama') ||
+        c.includes('peran') ||
+        c.includes('jabatan') ||
+        c.includes('amanah') ||
+        c.includes('kamar binaan') ||
+        c.includes('kelas binaan') ||
+        c.includes('musyrif') ||
+        c.includes('wali kelas'),
+    ),
   );
-  const dataRows = hasHeader ? rows.slice(1) : rows;
+  const hasHeader = headerIdx >= 0;
+  const headerCells = hasHeader ? rows[headerIdx].map((c) => String(c || '').toLowerCase().trim()) : [];
+  const dataRows = hasHeader ? rows.slice(headerIdx + 1) : rows;
 
   const findCol = (...needles: string[]): number => {
     for (const n of needles) {
-      const idx = first.findIndex((h) => h.includes(n));
+      const idx = headerCells.findIndex((h) => h.includes(n));
       if (idx >= 0) return idx;
     }
     return -1;
   };
 
-  const namaIdx = hasHeader ? findCol('nama') : -1;
+  const namaIdx = hasHeader
+    ? headerCells.findIndex(
+        (h) =>
+          (h.includes('nama') || h === 'guru' || h === 'musyrif' || h === 'musyrifah' || h === 'wali kelas') &&
+          !h.includes('kelas binaan') &&
+          !h.includes('kamar binaan'),
+      )
+    : -1;
   const peranIdx = hasHeader ? findCol('amanah utama', 'peran', 'jabatan', 'bidang') : -1;
   const extraIdx = hasHeader ? findCol('amanah tambahan', 'tambahan') : -1;
-  const wilayahIdx = hasHeader ? findCol('wilayah', 'gender', 'unit') : -1;
+  const wilayahIdx = hasHeader ? findCol('wilayah', 'gender', 'unit', 'kampus') : -1;
   const kelasIdx = hasHeader
     ? (() => {
         const direct = findCol('kelas binaan');
         if (direct >= 0) return direct;
-        return first.findIndex(
+        return headerCells.findIndex(
           (h) => h.includes('kelas') && !h.includes('nama') && !h.includes('amanah'),
         );
       })()
     : -1;
-  const kamarIdx = hasHeader ? findCol('kamar binaan', 'kamar') : -1;
+  const kamarIdx = hasHeader ? findCol('kamar binaan', 'kamar', 'asrama') : -1;
   const waIdx = hasHeader
     ? (() => {
         const direct = findCol('whatsapp', 'no wa', 'no. wa', 'hp', 'telp');
         if (direct >= 0) return direct;
-        return first.findIndex((h) => /\bwa\b/.test(h));
+        return headerCells.findIndex((h) => /\bwa\b/.test(h));
       })()
     : -1;
   const userIdx = hasHeader ? findCol('username', 'email') : -1;
@@ -369,17 +494,20 @@ export function parseTeacherRows(
 
   const parsed: ParsedTeacherRow[] = [];
   for (const cols of dataRows) {
+    if (!cols || cols.every((c) => !String(c || '').trim())) continue;
     let nama = '';
     if (namaIdx >= 0) {
-      nama = (cols[namaIdx] || '').trim().toUpperCase();
+      nama = (cols[namaIdx] || '').trim().replace(/\s+/g, ' ').toUpperCase();
     } else {
       const col0 = (cols[0] || '').trim();
-      nama = (/^\d+$/.test(col0) ? cols[1] || '' : col0).trim().toUpperCase();
+      nama = (/^\d+$/.test(col0) ? cols[1] || '' : col0).trim().replace(/\s+/g, ' ').toUpperCase();
     }
     if (
       !nama ||
       nama === '-' ||
       nama === 'NAMA' ||
+      nama === 'NAMA PEGAWAI' ||
+      nama === 'NAMA GURU' ||
       nama === '(BELUM DITENTUKAN)' ||
       nama === 'BELUM DIATUR' ||
       /^(UST\.|USTZ\.)\s+(WALI KELAS|MUSYRIFAH|MUSYRIF)\s+/i.test(nama)
@@ -387,35 +515,41 @@ export function parseTeacherRows(
       continue;
     }
 
-    // Resolve Wilayah / GenderScope first so role defaults know Putra/Putri
     const rawGender = (wilayahIdx >= 0 ? cols[wilayahIdx] : !hasHeader ? cols[2] : '')
       .trim()
       .toLowerCase();
-    let genderScope: 'Putra' | 'Putri' | 'Semua' = options?.forcedGender || 'Semua';
-    if (rawGender) {
-      if (rawGender.includes('putri') || rawGender.includes('akhwat')) genderScope = 'Putri';
-      else if (rawGender.includes('putra') || rawGender.includes('ikhwan')) genderScope = 'Putra';
-      else if (rawGender.includes('semua')) genderScope = 'Semua';
-    } else if (!options?.forcedGender && (nama.includes('USTZ') || nama.includes('MUSYRIFAH'))) {
-      genderScope = 'Putri';
-    } else if (!options?.forcedGender && (nama.includes('UST.') || nama.includes('PUTRA'))) {
-      genderScope = 'Putra';
-    }
 
     const waliKelasOf = cleanOptionalAssignment(
-      kelasIdx >= 0 ? cols[kelasIdx] || '' : !hasHeader ? cols[3] || '' : ''
+      kelasIdx >= 0 ? cols[kelasIdx] || '' : !hasHeader ? cols[3] || '' : '',
     );
 
     const kamarRaw = (kamarIdx >= 0 ? cols[kamarIdx] || '' : !hasHeader ? cols[4] || '' : '').trim();
     const kamarList = kamarRaw
       ? kamarRaw
           .split(/[;,]/)
-          .map((k) => k.trim())
+          .map((k) => k.trim().replace(/\s+/g, ' '))
           .filter((k) => Boolean(k && k !== '-' && k.toUpperCase() !== 'KOSONG'))
       : [];
     const kamarBinaan = kamarList.length > 0 ? kamarList : undefined;
 
-    // Resolve Peran
+    let genderScope: 'Putra' | 'Putri' | 'Semua' = options?.forcedGender || 'Semua';
+    if (rawGender) {
+      if (rawGender.includes('putri') || rawGender.includes('akhwat') || rawGender === 'pi' || rawGender === 'p') {
+        genderScope = 'Putri';
+      } else if (rawGender.includes('putra') || rawGender.includes('ikhwan') || rawGender === 'pa' || rawGender === 'l') {
+        genderScope = 'Putra';
+      } else if (rawGender.includes('semua')) {
+        genderScope = 'Semua';
+      }
+    } else if (!options?.forcedGender) {
+      const checkText = `${nama} ${waliKelasOf || ''} ${kamarList.join(' ')}`.toUpperCase();
+      if (PUTRI_NAME_MARKERS.some((m) => checkText.includes(m))) {
+        genderScope = 'Putri';
+      } else if (nama.includes('UST.') || checkText.includes('PUTRA') || checkText.includes('ABU BAKAR') || checkText.includes('UMAR') || checkText.includes('UTSMAN') || checkText.includes('ALI ')) {
+        genderScope = 'Putra';
+      }
+    }
+
     const rawPeran = (peranIdx >= 0 ? cols[peranIdx] : !hasHeader ? cols[1] : '').trim();
     let peran: UserRole = normalizeUserRole(rawPeran) || options?.defaultRole || 'Guru';
     if (!rawPeran && !options?.defaultRole) {
@@ -430,7 +564,6 @@ export function parseTeacherRows(
     if (peran === 'Musyrif' && genderScope === 'Putri') peran = 'Musyrifah';
     if (peran === 'Musyrifah' && genderScope === 'Putra') peran = 'Musyrif';
 
-    // Resolve Amanah Tambahan (plus automatic secondary role if both waliKelasOf & kamarBinaan exist)
     const extraRaw = (extraIdx >= 0 ? cols[extraIdx] : '').trim();
     const peranTambahanSet = new Set<UserRole>(
       extraRaw
@@ -438,7 +571,7 @@ export function parseTeacherRows(
             .split(/[;,]/)
             .map((item) => normalizeUserRole(item))
             .filter((r): r is UserRole => Boolean(r && r !== peran))
-        : []
+        : [],
     );
     if (waliKelasOf && peran !== 'Wali Kelas') {
       peranTambahanSet.add('Wali Kelas');
@@ -490,24 +623,51 @@ export interface ParsedPembinaanImportRow {
   tindakLanjut: string;
 }
 
-export function parsePembinaanImportRows(rows: string[][]): ParsedPembinaanImportRow[] {
+export function parsePembinaanImportRows(
+  rows: string[][],
+  forcedGender?: Gender,
+): ParsedPembinaanImportRow[] {
   if (rows.length === 0) return [];
-  const first = rows[0].map((c) => c.toLowerCase());
-  const hasHeader =
-    first.some((c) => c.includes('santri') || c.includes('nama')) &&
-    first.some((c) => c.includes('tanggal') || c.includes('kategori') || c.includes('uraian'));
-  const dataRows = hasHeader ? rows.slice(1) : rows;
+  const headerIdx = findHeaderRowIndex(
+    rows,
+    (cells) =>
+      cells.some((c) => c.includes('santri') || c.includes('nama')) &&
+      cells.some((c) => c.includes('tanggal') || c.includes('kategori') || c.includes('uraian') || c.includes('catatan')),
+  );
+  const hasHeader = headerIdx >= 0;
+  const headerCells = hasHeader ? rows[headerIdx].map((c) => String(c || '').toLowerCase().trim()) : [];
+  const dataRows = hasHeader ? rows.slice(headerIdx + 1) : rows;
   const todayStr = new Date().toISOString().slice(0, 10);
+
+  const findCol = (fallback: number, ...needles: string[]) => {
+    if (!hasHeader) return fallback;
+    for (const n of needles) {
+      const idx = headerCells.findIndex((h) => h.includes(n));
+      if (idx >= 0) return idx;
+    }
+    return fallback;
+  };
+
+  const iTgl = findCol(0, 'tanggal', 'tgl');
+  const iNama = findCol(1, 'santri', 'nama');
+  const iWil = findCol(2, 'wilayah', 'gender', 'unit');
+  const iKat = findCol(3, 'kategori');
+  const iUraian = findCol(4, 'uraian', 'catatan', 'keterangan');
+  const iPoin = findCol(5, 'poin', 'skor');
+  const iStatus = findCol(6, 'status');
+  const iTindak = findCol(7, 'tindak lanjut', 'tindak');
 
   const parsed: ParsedPembinaanImportRow[] = [];
   for (const cols of dataRows) {
-    const rawTgl = (cols[0] || '').trim();
-    const namaSantri = (cols[1] || '').trim().toUpperCase();
-    if (!namaSantri) continue;
+    if (!cols || cols.every((c) => !String(c || '').trim())) continue;
+    const rawTgl = (cols[iTgl] || '').trim();
+    const namaSantri = (cols[iNama] || '').trim().replace(/\s+/g, ' ').toUpperCase();
+    if (!namaSantri || namaSantri === 'NAMA SANTRI' || namaSantri === 'NAMA') continue;
     const tanggal = /^\d{4}-\d{2}-\d{2}$/.test(rawTgl) ? rawTgl : todayStr;
-    const rawWilayah = (cols[2] || '').trim().toLowerCase();
-    const gender: Gender = rawWilayah.includes('putri') ? 'Putri' : 'Putra';
-    const rawKat = (cols[3] || '').trim().toLowerCase();
+    const rawWilayah = (cols[iWil] || '').trim();
+    const gender: Gender =
+      parseExplicitWilayah(rawWilayah) || forcedGender || inferGenderFromText(namaSantri);
+    const rawKat = (cols[iKat] || '').trim().toLowerCase();
     let kategori: PembinaanKategori = 'Pemantauan Ibadah';
     if (rawKat.includes('disipl')) kategori = 'Kedisiplinan';
     else if (rawKat.includes('prest')) kategori = 'Prestasi';
@@ -516,16 +676,16 @@ export function parsePembinaanImportRows(rows: string[][]): ParsedPembinaanImpor
       kategori = 'Pembinaan Karakter';
     }
 
-    const uraian = (cols[4] || '').trim() || 'Catatan pembinaan';
-    const poinNum = Number.parseInt((cols[5] || '0').trim(), 10);
+    const uraian = (cols[iUraian] || '').trim() || 'Catatan pembinaan';
+    const poinNum = Number.parseInt((cols[iPoin] || '0').trim(), 10);
     const poin = Number.isFinite(poinNum) ? poinNum : 0;
 
-    const rawStatus = (cols[6] || '').trim().toLowerCase();
+    const rawStatus = (cols[iStatus] || '').trim().toLowerCase();
     let statusTindakLanjut: ParsedPembinaanImportRow['statusTindakLanjut'] = 'Selesai';
     if (rawStatus.includes('eskal')) statusTindakLanjut = 'Eskalasi';
     else if (rawStatus.includes('pros')) statusTindakLanjut = 'Proses';
 
-    const tindakLanjut = (cols[7] || '').trim() || '-';
+    const tindakLanjut = (cols[iTindak] || '').trim() || '-';
     parsed.push({
       tanggal,
       namaSantri,

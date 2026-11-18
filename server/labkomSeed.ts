@@ -49,8 +49,48 @@ function resolveLabkomCsvPath(): string | null {
   return null;
 }
 
+function detectCsvDelimiter(clean: string): ',' | ';' | '\t' {
+  const sampleLines: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < clean.length && sampleLines.length < 5; i++) {
+    const ch = clean[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      current += ch;
+    } else if (ch === '\n' && !inQuotes) {
+      if (current.trim().length > 0) sampleLines.push(current);
+      current = '';
+    } else if (ch !== '\r') {
+      current += ch;
+    }
+  }
+  if (current.trim().length > 0 && sampleLines.length < 5) {
+    sampleLines.push(current);
+  }
+
+  let commaCount = 0;
+  let semiCount = 0;
+  let tabCount = 0;
+  for (const line of sampleLines) {
+    let q = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') q = !q;
+      else if (!q) {
+        if (ch === ',') commaCount++;
+        else if (ch === ';') semiCount++;
+        else if (ch === '\t') tabCount++;
+      }
+    }
+  }
+  if (tabCount > commaCount && tabCount >= semiCount) return '\t';
+  if (semiCount > commaCount) return ';';
+  return ',';
+}
+
 /**
- * RFC-4180 multiline CSV parser (handles quoted cells containing commas and newlines).
+ * RFC-4180 multiline CSV parser supporting comma, semicolon, and tab delimiters.
  */
 export function parseRfc4180Csv(text: string): string[][] {
   const rows: string[][] = [];
@@ -59,6 +99,8 @@ export function parseRfc4180Csv(text: string): string[][] {
   let inQuotes = false;
 
   const clean = text.replace(/^\uFEFF/, '');
+  const delimiter = detectCsvDelimiter(clean);
+
   for (let i = 0; i < clean.length; i++) {
     const ch = clean[i];
     if (inQuotes) {
@@ -72,7 +114,7 @@ export function parseRfc4180Csv(text: string): string[][] {
       }
     } else if (ch === '"') {
       inQuotes = true;
-    } else if (ch === ',') {
+    } else if (ch === delimiter) {
       row.push(cell);
       cell = '';
     } else if (ch === '\n') {
@@ -88,24 +130,62 @@ export function parseRfc4180Csv(text: string): string[][] {
     row.push(cell);
     rows.push(row);
   }
-  return rows;
+  return rows.filter((r) => r.some((c) => c.trim().length > 0));
 }
 
 export function parseLabkomTanggalToIso(raw: string): string {
   const s = String(raw || '').trim();
   if (!s) return '';
 
-  const isoMatch = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  const isoMatch = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
   if (isoMatch) {
     return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
   }
 
-  const dmyMatch = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  const dmyMatch = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
   if (dmyMatch) {
-    const [, dd, mm, yyyy] = dmyMatch;
+    const [, dd, mm, yyyyRaw] = dmyMatch;
+    const yyyy = yyyyRaw.length === 2 ? `20${yyyyRaw}` : yyyyRaw;
     return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
   }
+
+  // Numeric Excel serial date string (e.g. 46050)
+  if (/^\d{5}$/.test(s)) {
+    const serial = Number(s);
+    if (serial > 30000 && serial < 70000) {
+      const utc = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+      if (!Number.isNaN(utc.getTime())) {
+        return utc.toISOString().slice(0, 10);
+      }
+    }
+  }
   return '';
+}
+
+function normalizeHeaderToken(raw: string): string {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function inferLabkomKampusFromValues(...texts: string[]): LabkomKampus {
+  const up = texts.filter(Boolean).join(' ').toUpperCase();
+  if (
+    up.includes('PUTRI') ||
+    up.includes('AKHWAT') ||
+    up.includes('USTZ') ||
+    up.includes('KHADIJAH') ||
+    up.includes('AISYAH') ||
+    up.includes('FATIMAH') ||
+    up.includes('HAFSHAH') ||
+    up.includes('MARIYAM') ||
+    up.includes('ZAINAB') ||
+    up.includes('RUQAYYAH')
+  ) {
+    return 'PUTRI';
+  }
+  return 'PUTRA';
 }
 
 export function classifyLocationCategory(loc: string): 'LAB' | 'RUANGAN' {
@@ -127,55 +207,87 @@ export function parseLabkomCsvContent(
   const rows = parseRfc4180Csv(csvText);
   if (rows.length <= 1) return [];
 
-  const header = rows[0].map((h) => h.trim().toLowerCase());
+  // Auto-detect header row within the first 8 rows (handles title/banner rows)
+  let headerRowIdx = 0;
+  for (let idx = 0; idx < Math.min(rows.length, 8); idx++) {
+    const tokens = rows[idx].map(normalizeHeaderToken);
+    const hasLoc = tokens.some((t) =>
+      ['lab', 'lokasi', 'ruang', 'ruangan', 'labkom', 'ruanganyangdipinjam', 'tempat'].includes(t),
+    );
+    const hasDateOrTime = tokens.some((t) =>
+      ['tanggal', 'tgl', 'tanggalpinjam', 'tanggalpeminjaman', 'jamke', 'jam', 'waktu', 'sesi'].includes(t),
+    );
+    if (hasLoc && hasDateOrTime) {
+      headerRowIdx = idx;
+      break;
+    }
+  }
+
+  const header = rows[headerRowIdx].map(normalizeHeaderToken);
   const colIndex = (names: string[], fallbackIdx: number) => {
     for (const n of names) {
       const idx = header.indexOf(n);
       if (idx >= 0) return idx;
     }
+    for (const n of names) {
+      const idx = header.findIndex((h) => h.includes(n));
+      if (idx >= 0) return idx;
+    }
     return fallbackIdx;
   };
 
-  const iId = colIndex(['id'], 0);
-  const iTs = colIndex(['timestamp'], 1);
-  const iKampus = colIndex(['kampus'], 2);
-  const iEmail = colIndex(['email'], 3);
-  const iNama = colIndex(['nama peminjam', 'nama_peminjam', 'nama'], 4);
-  const iGuru = colIndex(['guru'], 5);
-  const iKelas = colIndex(['kelas'], 6);
-  const iMapel = colIndex(['mapel'], 7);
-  const iLab = colIndex(['lab', 'lokasi', 'ruang'], 8);
-  const iTanggal = colIndex(['tanggal'], 9);
-  const iJam = colIndex(['jam_ke', 'jam ke', 'jam'], 10);
-  const iKet = colIndex(['keterangan'], 11);
+  const iId = colIndex(['id', 'kode', 'notrx'], 0);
+  const iTs = colIndex(['timestamp', 'waktukirim', 'createdat'], 1);
+  const iKampus = colIndex(['kampus', 'wilayah', 'area', 'unit', 'gender'], 2);
+  const iEmail = colIndex(['email', 'emailaddress', 'surel'], 3);
+  const iNama = colIndex(['namapeminjam', 'peminjam', 'pemohon', 'nama', 'pengisi'], 4);
+  const iGuru = colIndex(['guru', 'pengajar', 'ustadz', 'ustadzah', 'pendamping'], 5);
+  const iKelas = colIndex(['kelas', 'rombel', 'tingkat'], 6);
+  const iMapel = colIndex(['mapel', 'matapelajaran', 'pelajaran', 'kegiatan'], 7);
+  const iLab = colIndex(['lab', 'lokasi', 'ruang', 'ruangan', 'labkom', 'ruanganyangdipinjam', 'tempat'], 8);
+  const iTanggal = colIndex(['tanggal', 'tgl', 'tanggalpinjam', 'tanggalpeminjaman', 'date'], 9);
+  const iJam = colIndex(['jamke', 'jam', 'sesi', 'waktupinjam', 'waktu', 'jampinjam'], 10);
+  const iKet = colIndex(['keterangan', 'ket', 'catatan', 'keperluan', 'notes'], 11);
   const iStatus = colIndex(['status'], 12);
 
   const bookings: LabkomBooking[] = [];
-  for (let r = 1; r < rows.length; r++) {
+  for (let r = headerRowIdx + 1; r < rows.length; r++) {
     const cols = rows[r];
-    if (!cols || cols.length < 10) continue;
+    if (!cols || cols.length < 3) continue;
 
     const rawLab = String(cols[iLab] || '').trim();
     const rawTanggal = String(cols[iTanggal] || '').trim();
     const isoTanggal = parseLabkomTanggalToIso(rawTanggal);
     if (!rawLab || !isoTanggal) continue;
 
-    const rawKampus = String(cols[iKampus] || '').trim().toUpperCase();
-    const kampus: LabkomKampus =
-      overrideKampus || (rawKampus === 'PUTRI' ? 'PUTRI' : 'PUTRA');
-
     const jamKe = String(cols[iJam] || '').trim();
     if (!jamKe) continue;
 
-    const idVal = String(cols[iId] || '').trim() || `TRX-CSV-${r}`;
+    const rawKampus = String(cols[iKampus] || '').trim().toUpperCase();
+    const namaVal = String(cols[iNama] || '').trim();
+    const guruVal = String(cols[iGuru] || '').trim();
+    const kelasVal = String(cols[iKelas] || '').trim();
+
+    let kampus: LabkomKampus;
+    if (overrideKampus) {
+      kampus = overrideKampus;
+    } else if (rawKampus.includes('PUTRI') || rawKampus.includes('AKHWAT') || rawKampus === 'PI') {
+      kampus = 'PUTRI';
+    } else if (rawKampus.includes('PUTRA') || rawKampus.includes('IKHWAN') || rawKampus === 'PA') {
+      kampus = 'PUTRA';
+    } else {
+      kampus = inferLabkomKampusFromValues(rawLab, guruVal, kelasVal, namaVal);
+    }
+
+    const idVal = String(cols[iId] || '').trim() || `TRX-CSV-${r}-${Date.now().toString(36).slice(-4)}`;
     bookings.push({
       id: idVal,
       timestamp: String(cols[iTs] || '').trim() || isoTanggal,
       kampus,
       email: String(cols[iEmail] || '').trim(),
-      namaPeminjam: String(cols[iNama] || '').trim() || String(cols[iGuru] || '').trim() || '-',
-      guru: String(cols[iGuru] || '').trim() || '-',
-      kelas: String(cols[iKelas] || '').trim() || '-',
+      namaPeminjam: namaVal || guruVal || '-',
+      guru: guruVal || '-',
+      kelas: kelasVal || '-',
       mapel: String(cols[iMapel] || '').trim() || '-',
       lab: rawLab.toUpperCase(),
       tanggal: isoTanggal,

@@ -314,6 +314,19 @@ function registerApiRoutes() {
     res.json({ ok: true, counts });
   });
 
+  app.post('/api/system/tidy-data', (_req, res) => {
+    try {
+      const result = store.tidyAllPutraPutriData();
+      return res.json({
+        ...result,
+        labkomState: store.getLabkomState(),
+        quota: store.getQuotaMetrics(),
+      });
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message || 'Gagal merapikan data Putra & Putri.' });
+    }
+  });
+
   app.get('/api/system/snapshot', (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.json(store.getFullSnapshot());

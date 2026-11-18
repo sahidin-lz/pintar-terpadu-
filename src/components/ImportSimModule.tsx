@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
   CalendarClock,
@@ -157,9 +157,9 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const [assignPin, setAssignPin] = useState<string>('');
   const [savingAssign, setSavingAssign] = useState<boolean>(false);
 
-  // Direct Student & Schedule Input + Edit inside Admin Login
   const [adminStudents, setAdminStudents] = useState<Student[]>([]);
   const [studentSearchQ, setStudentSearchQ] = useState('');
+  const [studentWilayahFilter, setStudentWilayahFilter] = useState<'Semua' | 'Putra' | 'Putri'>('Semua');
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
   const [sNis, setSNis] = useState('');
   const [sNama, setSNama] = useState('');
@@ -172,6 +172,9 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
 
   const [adminSchedules, setAdminSchedules] = useState<ScheduleItem[]>([]);
   const [scheduleSearchQ, setScheduleSearchQ] = useState('');
+  const [scheduleWilayahFilter, setScheduleWilayahFilter] = useState<'Semua' | 'Putra' | 'Putri'>('Semua');
+  const [tidyingData, setTidyingData] = useState(false);
+  const excelPreviewRef = useRef<HTMLDivElement | null>(null);
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const [jKategori, setJKategori] = useState<'Akademik' | 'Al-Quran'>('Akademik');
   const [jGuru, setJGuru] = useState('');
@@ -744,6 +747,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
 
   const handleExcelFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (ev) => {
@@ -751,24 +755,106 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       if (!buf) return;
       try {
         const parsed = parseDatabaseExcelBuffer(buf, file.name);
-        setExcelWorkbook(parsed);
-        if (parsed.santriRows.length === 0 && parsed.pegawaiRows.length > 0) {
-          setExcelPreviewSheet('pegawai');
-        } else if (parsed.santriRows.length === 0 && parsed.musyrifRows.length > 0) {
-          setExcelPreviewSheet('musyrif');
-        } else {
-          setExcelPreviewSheet('santri');
+        const totalRows =
+          parsed.santriRows.length +
+          parsed.pegawaiRows.length +
+          parsed.musyrifRows.length +
+          parsed.waliKelasRows.length +
+          parsed.guruRows.length +
+          parsed.scheduleRows.length +
+          parsed.ruanganUjian.length +
+          parsed.pembinaanRows.length;
+
+        if (totalRows === 0) {
+          notify(
+            `File ${file.name} terbaca (${parsed.detectedSheets.length} sheet) tetapi belum ada baris data yang cocok dengan kolom SIM. Cek nama header (Nama, Kelas, Kamar, Wilayah).`,
+            'error',
+          );
+          return;
         }
+
+        const putraCount =
+          parsed.santriRows.filter((r) => r.gender === 'Putra').length +
+          parsed.pegawaiRows.filter((r) => r.genderScope === 'Putra').length +
+          parsed.musyrifRows.filter((r) => r.genderScope === 'Putra').length +
+          parsed.waliKelasRows.filter((r) => r.genderScope === 'Putra').length +
+          parsed.scheduleRows.filter((r) => r.gender === 'Putra').length;
+        const putriCount =
+          parsed.santriRows.filter((r) => r.gender === 'Putri').length +
+          parsed.pegawaiRows.filter((r) => r.genderScope === 'Putri').length +
+          parsed.musyrifRows.filter((r) => r.genderScope === 'Putri').length +
+          parsed.waliKelasRows.filter((r) => r.genderScope === 'Putri').length +
+          parsed.scheduleRows.filter((r) => r.gender === 'Putri').length;
+
+        setExcelWorkbook(parsed);
+        if (parsed.santriRows.length > 0) setExcelPreviewSheet('santri');
+        else if (parsed.pegawaiRows.length > 0) setExcelPreviewSheet('pegawai');
+        else if (parsed.musyrifRows.length > 0) setExcelPreviewSheet('musyrif');
+        else if (parsed.waliKelasRows.length > 0) setExcelPreviewSheet('waliKelas');
+        else if (parsed.guruRows.length > 0) setExcelPreviewSheet('guru');
+        else if (parsed.scheduleRows.length > 0) setExcelPreviewSheet('jadwal');
+        else setExcelPreviewSheet('ruang');
+
+        if (putriCount > 0 && putraCount === 0) setPreviewWilayah('Putri');
+        else setPreviewWilayah('Semua');
+
         setActiveTab('excel_upload');
         notify(
-          `File ${file.name} terbaca (${parsed.detectedSheets.length} sheet). Periksa ringkasan lalu klik Upload Database.`,
-          'success',
+          `File ${file.name} terbaca (${totalRows} baris: Putra ${putraCount}, Putri ${putriCount}). Klik tombol "Upload Database" di pratinjau untuk menyimpan ke sistem!`,
+          'info',
         );
+        setTimeout(() => excelPreviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
       } catch {
-        notify('Gagal membaca file Excel (.xlsx/.xls). Pastikan file valid dan tidak terproteksi password.', 'error');
+        notify(
+          'Gagal membaca file Excel/CSV (.xlsx/.xls/.csv). Pastikan file valid dan tidak terproteksi password.',
+          'error',
+        );
       }
     };
     reader.readAsArrayBuffer(file);
+  };
+
+  const handleTidyPutraPutri = async () => {
+    setTidyingData(true);
+    try {
+      const res = await fetch('/api/system/tidy-data', { method: 'POST' });
+      const data = await parseJsonSafe<{
+        ok: boolean;
+        summary: {
+          duplicatesRemoved: number;
+          genderReclassified: number;
+          after: {
+            students: number;
+            byWilayah: {
+              Putra: { students: number; rooms: number; schedules: number };
+              Putri: { students: number; rooms: number; schedules: number };
+            };
+            labkomPutra: number;
+            labkomPutri: number;
+          };
+        };
+      }>(res);
+
+      if (auth.currentUser) {
+        fetch('/api/firebase/snapshot')
+          .then((r) => (r.ok ? r.json() : null))
+          .then((snap) => (snap ? pushSnapshotToFirestore(snap) : null))
+          .then(() => fetch('/api/firebase/mark-synced', { method: 'POST' }))
+          .catch(() => {});
+      }
+
+      onDataUpdated();
+      await loadAdminEntities();
+      const s = data.summary;
+      notify(
+        `Semua data Putra & Putri berhasil dirapikan! Putra: ${s.after.byWilayah.Putra.students} santri · Putri: ${s.after.byWilayah.Putri.students} santri · Duplikat bersih: ${s.duplicatesRemoved} · Klasifikasi dibenahi: ${s.genderReclassified}.`,
+        'success',
+      );
+    } catch (err) {
+      notify((err as Error).message || 'Gagal merapikan data Putra & Putri.', 'error');
+    } finally {
+      setTidyingData(false);
+    }
   };
 
   const handleExecuteExcelUpload = async () => {
@@ -1348,56 +1434,141 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
               </span>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => setInventoryMinimized((v) => !v)}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-          >
-            {inventoryMinimized ? (
-              <>
-                <ChevronDown className="h-3.5 w-3.5" />
-                Tampilkan Ringkasan
-              </>
-            ) : (
-              <>
-                <ChevronUp className="h-3.5 w-3.5" />
-                Minimize
-              </>
-            )}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={tidyingData}
+              onClick={handleTidyPutraPutri}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1 text-[11px] font-bold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+              title="Rapikan ejaan/spasi, pisahkan Putra & Putri secara akurat, hapus duplikat, dan sinkronkan relasi Wali/Musyrif/Kamar"
+            >
+              <Sparkles className={`h-3.5 w-3.5 text-amber-600 ${tidyingData ? 'animate-spin' : ''}`} />
+              <span>{tidyingData ? 'Merapikan...' : 'Rapikan & Pisahkan Data Putra/Putri'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setInventoryMinimized((v) => !v)}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+            >
+              {inventoryMinimized ? (
+                <>
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  Tampilkan Ringkasan
+                </>
+              ) : (
+                <>
+                  <ChevronUp className="h-3.5 w-3.5" />
+                  Minimize
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
         {!inventoryMinimized && (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            {inventoryCards.map((box) => {
-              const Icon = box.icon;
-              return (
-                <div key={box.label} className={`rounded-xl border p-4 ${box.card}`}>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold text-slate-600 truncate">{box.label}</span>
-                    <span className={`flex h-7 w-7 items-center justify-center rounded-lg shrink-0 ${box.iconBox}`}>
-                      <Icon className="h-3.5 w-3.5" />
-                    </span>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+              {inventoryCards.map((box) => {
+                const Icon = box.icon;
+                return (
+                  <div key={box.label} className={`rounded-xl border p-4 ${box.card}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-slate-600 truncate">{box.label}</span>
+                      <span className={`flex h-7 w-7 items-center justify-center rounded-lg shrink-0 ${box.iconBox}`}>
+                        <Icon className="h-3.5 w-3.5" />
+                      </span>
+                    </div>
+                    <div className={`mt-2 font-mono-num text-2xl font-bold ${box.valColor}`}>{box.val}</div>
+                    {box.label === 'Total Santri' && counts?.byWilayah && (
+                      <div className="mt-1 font-mono-num text-[10px] font-medium text-slate-600">
+                        Putra: {counts.byWilayah.Putra.students} · Putri: {counts.byWilayah.Putri.students}
+                      </div>
+                    )}
+                    {box.label === 'Kamar Asrama' && counts?.byWilayah && (
+                      <div className="mt-1 font-mono-num text-[10px] font-medium text-slate-600">
+                        Putra: {counts.byWilayah.Putra.rooms} · Putri: {counts.byWilayah.Putri.rooms}
+                      </div>
+                    )}
+                    {box.label === "Jadwal KBM & Qur'an" && counts?.byWilayah && (
+                      <div className="mt-1 font-mono-num text-[10px] font-medium text-slate-600">
+                        Putra: {counts.byWilayah.Putra.schedules} · Putri: {counts.byWilayah.Putri.schedules}
+                      </div>
+                    )}
                   </div>
-                  <div className={`mt-2 font-mono-num text-2xl font-bold ${box.valColor}`}>{box.val}</div>
-                  {box.label === 'Total Santri' && counts?.byWilayah && (
-                    <div className="mt-1 font-mono-num text-[10px] font-medium text-slate-600">
-                      Putra: {counts.byWilayah.Putra.students} · Putri: {counts.byWilayah.Putri.students}
+                );
+              })}
+            </div>
+
+            {/* Panel Perbandingan Terpisah Wilayah Putra vs Wilayah Putri */}
+            {counts?.byWilayah && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="rounded-xl border border-sky-200 bg-gradient-to-br from-sky-50/80 to-white p-4 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-bold text-sky-900 uppercase tracking-wide">
+                      Wilayah Putra (Banin)
                     </div>
-                  )}
-                  {box.label === 'Kamar Asrama' && counts?.byWilayah && (
-                    <div className="mt-1 font-mono-num text-[10px] font-medium text-slate-600">
-                      Putra: {counts.byWilayah.Putra.rooms} · Putri: {counts.byWilayah.Putri.rooms}
+                    <div className="mt-1.5 flex flex-wrap gap-2 text-[11px] font-mono-num">
+                      <span className="rounded-md bg-white border border-sky-200 px-2 py-0.5 font-bold text-sky-800">
+                        Santri: {counts.byWilayah.Putra.students}
+                      </span>
+                      <span className="rounded-md bg-white border border-sky-200 px-2 py-0.5 font-semibold text-sky-700">
+                        Kamar: {counts.byWilayah.Putra.rooms}
+                      </span>
+                      <span className="rounded-md bg-white border border-sky-200 px-2 py-0.5 font-semibold text-sky-700">
+                        Jadwal: {counts.byWilayah.Putra.schedules}
+                      </span>
+                      <span className="rounded-md bg-white border border-sky-200 px-2 py-0.5 font-semibold text-sky-700">
+                        Pembinaan: {counts.byWilayah.Putra.pembinaanRecords}
+                      </span>
                     </div>
-                  )}
-                  {box.label === "Jadwal KBM & Qur'an" && counts?.byWilayah && (
-                    <div className="mt-1 font-mono-num text-[10px] font-medium text-slate-600">
-                      Putra: {counts.byWilayah.Putra.schedules} · Putri: {counts.byWilayah.Putri.schedules}
-                    </div>
-                  )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStudentWilayahFilter('Putra');
+                      setScheduleWilayahFilter('Putra');
+                      setActiveTab('kelola');
+                    }}
+                    className="rounded-lg border border-sky-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-sky-800 hover:bg-sky-50 whitespace-nowrap shrink-0"
+                  >
+                    Lihat Data Putra →
+                  </button>
                 </div>
-              );
-            })}
+
+                <div className="rounded-xl border border-rose-200 bg-gradient-to-br from-rose-50/80 to-white p-4 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-bold text-rose-900 uppercase tracking-wide">
+                      Wilayah Putri (Banat)
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap gap-2 text-[11px] font-mono-num">
+                      <span className="rounded-md bg-white border border-rose-200 px-2 py-0.5 font-bold text-rose-800">
+                        Santri: {counts.byWilayah.Putri.students}
+                      </span>
+                      <span className="rounded-md bg-white border border-rose-200 px-2 py-0.5 font-semibold text-rose-700">
+                        Kamar: {counts.byWilayah.Putri.rooms}
+                      </span>
+                      <span className="rounded-md bg-white border border-rose-200 px-2 py-0.5 font-semibold text-rose-700">
+                        Jadwal: {counts.byWilayah.Putri.schedules}
+                      </span>
+                      <span className="rounded-md bg-white border border-rose-200 px-2 py-0.5 font-semibold text-rose-700">
+                        Pembinaan: {counts.byWilayah.Putri.pembinaanRecords}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStudentWilayahFilter('Putri');
+                      setScheduleWilayahFilter('Putri');
+                      setActiveTab('kelola');
+                    }}
+                    className="rounded-lg border border-rose-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-rose-800 hover:bg-rose-50 whitespace-nowrap shrink-0"
+                  >
+                    Lihat Data Putri →
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1526,11 +1697,11 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                     <label className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#0B1324] px-3 py-2 text-[11px] font-semibold text-white hover:bg-slate-800 cursor-pointer transition-colors whitespace-nowrap shrink-0">
                       <Upload className="h-3.5 w-3.5 text-teal-300 shrink-0" />
                       <span>
-                        {isUploadingThis ? 'Mengupload & Menyimpan...' : `Upload ${tpl.title.split(' ')[0]} (.xlsx)`}
+                        {isUploadingThis ? 'Mengupload & Menyimpan...' : `Upload ${tpl.title.split(' ')[0]} (.xlsx / .csv)`}
                       </span>
                       <input
                         type="file"
-                        accept=".xlsx,.xls"
+                        accept=".xlsx,.xls,.csv"
                         disabled={isUploadingThis}
                         onChange={(e) => handleSingleComponentFileUpload(tpl.key, tpl.title, e)}
                         className="hidden"
@@ -1738,14 +1909,14 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                   <FileSpreadsheet className="h-5 w-5" />
                 </span>
                 <span className="text-xs font-bold text-slate-900">
-                  {excelWorkbook ? excelWorkbook.fileName : 'Pilih File Excel (.xlsx / .xls)'}
+                  {excelWorkbook ? excelWorkbook.fileName : 'Pilih File Excel / CSV (.xlsx / .xls / .csv)'}
                 </span>
                 <span className="mt-1 text-[11px] text-slate-500">
-                  Bisa upload lengkap seluruh sheet ATAU hanya sheet Master_Pegawai / Siswa saja
+                  Bisa upload lengkap seluruh sheet ATAU hanya file/sheet Data Putri atau Master Pegawai saja
                 </span>
                 <input
                   type="file"
-                  accept=".xlsx,.xls"
+                  accept=".xlsx,.xls,.csv"
                   onChange={handleExcelFileChange}
                   className="hidden"
                 />
@@ -1901,16 +2072,25 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                     ))}
                   </div>
 
-                  <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-gradient-to-r from-emerald-50/80 to-sky-50/70 px-4 py-3">
-                      <div className="space-y-1">
-                        <div className="text-xs font-semibold text-emerald-800 flex items-center gap-1.5">
-                          <CheckCircle2 className="h-4 w-4" />
-                          Siap Upload: {excelWorkbook.santriRows.length} santri ·{' '}
-                          {excelWorkbook.pegawaiRows.length} pegawai ·{' '}
-                          {excelWorkbook.musyrifRows.length} musyrif/ah ·{' '}
-                          {excelWorkbook.waliKelasRows.length} wali ·{' '}
-                          {excelWorkbook.guruRows.length} guru · {excelWorkbook.scheduleRows.length} jadwal
+                  <div ref={excelPreviewRef} className="rounded-xl border-2 border-emerald-400 overflow-hidden bg-white shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-200 bg-gradient-to-r from-emerald-50/90 to-sky-50/80 px-4 py-3">
+                      <div className="space-y-1.5">
+                        <div className="text-xs font-semibold text-emerald-900 flex flex-wrap items-center gap-1.5">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-700" />
+                          <span>
+                            Siap Upload: {excelWorkbook.santriRows.length} santri (
+                            <span className="text-sky-800">
+                              Putra: {excelWorkbook.santriRows.filter((s) => s.gender === 'Putra').length}
+                            </span>{' '}
+                            ·{' '}
+                            <span className="text-rose-800">
+                              Putri: {excelWorkbook.santriRows.filter((s) => s.gender === 'Putri').length}
+                            </span>
+                            ) · {excelWorkbook.pegawaiRows.length} pegawai ·{' '}
+                            {excelWorkbook.musyrifRows.length} musyrif/ah ·{' '}
+                            {excelWorkbook.waliKelasRows.length} wali ·{' '}
+                            {excelWorkbook.guruRows.length} guru · {excelWorkbook.scheduleRows.length} jadwal
+                          </span>
                         </div>
                         <div className="inline-flex items-center gap-1 rounded-md bg-white/90 p-0.5 border border-slate-200 text-[11px]">
                           {(['Semua', 'Putra', 'Putri'] as const).map((w) => (
@@ -1933,10 +2113,10 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                         type="button"
                         disabled={importing}
                         onClick={handleExecuteExcelUpload}
-                        className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-700 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:from-emerald-700 hover:to-teal-800 disabled:opacity-50"
+                        className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-700 px-4 py-2 text-xs font-bold text-white shadow-sm hover:from-emerald-700 hover:to-teal-800 disabled:opacity-50"
                       >
                         <Upload className="h-3.5 w-3.5" />
-                        {importing ? 'Mengupload Database...' : 'Upload Database'}
+                        {importing ? 'Mengupload Database...' : 'Upload & Simpan ke Database'}
                       </button>
                     </div>
 
@@ -2784,16 +2964,38 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                 </form>
 
                 {/* Tabel Edit Santri yang Sudah Ada */}
-                <div className="p-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-slate-800">
-                    Edit Santri yang Sudah Ada ({adminStudents.length})
-                  </span>
+                <div className="p-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-800">
+                      Data Santri ({adminStudents.filter((s) => studentWilayahFilter === 'Semua' || s.gender === studentWilayahFilter).length})
+                    </span>
+                    <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 text-[11px]">
+                      {(['Semua', 'Putra', 'Putri'] as const).map((w) => (
+                        <button
+                          key={w}
+                          type="button"
+                          onClick={() => setStudentWilayahFilter(w)}
+                          className={`rounded-md px-2 py-0.5 font-semibold transition-colors ${
+                            studentWilayahFilter === w
+                              ? w === 'Putri'
+                                ? 'bg-rose-600 text-white'
+                                : w === 'Putra'
+                                ? 'bg-sky-600 text-white'
+                                : 'bg-slate-900 text-white'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          {w}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <input
                     type="text"
                     value={studentSearchQ}
                     onChange={(e) => setStudentSearchQ(e.target.value)}
                     placeholder="Cari nama santri / kelas / kamar..."
-                    className="h-8 w-56 rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
+                    className="h-8 w-52 rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
                   />
                 </div>
                 <div className="max-h-64 overflow-y-auto">
@@ -2809,6 +3011,9 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                     <tbody className="divide-y divide-slate-100">
                       {adminStudents
                         .filter((st) => {
+                          if (studentWilayahFilter !== 'Semua' && st.gender !== studentWilayahFilter) {
+                            return false;
+                          }
                           const q = studentSearchQ.trim().toLowerCase();
                           if (!q) return true;
                           return (
@@ -2817,7 +3022,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                             (st.kamar || '').toLowerCase().includes(q)
                           );
                         })
-                        .slice(0, 60)
+                        .slice(0, 80)
                         .map((st) => (
                           <tr
                             key={st.id}
@@ -2827,8 +3032,17 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                           >
                             <td className="px-3 py-2">
                               <div className="font-semibold text-slate-900">{st.nama}</div>
-                              <div className="font-mono-num text-[10px] text-slate-500">
-                                NIS: {st.nis || '-'} · {st.gender}
+                              <div className="font-mono-num text-[10px] text-slate-500 flex items-center gap-1.5 mt-0.5">
+                                <span>NIS: {st.nis || '-'}</span>
+                                <span
+                                  className={`rounded px-1.5 py-0.2 font-bold ${
+                                    st.gender === 'Putri'
+                                      ? 'bg-rose-100 text-rose-800'
+                                      : 'bg-sky-100 text-sky-800'
+                                  }`}
+                                >
+                                  {st.gender}
+                                </span>
                               </div>
                             </td>
                             <td className="px-2 py-2">
@@ -3011,16 +3225,38 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                 </form>
 
                 {/* Tabel Edit Jadwal yang Sudah Ada */}
-                <div className="p-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-slate-800">
-                    Edit Jadwal yang Sudah Ada ({adminSchedules.length})
-                  </span>
+                <div className="p-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-800">
+                      Data Jadwal ({adminSchedules.filter((s) => scheduleWilayahFilter === 'Semua' || s.gender === scheduleWilayahFilter).length})
+                    </span>
+                    <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 text-[11px]">
+                      {(['Semua', 'Putra', 'Putri'] as const).map((w) => (
+                        <button
+                          key={w}
+                          type="button"
+                          onClick={() => setScheduleWilayahFilter(w)}
+                          className={`rounded-md px-2 py-0.5 font-semibold transition-colors ${
+                            scheduleWilayahFilter === w
+                              ? w === 'Putri'
+                                ? 'bg-rose-600 text-white'
+                                : w === 'Putra'
+                                ? 'bg-sky-600 text-white'
+                                : 'bg-slate-900 text-white'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          {w}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <input
                     type="text"
                     value={scheduleSearchQ}
                     onChange={(e) => setScheduleSearchQ(e.target.value)}
                     placeholder="Cari guru / mapel / kelas..."
-                    className="h-8 w-56 rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
+                    className="h-8 w-52 rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
                   />
                 </div>
                 <div className="max-h-64 overflow-y-auto">
@@ -3036,6 +3272,9 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                     <tbody className="divide-y divide-slate-100">
                       {adminSchedules
                         .filter((sch) => {
+                          if (scheduleWilayahFilter !== 'Semua' && sch.gender !== scheduleWilayahFilter) {
+                            return false;
+                          }
                           const q = scheduleSearchQ.trim().toLowerCase();
                           if (!q) return true;
                           return (
@@ -3062,7 +3301,15 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                             </td>
                             <td className="px-2 py-2">
                               <div className="font-medium text-slate-800">{sch.kelas}</div>
-                              <div className="text-[10px] text-slate-500">{sch.gender}</div>
+                              <span
+                                className={`inline-block rounded px-1.5 py-0.2 text-[10px] font-bold ${
+                                  sch.gender === 'Putri'
+                                    ? 'bg-rose-100 text-rose-800'
+                                    : 'bg-sky-100 text-sky-800'
+                                }`}
+                              >
+                                {sch.gender}
+                              </span>
                             </td>
                             <td className="px-3 py-2 text-right whitespace-nowrap">
                               <button

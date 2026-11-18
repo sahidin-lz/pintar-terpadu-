@@ -36,6 +36,99 @@ export interface ParsedDatabaseWorkbook {
   pembinaanRows: ParsedPembinaanImportRow[];
 }
 
+function detectTextDelimiter(text: string): string {
+  const firstLines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+  const score = (delim: string) => {
+    let total = 0;
+    for (const line of firstLines) {
+      let inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') inQ = !inQ;
+        else if (!inQ && ch === delim) total++;
+      }
+    }
+    return total;
+  };
+  const candidates = [
+    { d: ';', n: score(';') },
+    { d: ',', n: score(',') },
+    { d: '\t', n: score('\t') },
+  ].sort((a, b) => b.n - a.n);
+  return candidates[0].n > 0 ? candidates[0].d : ',';
+}
+
+function parseDelimitedTextToMatrix(rawText: string): string[][] {
+  const cleaned = rawText.replace(/^\uFEFF/, '');
+  const delim = detectTextDelimiter(cleaned);
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (cleaned[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delim) {
+      row.push(cell.replace(/\s+/g, ' ').trim());
+      cell = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && cleaned[i + 1] === '\n') i++;
+      row.push(cell.replace(/\s+/g, ' ').trim());
+      if (row.some((c) => c.length > 0)) rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += ch;
+    }
+  }
+  row.push(cell.replace(/\s+/g, ' ').trim());
+  if (row.some((c) => c.length > 0)) rows.push(row);
+  return rows;
+}
+
+function inferWilayahHintFromLabel(label: string): 'Putra' | 'Putri' | undefined {
+  const low = String(label || '').toLowerCase();
+  if (
+    low.includes('putri') ||
+    low.includes('akhwat') ||
+    low.includes('siswi') ||
+    low.includes('santriwati') ||
+    low.includes('musyrifah') ||
+    low.startsWith('1b_') ||
+    low.startsWith('2b_') ||
+    low.startsWith('3b_')
+  ) {
+    return 'Putri';
+  }
+  if (
+    low.includes('putra') ||
+    low.includes('ikhwan') ||
+    low.startsWith('1a_') ||
+    low.startsWith('2a_') ||
+    low.startsWith('3a_')
+  ) {
+    return 'Putra';
+  }
+  return undefined;
+}
+
 function sheetToStringMatrix(ws: XLSX.WorkSheet): string[][] {
   const aoa = XLSX.utils.sheet_to_json<unknown[]>(ws, {
     header: 1,
@@ -43,25 +136,42 @@ function sheetToStringMatrix(ws: XLSX.WorkSheet): string[][] {
     raw: false,
   });
   return aoa
-    .map((row) => (Array.isArray(row) ? row.map((cell) => String(cell ?? '').trim()) : []))
+    .map((row) =>
+      Array.isArray(row) ? row.map((cell) => String(cell ?? '').replace(/\s+/g, ' ').trim()) : [],
+    )
     .filter((row) => row.some((c) => c.length > 0));
 }
 
-function parseRuanganRows(rows: string[][]): string[] {
+function parseRuanganRows(rows: string[][], forcedGender?: 'Putra' | 'Putri'): string[] {
   if (rows.length === 0) return [];
-  const first = (rows[0][0] || '').toLowerCase();
-  const dataRows = first.includes('ruang') || first.includes('nama') ? rows.slice(1) : rows;
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(rows.length, 6); i++) {
+    const joined = rows[i].map((c) => c.toLowerCase()).join(' ');
+    if (joined.includes('ruang') || joined.includes('nama') || joined.includes('lokasi')) {
+      headerIdx = i;
+      break;
+    }
+  }
+  const dataRows = headerIdx >= 0 ? rows.slice(headerIdx + 1) : rows;
   const set = new Set<string>();
   for (const r of dataRows) {
     let val = (r[0] || '').trim().toUpperCase();
-    if (!val) continue;
+    if (!val || val === 'NAMA RUANGAN' || val === 'NAMA RUANGAN UJIAN') continue;
     const rawWilayah = (r[1] || '').trim().toUpperCase();
+    const resolvedWilayah =
+      rawWilayah.includes('PUTRI') || rawWilayah === 'PI' || rawWilayah === 'P'
+        ? 'PUTRI'
+        : rawWilayah.includes('PUTRA') || rawWilayah === 'PA' || rawWilayah === 'L'
+        ? 'PUTRA'
+        : forcedGender
+        ? forcedGender.toUpperCase()
+        : '';
     if (
-      (rawWilayah === 'PUTRA' || rawWilayah === 'PUTRI') &&
+      (resolvedWilayah === 'PUTRA' || resolvedWilayah === 'PUTRI') &&
       !val.includes('PUTRA') &&
       !val.includes('PUTRI')
     ) {
-      val = `${val} (${rawWilayah})`;
+      val = `${val} (${resolvedWilayah})`;
     }
     set.add(val);
   }
@@ -467,9 +577,39 @@ export function parseDatabaseWorkbookFromSpec(spec: DatabaseWorkbookSpec): Parse
   return parseDatabaseExcelBuffer(out, spec.filename);
 }
 
+function inspectMatrixHeaders(matrix: string[][], maxScan = 10): string {
+  return matrix
+    .slice(0, maxScan)
+    .map((r) => r.join(' ').toLowerCase())
+    .join(' | ');
+}
+
 export function parseDatabaseExcelBuffer(buffer: ArrayBuffer, fileName: string): ParsedDatabaseWorkbook {
-  const wb = XLSX.read(buffer, { type: 'array' });
-  const detectedSheets = wb.SheetNames.slice();
+  const fileForcedGender = inferWilayahHintFromLabel(fileName);
+  const lowerFile = String(fileName || '').toLowerCase();
+
+  const sheetEntries: Array<{ name: string; matrix: string[][] }> = [];
+  if (lowerFile.endsWith('.csv') || lowerFile.endsWith('.tsv')) {
+    const decoder = new TextDecoder('utf-8');
+    const text = decoder.decode(new Uint8Array(buffer));
+    const matrix = parseDelimitedTextToMatrix(text);
+    const baseName = fileName.replace(/\.(csv|tsv)$/i, '') || 'CSV_Data';
+    if (matrix.length > 0) {
+      sheetEntries.push({ name: baseName, matrix });
+    }
+  } else {
+    const wb = XLSX.read(buffer, { type: 'array' });
+    for (const name of wb.SheetNames) {
+      const ws = wb.Sheets[name];
+      if (!ws) continue;
+      const matrix = sheetToStringMatrix(ws);
+      if (matrix.length > 0) {
+        sheetEntries.push({ name, matrix });
+      }
+    }
+  }
+
+  const detectedSheets = sheetEntries.map((s) => s.name);
 
   let santriRows: ParsedSantriSimRow[] = [];
   let pegawaiRows: ParsedTeacherRow[] = [];
@@ -480,82 +620,93 @@ export function parseDatabaseExcelBuffer(buffer: ArrayBuffer, fileName: string):
   let ruanganUjian: string[] = [];
   let pembinaanRows: ParsedPembinaanImportRow[] = [];
 
-  for (const name of wb.SheetNames) {
+  for (const { name, matrix } of sheetEntries) {
     const low = name.toLowerCase();
     if (low.includes('panduan') || low.startsWith('0_')) continue;
 
-    const ws = wb.Sheets[name];
-    if (!ws) continue;
-    const matrix = sheetToStringMatrix(ws);
-    if (matrix.length === 0) continue;
+    const sheetGender = inferWilayahHintFromLabel(name);
+    const effectiveGender = sheetGender || fileForcedGender;
 
     if (low.includes('pembinaan') || low.startsWith('6_')) {
-      pembinaanRows = pembinaanRows.concat(parsePembinaanImportRows(matrix));
+      pembinaanRows = pembinaanRows.concat(parsePembinaanImportRows(matrix, effectiveGender));
     } else if (low.includes('pegawai')) {
-      pegawaiRows = pegawaiRows.concat(parseTeacherRows(matrix));
-    } else if (low.includes('siswa') || low.includes('santri') || low.startsWith('1')) {
-      const forcedGender =
-        low.includes('putri') || low.startsWith('1b_')
-          ? 'Putri'
-          : low.includes('putra') || low.startsWith('1a_')
-          ? 'Putra'
-          : undefined;
-      santriRows = santriRows.concat(parseSantriSimRows(matrix, forcedGender));
+      pegawaiRows = pegawaiRows.concat(
+        parseTeacherRows(matrix, { forcedGender: effectiveGender }),
+      );
+    } else if (
+      low.includes('siswa') ||
+      low.includes('siswi') ||
+      low.includes('santri') ||
+      low.startsWith('1')
+    ) {
+      santriRows = santriRows.concat(parseSantriSimRows(matrix, effectiveGender));
     } else if (low.includes('musyrifah') || low.startsWith('2b_')) {
       musyrifRows = musyrifRows.concat(
         parseTeacherRows(matrix, { defaultRole: 'Musyrifah', forcedGender: 'Putri' }),
       );
     } else if (low.includes('musyrif') || low.includes('musrif') || low.startsWith('2')) {
-      const forcedGender = low.includes('putra') || low.startsWith('2a_') ? 'Putra' : undefined;
       musyrifRows = musyrifRows.concat(
-        parseTeacherRows(matrix, { defaultRole: 'Musyrif', forcedGender }),
+        parseTeacherRows(matrix, {
+          defaultRole: effectiveGender === 'Putri' ? 'Musyrifah' : 'Musyrif',
+          forcedGender: effectiveGender,
+        }),
       );
     } else if (low.includes('wali') || low.startsWith('3a_') || low.startsWith('3b_')) {
-      const forcedGender =
-        low.includes('putri') || low.startsWith('3b_')
-          ? 'Putri'
-          : low.includes('putra') || low.startsWith('3a_')
-          ? 'Putra'
-          : undefined;
-      const parsedRows = parseTeacherRows(matrix, { defaultRole: 'Wali Kelas', forcedGender });
+      const parsedRows = parseTeacherRows(matrix, {
+        defaultRole: 'Wali Kelas',
+        forcedGender: effectiveGender,
+      });
       for (const row of parsedRows) {
         if (row.peran === 'Guru') guruRows.push(row);
         else if (row.peran === 'Musyrif' || row.peran === 'Musyrifah') musyrifRows.push(row);
         else waliKelasRows.push(row);
       }
     } else if (low.includes('guru') || low.includes('pengampu') || low.startsWith('3c_') || low.startsWith('3_')) {
-      const parsedRows = parseTeacherRows(matrix, { defaultRole: 'Guru' });
+      const parsedRows = parseTeacherRows(matrix, {
+        defaultRole: 'Guru',
+        forcedGender: effectiveGender,
+      });
       for (const row of parsedRows) {
         if (row.peran === 'Wali Kelas') waliKelasRows.push(row);
         else if (row.peran === 'Musyrif' || row.peran === 'Musyrifah') musyrifRows.push(row);
         else guruRows.push(row);
       }
     } else if (low.includes('jadwal') || low.startsWith('4_')) {
-      scheduleRows = scheduleRows.concat(parseScheduleRows(matrix));
+      scheduleRows = scheduleRows.concat(parseScheduleRows(matrix, effectiveGender));
     } else if (low.includes('ruang') || low.startsWith('5_')) {
-      ruanganUjian = Array.from(new Set([...ruanganUjian, ...parseRuanganRows(matrix)]));
+      ruanganUjian = Array.from(new Set([...ruanganUjian, ...parseRuanganRows(matrix, effectiveGender)]));
     } else {
-      // Header-based fallback detection for generic sheet names (e.g. Sheet1, Data, IntegrASI)
-      const headerJoined = (matrix[0] || []).join(' ').toLowerCase();
+      // Multi-row header-based fallback detection (e.g. Sheet1, Data, Putri, Akhwat, etc.)
+      const headerJoined = inspectMatrixHeaders(matrix, 10);
       if (
         headerJoined.includes('kelp') ||
         headerJoined.includes('kelompok') ||
         headerJoined.includes('pengampu') ||
-        (headerJoined.includes('nama') && headerJoined.includes('kelas') && headerJoined.includes('kamar'))
+        headerJoined.includes('siswi') ||
+        headerJoined.includes('santri') ||
+        ((headerJoined.includes('nama') || headerJoined.includes('siswa')) &&
+          (headerJoined.includes('kelas') || headerJoined.includes('rombel') || headerJoined.includes('kamar') || headerJoined.includes('asrama')))
       ) {
-        santriRows = santriRows.concat(parseSantriSimRows(matrix));
-      } else if (headerJoined.includes('hari') && (headerJoined.includes('mapel') || headerJoined.includes('jam'))) {
-        scheduleRows = scheduleRows.concat(parseScheduleRows(matrix));
+        santriRows = santriRows.concat(parseSantriSimRows(matrix, effectiveGender));
+      } else if (headerJoined.includes('hari') && (headerJoined.includes('mapel') || headerJoined.includes('pelajaran') || headerJoined.includes('jam'))) {
+        scheduleRows = scheduleRows.concat(parseScheduleRows(matrix, effectiveGender));
       } else if (headerJoined.includes('uraian') || headerJoined.includes('tindak lanjut')) {
-        pembinaanRows = pembinaanRows.concat(parsePembinaanImportRows(matrix));
+        pembinaanRows = pembinaanRows.concat(parsePembinaanImportRows(matrix, effectiveGender));
       } else if (headerJoined.includes('amanah') || headerJoined.includes('peran') || headerJoined.includes('jabatan')) {
-        pegawaiRows = pegawaiRows.concat(parseTeacherRows(matrix));
+        pegawaiRows = pegawaiRows.concat(parseTeacherRows(matrix, { forcedGender: effectiveGender }));
       } else if (headerJoined.includes('kamar binaan') || headerJoined.includes('musyrif')) {
-        musyrifRows = musyrifRows.concat(parseTeacherRows(matrix, { defaultRole: 'Musyrif' }));
+        musyrifRows = musyrifRows.concat(
+          parseTeacherRows(matrix, {
+            defaultRole: effectiveGender === 'Putri' ? 'Musyrifah' : 'Musyrif',
+            forcedGender: effectiveGender,
+          }),
+        );
       } else if (headerJoined.includes('kelas binaan') || headerJoined.includes('wali kelas')) {
-        waliKelasRows = waliKelasRows.concat(parseTeacherRows(matrix, { defaultRole: 'Wali Kelas' }));
-      } else if (headerJoined.includes('ruang ujian')) {
-        ruanganUjian = Array.from(new Set([...ruanganUjian, ...parseRuanganRows(matrix)]));
+        waliKelasRows = waliKelasRows.concat(
+          parseTeacherRows(matrix, { defaultRole: 'Wali Kelas', forcedGender: effectiveGender }),
+        );
+      } else if (headerJoined.includes('ruang ujian') || headerJoined.includes('ruangan ujian')) {
+        ruanganUjian = Array.from(new Set([...ruanganUjian, ...parseRuanganRows(matrix, effectiveGender)]));
       }
     }
   }
@@ -574,3 +725,4 @@ export function parseDatabaseExcelBuffer(buffer: ArrayBuffer, fileName: string):
     pembinaanRows,
   };
 }
+

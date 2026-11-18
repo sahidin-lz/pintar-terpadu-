@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
   BarChart3,
@@ -22,6 +22,7 @@ import {
   Search,
   Send,
   Settings,
+  Sparkles,
   Trash2,
   Upload,
   Users,
@@ -135,7 +136,205 @@ function normalizeExcelDateCell(val: unknown): string {
     return `${val.getFullYear()}-${String(val.getMonth() + 1).padStart(2, '0')}-${String(val.getDate()).padStart(2, '0')}`;
   }
   const raw = String(val).trim();
+  if (/^\d{5}$/.test(raw)) {
+    const serial = Number(raw);
+    if (serial > 20000 && serial < 90000) {
+      const parsed = XLSX.SSF.parse_date_code(serial);
+      if (parsed && parsed.y && parsed.m && parsed.d) {
+        return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
+      }
+    }
+  }
   return parseFlexibleDateToIso(raw) || raw;
+}
+
+function detectClientCsvDelimiter(text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+  const countChar = (delim: string) => {
+    let total = 0;
+    for (const line of lines) {
+      let inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        if (line[i] === '"') inQ = !inQ;
+        else if (!inQ && line[i] === delim) total++;
+      }
+    }
+    return total;
+  };
+  const ranked = [
+    { d: ';', n: countChar(';') },
+    { d: ',', n: countChar(',') },
+    { d: '\t', n: countChar('\t') },
+  ].sort((a, b) => b.n - a.n);
+  return ranked[0].n > 0 ? ranked[0].d : ',';
+}
+
+function parseClientCsvMatrix(rawText: string): string[][] {
+  const cleaned = rawText.replace(/^\uFEFF/, '');
+  const delim = detectClientCsvDelimiter(cleaned);
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let inQ = false;
+
+  for (let i = 0; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (inQ) {
+      if (ch === '"') {
+        if (cleaned[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else {
+          inQ = false;
+        }
+      } else {
+        cell += ch;
+      }
+    } else if (ch === '"') {
+      inQ = true;
+    } else if (ch === delim) {
+      row.push(cell.trim());
+      cell = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && cleaned[i + 1] === '\n') i++;
+      row.push(cell.trim());
+      if (row.some((c) => c.length > 0)) rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += ch;
+    }
+  }
+  row.push(cell.trim());
+  if (row.some((c) => c.length > 0)) rows.push(row);
+  return rows;
+}
+
+function normHdr(raw: unknown): string {
+  return String(raw ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function extractLabkomRowsFromMatrix(
+  matrix: unknown[][],
+  hintKampus?: LabkomKampus,
+): Array<Partial<LabkomBooking>> {
+  if (!matrix || matrix.length === 0) return [];
+
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(matrix.length, 8); i++) {
+    const tokens = (matrix[i] || []).map(normHdr);
+    const hasLoc = tokens.some(
+      (t) =>
+        t === 'lab' ||
+        t.includes('lokasi') ||
+        t.includes('ruang') ||
+        t.includes('labkom') ||
+        t === 'tempat',
+    );
+    const hasTgl = tokens.some((t) => t.includes('tanggal') || t === 'tgl' || t === 'date');
+    const hasJam = tokens.some(
+      (t) => t.includes('jam') || t.includes('sesi') || t.includes('waktu'),
+    );
+    if ((hasLoc && hasTgl) || (hasTgl && hasJam) || (hasLoc && hasJam)) {
+      headerIdx = i;
+      break;
+    }
+  }
+
+  let iId = 0;
+  let iTs = 1;
+  let iKampus = 2;
+  let iEmail = 3;
+  let iNama = 4;
+  let iGuru = 5;
+  let iKelas = 6;
+  let iMapel = 7;
+  let iLab = 8;
+  let iTgl = 9;
+  let iJam = 10;
+  let iKet = 11;
+  let iStatus = 12;
+  let startRow = 0;
+
+  if (headerIdx >= 0) {
+    startRow = headerIdx + 1;
+    const hdr = (matrix[headerIdx] || []).map(normHdr);
+    const findCol = (preds: Array<(h: string) => boolean>, fallback: number): number => {
+      const idx = hdr.findIndex((h) => h && preds.some((fn) => fn(h)));
+      return idx >= 0 ? idx : fallback;
+    };
+    iId = findCol([(h) => h === 'id' || h === 'idtransaksi' || h === 'kode'], -1);
+    iTs = findCol([(h) => h.includes('timestamp') || h === 'dibuat'], -1);
+    iKampus = findCol([(h) => h.includes('kampus') || h.includes('wilayah') || h === 'area' || h === 'unit'], -1);
+    iEmail = findCol([(h) => h.includes('email')], -1);
+    iNama = findCol([(h) => h.includes('namapeminjam') || h === 'peminjam' || h === 'pemohon' || h === 'nama'], -1);
+    iGuru = findCol([(h) => h.includes('guru') || h.includes('pengajar') || h.includes('ustadz') || h.includes('pembina')], -1);
+    iKelas = findCol([(h) => h.includes('kelas') || h.includes('rombel')], -1);
+    iMapel = findCol([(h) => h.includes('mapel') || h.includes('matapelajaran') || h.includes('kegiatan') || h.includes('keperluan')], -1);
+    iLab = findCol([(h) => h === 'lab' || h.includes('labkom') || h.includes('ruang') || h.includes('lokasi') || h === 'tempat'], -1);
+    iTgl = findCol([(h) => h.includes('tanggal') || h === 'tgl' || h === 'date'], -1);
+    iJam = findCol([(h) => h.includes('jamke') || h === 'jam' || h.includes('sesi') || h.includes('waktu')], -1);
+    iKet = findCol([(h) => h.includes('keterangan') || h === 'ket' || h.includes('catatan')], -1);
+    iStatus = findCol([(h) => h.includes('status')], -1);
+  }
+
+  const out: Array<Partial<LabkomBooking>> = [];
+  for (let r = startRow; r < matrix.length; r++) {
+    const row = matrix[r] || [];
+    const readStr = (idx: number) => (idx >= 0 ? String(row[idx] ?? '').trim() : '');
+    const lab = readStr(iLab).toUpperCase();
+    const rawTgl = iTgl >= 0 ? row[iTgl] : undefined;
+    const tanggal = normalizeExcelDateCell(rawTgl);
+    const jamKe = readStr(iJam).toUpperCase();
+    if (!lab || !tanggal || !/^\d{4}-\d{2}-\d{2}$/.test(tanggal) || !jamKe) continue;
+
+    const kampusCell = readStr(iKampus).toUpperCase();
+    const guru = readStr(iGuru) || '-';
+    const kelas = readStr(iKelas) || '-';
+    const namaPeminjam = readStr(iNama) || guru;
+    const mapel = readStr(iMapel) || '-';
+    const ket = readStr(iKet);
+
+    const combinedHints = `${lab} ${kelas} ${guru} ${namaPeminjam} ${ket}`.toUpperCase();
+    const isPutriKeyword =
+      kampusCell.includes('PUTRI') ||
+      kampusCell === 'PI' ||
+      kampusCell === 'AKHWAT' ||
+      /\b(PUTRI|AKHWAT|USTZ|KHADIJAH|AISYAH|FATIMAH|HAFSHAH|ZAINAB|MARIYAM)\b/i.test(combinedHints);
+    const isPutraKeyword =
+      kampusCell.includes('PUTRA') ||
+      kampusCell === 'PA' ||
+      kampusCell === 'IKHWAN';
+
+    const resolvedKampus: LabkomKampus = isPutriKeyword
+      ? 'PUTRI'
+      : isPutraKeyword
+      ? 'PUTRA'
+      : hintKampus || 'PUTRA';
+
+    out.push({
+      id: readStr(iId),
+      timestamp: readStr(iTs),
+      kampus: resolvedKampus,
+      email: readStr(iEmail),
+      namaPeminjam: namaPeminjam || '-',
+      guru,
+      kelas,
+      mapel,
+      lab,
+      tanggal,
+      jamKe,
+      keterangan: ket,
+      status: readStr(iStatus) || 'Disetujui',
+    });
+  }
+  return out;
 }
 
 interface Props {
@@ -248,6 +447,7 @@ export const LabkomRuangModule: React.FC<Props> = ({
   const [editStatus, setEditStatus] = useState<string>('Disetujui');
 
   // Log Upload Preview State (Putra & Putri Excel / CSV)
+  const logPreviewRef = useRef<HTMLDivElement | null>(null);
   const [logImportPreview, setLogImportPreview] = useState<{
     fileName: string;
     isCsv: boolean;
@@ -1336,55 +1536,43 @@ export const LabkomRuangModule: React.FC<Props> = ({
     setSubmitting(true);
     try {
       const lowerName = file.name.toLowerCase();
-      const fileHintKampus: 'AUTO' | 'PUTRA' | 'PUTRI' = lowerName.includes('putri')
-        ? 'PUTRI'
-        : lowerName.includes('putra')
-        ? 'PUTRA'
-        : 'AUTO';
+      const fileHintKampus: 'AUTO' | 'PUTRA' | 'PUTRI' =
+        lowerName.includes('putri') || lowerName.includes('akhwat') || lowerName.includes('siswi')
+          ? 'PUTRI'
+          : lowerName.includes('putra') || lowerName.includes('ikhwan')
+          ? 'PUTRA'
+          : 'AUTO';
 
-      if (lowerName.endsWith('.csv')) {
+      if (lowerName.endsWith('.csv') || lowerName.endsWith('.tsv')) {
         const csvText = await file.text();
-        const wb = XLSX.read(csvText, { type: 'string' });
-        const firstSheet = wb.Sheets[wb.SheetNames[0]];
-        const rawJson = firstSheet
-          ? XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet, { defval: '' })
-          : [];
-        const parsedRows: Array<Partial<LabkomBooking>> = rawJson.map((row) => {
-          const kRaw = String(row['Kampus'] || row['kampus'] || '').trim().toUpperCase();
-          const resolvedK: LabkomKampus =
-            kRaw === 'PUTRI'
-              ? 'PUTRI'
-              : kRaw === 'PUTRA'
-              ? 'PUTRA'
-              : fileHintKampus === 'PUTRI'
-              ? 'PUTRI'
-              : 'PUTRA';
-          return {
-            id: String(row['ID'] || row['id'] || ''),
-            timestamp: String(row['Timestamp'] || row['timestamp'] || ''),
-            kampus: resolvedK,
-            email: String(row['Email'] || row['email'] || ''),
-            namaPeminjam: String(row['Nama Peminjam'] || row['Nama_Peminjam'] || row['nama_peminjam'] || row['Guru'] || ''),
-            guru: String(row['Guru'] || row['guru'] || '-'),
-            kelas: String(row['Kelas'] || row['kelas'] || '-'),
-            mapel: String(row['Mapel'] || row['mapel'] || '-'),
-            lab: String(row['Lab'] || row['lab'] || row['Lokasi'] || row['Ruangan'] || ''),
-            tanggal: normalizeExcelDateCell(row['Tanggal'] ?? row['tanggal']),
-            jamKe: String(row['Jam_Ke'] || row['Jam Ke'] || row['jam_ke'] || row['Jam'] || ''),
-            keterangan: String(row['Keterangan'] || row['keterangan'] || ''),
-            status: String(row['Status'] || row['status'] || 'Disetujui'),
-          };
-        });
-
+        const matrix = parseClientCsvMatrix(csvText);
+        const validRows = extractLabkomRowsFromMatrix(
+          matrix,
+          fileHintKampus === 'AUTO' ? undefined : fileHintKampus,
+        );
+        if (validRows.length === 0) {
+          notify(
+            `Tidak ditemukan baris log valid pada ${file.name}. Pastikan ada kolom Lokasi/Lab, Tanggal, dan Jam_Ke.`,
+            'error',
+          );
+          return;
+        }
         setLogImportPreview({
           fileName: file.name,
           isCsv: true,
           csvText,
-          rows: parsedRows.filter((r) => r.lab && r.tanggal && r.jamKe),
+          rows: validRows,
           defaultKampus: fileHintKampus,
           mode: 'upsert',
           autoSyncMasters: true,
         });
+        const cPutra = validRows.filter((r) => r.kampus !== 'PUTRI').length;
+        const cPutri = validRows.length - cPutra;
+        notify(
+          `CSV terbaca (${validRows.length} baris: Putra ${cPutra}, Putri ${cPutri}). Klik "Terapkan Import" di kotak kuning untuk menyimpan!`,
+          'info',
+        );
+        setTimeout(() => logPreviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120);
       } else {
         const buf = await file.arrayBuffer();
         const wb = XLSX.read(buf, { type: 'array' });
@@ -1400,58 +1588,32 @@ export const LabkomRuangModule: React.FC<Props> = ({
           ) {
             continue;
           }
-          if (
-            wb.SheetNames.length > 1 &&
-            !upper.includes('PINJAM') &&
-            !upper.includes('LOG') &&
-            !upper.includes('PUTRA') &&
-            !upper.includes('PUTRI')
-          ) {
-            continue;
-          }
           const ws = wb.Sheets[sName];
-          const rawJson = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: '' });
-          const sheetHintKampus: LabkomKampus | undefined = upper.includes('PUTRI')
-            ? 'PUTRI'
-            : upper.includes('PUTRA')
-            ? 'PUTRA'
-            : fileHintKampus === 'PUTRI'
-            ? 'PUTRI'
-            : fileHintKampus === 'PUTRA'
-            ? 'PUTRA'
-            : undefined;
+          if (!ws) continue;
+          const matrix = XLSX.utils.sheet_to_json<unknown[]>(ws, {
+            header: 1,
+            defval: '',
+            raw: true,
+          });
+          const sheetHintKampus: LabkomKampus | undefined =
+            upper.includes('PUTRI') || upper.includes('AKHWAT') || upper.includes('SISWI')
+              ? 'PUTRI'
+              : upper.includes('PUTRA') || upper.includes('IKHWAN')
+              ? 'PUTRA'
+              : fileHintKampus === 'PUTRI'
+              ? 'PUTRI'
+              : fileHintKampus === 'PUTRA'
+              ? 'PUTRA'
+              : undefined;
 
-          for (const row of rawJson) {
-            const kVal = String(row['Kampus'] || row['kampus'] || row['Wilayah'] || '').trim().toUpperCase();
-            const resolvedKampus: LabkomKampus =
-              kVal === 'PUTRI'
-                ? 'PUTRI'
-                : kVal === 'PUTRA'
-                ? 'PUTRA'
-                : sheetHintKampus || 'PUTRA';
-            const labVal = String(row['Lab'] || row['lab'] || row['Lokasi'] || row['Ruangan'] || '').trim();
-            const tglVal = normalizeExcelDateCell(row['Tanggal'] ?? row['tanggal'] ?? row['TANGGAL']);
-            const jamVal = String(row['Jam_Ke'] || row['Jam Ke'] || row['jam_ke'] || row['Jam'] || '').trim();
-            if (!labVal || !tglVal || !jamVal) continue;
-            allRows.push({
-              id: String(row['ID'] || row['id'] || '').trim(),
-              timestamp: String(row['Timestamp'] || row['timestamp'] || '').trim(),
-              kampus: resolvedKampus,
-              email: String(row['Email'] || row['email'] || '').trim(),
-              namaPeminjam: String(row['Nama Peminjam'] || row['Nama_Peminjam'] || row['nama_peminjam'] || row['Guru'] || '').trim(),
-              guru: String(row['Guru'] || row['guru'] || '-').trim(),
-              kelas: String(row['Kelas'] || row['kelas'] || '-').trim(),
-              mapel: String(row['Mapel'] || row['mapel'] || '-').trim(),
-              lab: labVal,
-              tanggal: tglVal,
-              jamKe: jamVal,
-              keterangan: String(row['Keterangan'] || row['keterangan'] || '').trim(),
-              status: String(row['Status'] || row['status'] || 'Disetujui').trim(),
-            });
-          }
+          const parsedSheetRows = extractLabkomRowsFromMatrix(matrix, sheetHintKampus);
+          allRows.push(...parsedSheetRows);
         }
         if (allRows.length === 0) {
-          notify('Tidak ditemukan baris log peminjaman yang valid pada file Excel tersebut.', 'error');
+          notify(
+            `Tidak ditemukan baris log peminjaman valid di ${file.name} (${wb.SheetNames.length} sheet). Pastikan kolom Lab/Lokasi, Tanggal, dan Jam_Ke tersedia.`,
+            'error',
+          );
           return;
         }
         setLogImportPreview({
@@ -1462,9 +1624,39 @@ export const LabkomRuangModule: React.FC<Props> = ({
           mode: 'upsert',
           autoSyncMasters: true,
         });
+        const cPutra = allRows.filter((r) => r.kampus !== 'PUTRI').length;
+        const cPutri = allRows.length - cPutra;
+        notify(
+          `Excel terbaca (${allRows.length} baris: Putra ${cPutra}, Putri ${cPutri}). Klik "Terapkan Import" di kotak kuning untuk menyimpan!`,
+          'info',
+        );
+        setTimeout(() => logPreviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120);
       }
     } catch {
       notify('Gagal membaca file CSV / Excel.', 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleTidyAllData = async () => {
+    setSubmitting(true);
+    try {
+      const res = await fetch('/api/system/tidy-data', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        notify(data.error || 'Gagal merapikan data Putra & Putri.', 'error');
+        return;
+      }
+      if (data.labkomState) setState(data.labkomState);
+      emitDataMutated();
+      const s = data.summary;
+      notify(
+        `Data Putra & Putri dirapikan! Labkom Putra: ${s.after.labkomPutra}, Putri: ${s.after.labkomPutri} · Duplikat dibersihkan: ${s.duplicatesRemoved} · Klasifikasi diperbaiki: ${s.genderReclassified}.`,
+        'success',
+      );
+    } catch {
+      notify('Gagal terhubung ke server saat merapikan data.', 'error');
     } finally {
       setSubmitting(false);
     }
@@ -3738,6 +3930,17 @@ export const LabkomRuangModule: React.FC<Props> = ({
                 />
               </label>
 
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={handleTidyAllData}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-900 px-3.5 py-2 text-xs font-bold shadow-xs disabled:opacity-50"
+                title="Normalisasi huruf/tanggal, bersihkan duplikat, dan pisahkan Putra vs Putri secara rapi"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>Rapikan Data Putra &amp; Putri</span>
+              </button>
+
               {isAdmin &&
                 historySelectedIds.size > 0 &&
                 (confirmBulkDelete ? (
@@ -3785,7 +3988,7 @@ export const LabkomRuangModule: React.FC<Props> = ({
             const pPutri = logImportPreview.rows.length - pPutra;
 
             return (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 sm:p-5 space-y-4">
+              <div ref={logPreviewRef} className="bg-amber-50 border-2 border-amber-400 rounded-xl p-4 sm:p-5 space-y-4 shadow-sm">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                   <div>
                     <div className="text-xs font-bold text-amber-900 uppercase">

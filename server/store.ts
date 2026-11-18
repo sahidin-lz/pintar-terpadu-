@@ -858,9 +858,22 @@ class PintarStore {
     let updated = 0;
     const pinDefault = (payload.defaultPin || '1234').trim();
 
+    const isTrivialRowNumber = (val?: string) => {
+      const clean = String(val || '').trim();
+      if (!clean || clean === '-' || clean === '0') return true;
+      return /^\d{1,3}$/.test(clean);
+    };
+    const collapseWs = (val?: string) => String(val || '').replace(/\s+/g, ' ').trim();
+
     for (const r of payload.rows) {
-      const cleanName = r.nama.trim().toUpperCase();
-      if (!cleanName || cleanName === r.kelas.trim().toUpperCase()) continue;
+      const cleanName = collapseWs(r.nama).toUpperCase();
+      const cleanKelas = collapseWs(r.kelas).toUpperCase();
+      if (!cleanName || cleanName === cleanKelas) continue;
+
+      const cleanNis = collapseWs(r.nis);
+      const cleanKamar = collapseWs(r.kamar);
+      const cleanKelompok = collapseWs(r.kelompokQuran);
+      const cleanPengampu = collapseWs(r.pengampuQuran).toUpperCase();
 
       const existing =
         this.db.students.find(
@@ -868,32 +881,32 @@ class PintarStore {
             normalizeStr(s.nama) === normalizeStr(cleanName) &&
             (!s.gender || !r.gender || s.gender === r.gender),
         ) ||
-        (r.nis
-          ? this.db.students.find((s) => s.nis && s.nis === r.nis && s.gender === r.gender)
+        (!isTrivialRowNumber(cleanNis)
+          ? this.db.students.find((s) => s.nis && s.nis === cleanNis && s.gender === r.gender)
           : undefined) ||
         this.db.students.find((s) => normalizeStr(s.nama) === normalizeStr(cleanName));
       if (existing) {
-        if (r.nis) existing.nis = r.nis;
-        if (r.kelas) existing.kelas = r.kelas.toUpperCase();
-        if (r.kamar) existing.kamar = r.kamar;
-        if (r.kelompokQuran) existing.kelompokQuran = r.kelompokQuran;
-        if (r.pengampuQuran) existing.pengampuQuran = r.pengampuQuran;
-        if (r.waliKelas) existing.waliKelas = r.waliKelas.toUpperCase();
-        if (r.musyrif) existing.musyrif = r.musyrif.toUpperCase();
+        if (cleanNis && (!isTrivialRowNumber(cleanNis) || !existing.nis)) existing.nis = cleanNis;
+        if (cleanKelas) existing.kelas = cleanKelas;
+        if (cleanKamar) existing.kamar = cleanKamar;
+        if (cleanKelompok) existing.kelompokQuran = cleanKelompok;
+        if (cleanPengampu) existing.pengampuQuran = cleanPengampu;
+        if (r.waliKelas) existing.waliKelas = collapseWs(r.waliKelas).toUpperCase();
+        if (r.musyrif) existing.musyrif = collapseWs(r.musyrif).toUpperCase();
         if (r.gender) existing.gender = r.gender;
         updated++;
       } else {
         this.db.students.push({
-          id: `S_${Date.now()}_${inserted}`,
-          nis: r.nis || '',
+          id: `S_${Date.now()}_${inserted}_${Math.floor(Math.random() * 1000)}`,
+          nis: cleanNis,
           nama: cleanName,
-          kelas: r.kelas.toUpperCase(),
-          kamar: r.kamar,
-          kelompokQuran: r.kelompokQuran,
-          pengampuQuran: r.pengampuQuran,
+          kelas: cleanKelas,
+          kamar: cleanKamar,
+          kelompokQuran: cleanKelompok,
+          pengampuQuran: cleanPengampu,
           gender: r.gender,
-          waliKelas: r.waliKelas ? r.waliKelas.toUpperCase() : '',
-          musyrif: r.musyrif ? r.musyrif.toUpperCase() : '',
+          waliKelas: r.waliKelas ? collapseWs(r.waliKelas).toUpperCase() : '',
+          musyrif: r.musyrif ? collapseWs(r.musyrif).toUpperCase() : '',
           prioritas: '-',
         });
         inserted++;
@@ -1537,10 +1550,9 @@ class PintarStore {
       }
     }
 
-    // Reconcile all cross-entity relationships (Students <-> Rooms <-> Musyrif <-> Wali Kelas <-> Pegawai)
+    // Reconcile all cross-entity relationships and tidy Putra/Putri normalization
     this.reconcileDatabaseRelations(payload.defaultPin || '1234');
-    this.batchedWrites++;
-    this.persist();
+    this.tidyAllPutraPutriData({ skipSyncMasters: true });
 
     return {
       santri: santriResult,
@@ -5131,10 +5143,8 @@ class PintarStore {
 
     if (payload.autoSyncMasters) {
       this.syncLabkomMastersFromBookings();
-    } else {
-      this.batchedWrites++;
-      this.persist();
     }
+    this.tidyAllPutraPutriData({ skipSyncMasters: !payload.autoSyncMasters });
 
     return { ok: true, added, updated, skipped };
   }
@@ -5759,6 +5769,340 @@ class PintarStore {
         message: `Gagal terhubung ke Telegram API: ${(err as Error).message}`,
       };
     }
+  }
+
+  // ==============================================================
+  // RAPIKAN & SINKRONKAN SEMUA DATA PUTRA & PUTRI (SIM + LABKOM)
+  // ==============================================================
+  public tidyAllPutraPutriData(options?: { skipSyncMasters?: boolean }) {
+    this.ensureLabkomInitialized();
+    const cleanWs = (v?: string) => String(v || '').replace(/\s+/g, ' ').trim();
+
+    const PUTRI_REGEX = /\b(PUTRI|AKHWAT|SISWI|SANTRIWATI|MUSYRIFAH|USTZ|USTADZAH|KHADIJAH|AISYAH|FATIMAH|HAFSHAH|ZAINAB|MARIYAM|RUQAYYAH|SUMAYYAH|UMMU)\b/i;
+    const PUTRA_REGEX = /\b(PUTRA|IKHWAN|SANTRIWAN|ABU\s+BAKAR|UMAR\s+BIN|UTSMAN\s+BIN|ALI\s+BIN|BILAL\s+BIN|KHALID\s+BIN|SALMAN\s+AL|HAMZAH\s+BIN)\b/i;
+
+    const inferPutraPutri = (texts: Array<string | undefined>, current?: 'Putra' | 'Putri'): Gender => {
+      const joined = texts.map((t) => cleanWs(t)).filter(Boolean).join(' ').toUpperCase();
+      if (PUTRI_REGEX.test(joined) && !/\bPUTRA\b/.test(joined)) return 'Putri';
+      if (PUTRA_REGEX.test(joined) && !/\bPUTRI\b/.test(joined)) return 'Putra';
+      if (joined.includes('PUTRI')) return 'Putri';
+      if (joined.includes('PUTRA')) return 'Putra';
+      return current === 'Putri' ? 'Putri' : 'Putra';
+    };
+
+    const beforeCounts = this.getSystemCounts();
+    const beforeLabkomPutra = (this.db.labkomBookings || []).filter((b) => b.kampus === 'PUTRA').length;
+    const beforeLabkomPutri = (this.db.labkomBookings || []).filter((b) => b.kampus === 'PUTRI').length;
+
+    let genderReclassified = 0;
+    let duplicatesRemoved = 0;
+    let fieldsNormalized = 0;
+
+    // 1. Tidy & Deduplicate Students (Putra & Putri cleanly separated)
+    const studentMap = new Map<string, Student>();
+    for (const s of this.db.students) {
+      const nama = cleanWs(s.nama).toUpperCase();
+      if (!nama) continue;
+      const kelas = cleanWs(s.kelas).toUpperCase() || '-';
+      const kamar = cleanWs(s.kamar) || '-';
+      const kelompokQuran = cleanWs(s.kelompokQuran) || '-';
+      const pengampuQuran = cleanWs(s.pengampuQuran).toUpperCase();
+      const nis = cleanWs(s.nis);
+      const waliKelas = cleanWs(s.waliKelas).toUpperCase();
+      const musyrif = cleanWs(s.musyrif).toUpperCase();
+
+      const nextGender = inferPutraPutri([kelas, kamar, kelompokQuran, pengampuQuran, musyrif, waliKelas], s.gender);
+      if (nextGender !== s.gender) genderReclassified++;
+      if (nama !== s.nama || kelas !== s.kelas || kamar !== s.kamar) fieldsNormalized++;
+
+      const dedupKey = `${nextGender}|${normalizeStr(nama)}`;
+      const prev = studentMap.get(dedupKey);
+      if (!prev) {
+        studentMap.set(dedupKey, {
+          ...s,
+          nis,
+          nama,
+          kelas,
+          kamar,
+          kelompokQuran,
+          pengampuQuran,
+          waliKelas,
+          musyrif,
+          gender: nextGender,
+        });
+      } else {
+        duplicatesRemoved++;
+        studentMap.set(dedupKey, {
+          ...prev,
+          nis: prev.nis || nis,
+          kelas: prev.kelas && prev.kelas !== '-' ? prev.kelas : kelas,
+          kamar: prev.kamar && prev.kamar !== '-' ? prev.kamar : kamar,
+          kelompokQuran:
+            prev.kelompokQuran && prev.kelompokQuran !== '-' ? prev.kelompokQuran : kelompokQuran,
+          pengampuQuran: prev.pengampuQuran || pengampuQuran,
+          waliKelas: prev.waliKelas || waliKelas,
+          musyrif: prev.musyrif || musyrif,
+          namaOrtu: prev.namaOrtu || s.namaOrtu,
+          waOrtu: prev.waOrtu || s.waOrtu,
+        });
+      }
+    }
+    this.db.students = Array.from(studentMap.values()).sort(
+      (a, b) =>
+        a.gender.localeCompare(b.gender) ||
+        a.kelas.localeCompare(b.kelas, 'id', { numeric: true }) ||
+        a.nama.localeCompare(b.nama, 'id'),
+    );
+
+    // 2. Tidy Teachers / Pegawai
+    const superAdmin = createSuperAdminRecord();
+    const teacherMap = new Map<string, TeacherRecord>();
+    for (const t of this.db.teachers) {
+      if (t.id === SUPER_ADMIN_ID || t.peran === 'Admin Super') continue;
+      const nama = cleanWs(t.nama).toUpperCase();
+      if (!nama || nama === '-') continue;
+      const waliKelasOf = cleanWs(t.waliKelasOf).toUpperCase() || undefined;
+      const kamarBinaan = Array.from(
+        new Set((t.kamarBinaan || []).map((k) => cleanWs(k)).filter((k) => k && k !== '-')),
+      );
+      let genderScope = t.genderScope || 'Semua';
+      if (genderScope !== 'Semua') {
+        const inferred = inferPutraPutri([nama, waliKelasOf, ...kamarBinaan, t.peran], genderScope);
+        if (PUTRI_REGEX.test(nama) && genderScope === 'Putra') {
+          genderScope = 'Putri';
+          genderReclassified++;
+        } else if (inferred !== genderScope && (waliKelasOf || kamarBinaan.length > 0)) {
+          genderScope = inferred;
+        }
+      } else if (PUTRI_REGEX.test(nama) || t.peran === 'Musyrifah') {
+        genderScope = 'Putri';
+      }
+      const roles = new Set<UserRole>([t.peran, ...(t.peranTambahan || [])]);
+      let primaryRole = t.peran;
+      if (genderScope === 'Putri' && primaryRole === 'Musyrif') {
+        primaryRole = 'Musyrifah';
+        roles.delete('Musyrif');
+        roles.add('Musyrifah');
+      }
+      const extras = Array.from(roles).filter((r) => r !== primaryRole);
+      const tKey = normalizeStr(nama);
+      const prev = teacherMap.get(tKey);
+      if (!prev) {
+        teacherMap.set(tKey, {
+          ...t,
+          nama,
+          username: (t.username || makeUsername(nama)).toLowerCase(),
+          peran: primaryRole,
+          peranTambahan: extras.length > 0 ? extras : undefined,
+          jabatan: roleToJabatan(primaryRole, extras),
+          genderScope,
+          waliKelasOf,
+          kamarBinaan,
+          whatsapp: cleanWs(t.whatsapp),
+          pin: cleanWs(t.pin) || '1234',
+        });
+      } else {
+        duplicatesRemoved++;
+        const mergedExtras = Array.from(
+          new Set([...(prev.peranTambahan || []), primaryRole, ...extras]),
+        ).filter((r) => r !== prev.peran);
+        const mergedScope: 'Putra' | 'Putri' | 'Semua' =
+          prev.genderScope === genderScope ? prev.genderScope : 'Semua';
+        teacherMap.set(tKey, {
+          ...prev,
+          genderScope: mergedScope,
+          peranTambahan: mergedExtras.length > 0 ? mergedExtras : undefined,
+          jabatan: roleToJabatan(prev.peran, mergedExtras),
+          waliKelasOf: prev.waliKelasOf || waliKelasOf,
+          kamarBinaan: Array.from(new Set([...(prev.kamarBinaan || []), ...kamarBinaan])),
+          whatsapp: prev.whatsapp || cleanWs(t.whatsapp),
+        });
+      }
+    }
+    this.db.teachers = [
+      superAdmin,
+      ...Array.from(teacherMap.values()).sort(
+        (a, b) => a.genderScope.localeCompare(b.genderScope) || a.nama.localeCompare(b.nama, 'id'),
+      ),
+    ];
+
+    // 3. Tidy Rooms
+    const roomMap = new Map<string, RoomMapping>();
+    for (const rm of this.db.rooms) {
+      const kamar = cleanWs(rm.kamar);
+      if (!kamar || kamar === '-') continue;
+      const musyrif = cleanWs(rm.musyrif).toUpperCase();
+      const gender = inferPutraPutri([kamar, musyrif], rm.gender);
+      const key = `${gender}|${normalizeStr(kamar)}`;
+      const prev = roomMap.get(key);
+      if (!prev) {
+        roomMap.set(key, { kamar, musyrif, gender });
+      } else {
+        duplicatesRemoved++;
+        if (!prev.musyrif && musyrif) prev.musyrif = musyrif;
+      }
+    }
+    this.db.rooms = Array.from(roomMap.values()).sort(
+      (a, b) => a.gender.localeCompare(b.gender) || a.kamar.localeCompare(b.kamar, 'id', { numeric: true }),
+    );
+
+    // 4. Tidy Schedules
+    const scheduleMap = new Map<string, ScheduleItem>();
+    for (const sc of this.db.schedules) {
+      const guru = cleanWs(sc.guru).toUpperCase();
+      const hari = cleanWs(sc.hari || 'SENIN').toUpperCase();
+      const kelas = cleanWs(sc.kelas).toUpperCase();
+      const mapel = cleanWs(sc.mapel).toUpperCase();
+      const jamKe = cleanWs(sc.jamKe || '1-2').toUpperCase();
+      if (!guru || !kelas || !mapel) continue;
+      const gender = inferPutraPutri([kelas, guru], sc.gender);
+      if (gender !== sc.gender) genderReclassified++;
+      const key = `${gender}|${hari}|${normalizeStr(guru)}|${normalizeStr(kelas)}|${normalizeStr(mapel)}|${jamKe}`;
+      if (!scheduleMap.has(key)) {
+        scheduleMap.set(key, { ...sc, guru, hari, kelas, mapel, jamKe, gender });
+      } else {
+        duplicatesRemoved++;
+      }
+    }
+    this.db.schedules = Array.from(scheduleMap.values()).sort(
+      (a, b) =>
+        a.gender.localeCompare(b.gender) ||
+        a.hari.localeCompare(b.hari) ||
+        a.jamKe.localeCompare(b.jamKe, undefined, { numeric: true }),
+    );
+
+    // 5. Tidy Ruangan Ujian
+    this.db.ruanganUjian = Array.from(
+      new Set(
+        (this.db.ruanganUjian || [])
+          .map((r) => cleanWs(r).toUpperCase())
+          .filter(Boolean),
+      ),
+    ).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
+
+    // 6. Tidy Labkom Bookings (Putra & Putri cleanly normalized & deduplicated)
+    const bookingMap = new Map<string, LabkomBooking>();
+    for (const b of this.db.labkomBookings || []) {
+      const lab = cleanWs(b.lab).toUpperCase();
+      const tanggal = parseLabkomTanggalToIso(cleanWs(b.tanggal)) || cleanWs(b.tanggal);
+      const jamKe = cleanWs(b.jamKe).toUpperCase();
+      if (!lab || !tanggal || !jamKe) continue;
+      const namaPeminjam = cleanWs(b.namaPeminjam) || cleanWs(b.guru) || '-';
+      const guru = cleanWs(b.guru) || '-';
+      const kelas = cleanWs(b.kelas) || '-';
+      const mapel = cleanWs(b.mapel) || '-';
+      const inferredG = inferPutraPutri(
+        [lab, kelas, guru, namaPeminjam, b.keterangan],
+        b.kampus === 'PUTRI' ? 'Putri' : 'Putra',
+      );
+      const kampus: LabkomKampus = inferredG === 'Putri' ? 'PUTRI' : 'PUTRA';
+      if (kampus !== b.kampus) genderReclassified++;
+      const slotKey = `${kampus}|${lab}|${tanggal}|${jamKe}`;
+      if (!bookingMap.has(slotKey)) {
+        bookingMap.set(slotKey, {
+          ...b,
+          kampus,
+          namaPeminjam,
+          guru,
+          kelas,
+          mapel,
+          lab,
+          tanggal,
+          jamKe,
+          keterangan: cleanWs(b.keterangan),
+          status: cleanWs(b.status) || 'Disetujui',
+        });
+      } else {
+        duplicatesRemoved++;
+      }
+    }
+    this.db.labkomBookings = Array.from(bookingMap.values()).sort(
+      (a, b) => b.tanggal.localeCompare(a.tanggal) || a.kampus.localeCompare(b.kampus) || a.jamKe.localeCompare(b.jamKe, undefined, { numeric: true }),
+    );
+
+    // 7. Tidy Labkom Fixed Schedules & Plotings
+    const fixedMap = new Map<string, LabkomFixedSchedule>();
+    for (const f of this.db.labkomFixedSchedules || []) {
+      const lab = cleanWs(f.lab).toUpperCase();
+      const jamKe = cleanWs(f.jamKe).toUpperCase();
+      const kampus: LabkomKampus =
+        inferPutraPutri([lab, f.kelas, f.guru], f.kampus === 'PUTRI' ? 'Putri' : 'Putra') === 'Putri'
+          ? 'PUTRI'
+          : 'PUTRA';
+      const key = `${kampus}|${f.hari}|${lab}|${jamKe}`;
+      if (!fixedMap.has(key)) {
+        fixedMap.set(key, {
+          ...f,
+          kampus,
+          lab,
+          jamKe,
+          guru: cleanWs(f.guru) || '-',
+          kelas: cleanWs(f.kelas) || '-',
+          mapel: cleanWs(f.mapel) || '-',
+        });
+      } else {
+        duplicatesRemoved++;
+      }
+    }
+    this.db.labkomFixedSchedules = Array.from(fixedMap.values());
+
+    const plotMap = new Map<string, LabkomPloting>();
+    for (const p of this.db.labkomPlotings || []) {
+      const lokasi = cleanWs(p.lokasi).toUpperCase();
+      const namaSiswa = cleanWs(p.namaSiswa).toUpperCase();
+      if (!lokasi || !namaSiswa) continue;
+      const kampus: LabkomKampus =
+        inferPutraPutri([lokasi, p.kelas], p.kampus === 'PUTRI' ? 'Putri' : 'Putra') === 'Putri'
+          ? 'PUTRI'
+          : 'PUTRA';
+      const key = `${kampus}|${lokasi}|${p.noPc}`;
+      if (!plotMap.has(key)) {
+        plotMap.set(key, { ...p, kampus, lokasi, namaSiswa, kelas: cleanWs(p.kelas).toUpperCase() || '-' });
+      }
+    }
+    this.db.labkomPlotings = Array.from(plotMap.values());
+
+    // 8. Deduplicate Labkom Masters & Reconcile Relations
+    const masterMap = new Map<string, LabkomMasterItem>();
+    for (const m of this.db.labkomMasters || []) {
+      const val = this.normalizeLabkomMasterValue(m.kategori, m.nilai);
+      if (!val || val === '-') continue;
+      const key = `${m.kategori}|${val.toUpperCase()}`;
+      if (!masterMap.has(key)) masterMap.set(key, { ...m, nilai: val });
+    }
+    this.db.labkomMasters = ensureBaselineMasters(Array.from(masterMap.values()));
+
+    this.reconcileDatabaseRelations('1234');
+    if (!options?.skipSyncMasters) {
+      this.syncLabkomMastersFromBookings();
+    }
+
+    this.batchedWrites++;
+    this.persist();
+
+    const afterCounts = this.getSystemCounts();
+    const afterLabkomPutra = this.db.labkomBookings.filter((b) => b.kampus === 'PUTRA').length;
+    const afterLabkomPutri = this.db.labkomBookings.filter((b) => b.kampus === 'PUTRI').length;
+
+    return {
+      ok: true,
+      summary: {
+        duplicatesRemoved,
+        genderReclassified,
+        fieldsNormalized,
+        before: {
+          ...beforeCounts,
+          labkomPutra: beforeLabkomPutra,
+          labkomPutri: beforeLabkomPutri,
+        },
+        after: {
+          ...afterCounts,
+          labkomPutra: afterLabkomPutra,
+          labkomPutri: afterLabkomPutri,
+        },
+      },
+      counts: afterCounts,
+    };
   }
 }
 
