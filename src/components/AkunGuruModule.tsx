@@ -30,6 +30,10 @@ import {
   type DatabaseWorkbookSpec,
   type ParsedDatabaseWorkbook,
 } from '../utils/excelParser';
+import { loadSubTab, saveSubTab } from '../utils/sessionPersistence';
+
+const AKUN_TABS = ['mengajar', 'walikelas', 'musyrif', 'quran', 'whatsapp', 'upload'] as const;
+type AkunProgressTab = (typeof AKUN_TABS)[number];
 
 interface TeacherRecapResponse {
   teacher: TeacherPublic;
@@ -142,9 +146,13 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
   const [verifying, setVerifying] = useState(false);
   const [recap, setRecap] = useState<TeacherRecapResponse | null>(null);
   const [loadingRecap, setLoadingRecap] = useState(false);
-  const [progressTab, setProgressTab] = useState<
-    'mengajar' | 'walikelas' | 'musyrif' | 'quran' | 'whatsapp' | 'upload'
-  >('mengajar');
+  const [progressTab, setProgressTab] = useState<AkunProgressTab>(() =>
+    loadSubTab(
+      `pintar_akunguru_tab_${unlockedTeacher?.id || 'default'}`,
+      AKUN_TABS,
+      'mengajar',
+    ),
+  );
   const today = getTodayDateStr();
 
   // Dasbor Pengampu Al-Qur'an (Halaqah) state
@@ -237,7 +245,16 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
       setEditKamarBinaan((unlockedTeacher.kamarBinaan || []).join('; '));
       setPersonalExcel(null);
 
-      if (unlockedTeacher.peran === 'Musyrif' || unlockedTeacher.peran === 'Musyrifah') {
+      const tabKey = `pintar_akunguru_tab_${unlockedTeacher.id || 'default'}`;
+      let savedTab: string | null = null;
+      try {
+        savedTab = localStorage.getItem(tabKey);
+      } catch {
+        savedTab = null;
+      }
+      if (savedTab && (AKUN_TABS as readonly string[]).includes(savedTab)) {
+        setProgressTab(savedTab as AkunProgressTab);
+      } else if (unlockedTeacher.peran === 'Musyrif' || unlockedTeacher.peran === 'Musyrifah') {
         setProgressTab('musyrif');
       } else if (unlockedTeacher.peran === 'Wali Kelas') {
         setProgressTab('walikelas');
@@ -249,11 +266,26 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
     }
   }, [unlockedTeacher]);
 
+  useEffect(() => {
+    if (unlockedTeacher) {
+      saveSubTab(`pintar_akunguru_tab_${unlockedTeacher.id || 'default'}`, progressTab);
+    }
+  }, [progressTab, unlockedTeacher]);
+
   const fetchRecap = (namaGuru: string) => {
     setLoadingRecap(true);
-    fetch(`/api/guru/rekap?namaGuru=${encodeURIComponent(namaGuru)}&tanggal=${encodeURIComponent(today)}`)
-      .then((r) => r.json())
-      .then((data: TeacherRecapResponse) => setRecap(data))
+    const qs = new URLSearchParams({ namaGuru, tanggal: today });
+    if (unlockedTeacher?.username) qs.set('username', unlockedTeacher.username);
+    if (unlockedTeacher?.id) qs.set('id', unlockedTeacher.id);
+    fetch(`/api/guru/rekap?${qs.toString()}`)
+      .then(async (r) => {
+        if (!r.ok) return null;
+        return (await r.json()) as TeacherRecapResponse;
+      })
+      .then((data) => {
+        if (data && data.teacher) setRecap(data);
+      })
+      .catch(() => {})
       .finally(() => setLoadingRecap(false));
   };
 
@@ -345,19 +377,94 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
     notify('Rekap pribadi guru berhasil diunduh.', 'success');
   };
 
+  const buildClientPersonalFallbackSpec = (teacher: TeacherPublic): DatabaseWorkbookSpec => {
+    const defWilayah: Gender = teacher.genderScope === 'Putri' ? 'Putri' : 'Putra';
+    const cleanUser = (teacher.username || teacher.nama)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '.')
+      .replace(/^\.|\.$/g, '') || 'pembina';
+    const waliStudents = recap?.waliStudents || [];
+    const putraSample =
+      waliStudents.length > 0 && defWilayah === 'Putra'
+        ? waliStudents.map((s, i) => [s.id || String(i + 1), s.nama, 'Putra', s.kelas, s.kamar, '', teacher.nama])
+        : [['1001', 'CONTOH SANTRI PUTRA', 'Putra', teacher.waliKelasOf || '10 ABU BAKAR AS-SHIDDIQ', teacher.kamarBinaan?.[0] || '10.1 Putra', '10-01 Putra', teacher.nama]];
+    const putriSample =
+      waliStudents.length > 0 && defWilayah === 'Putri'
+        ? waliStudents.map((s, i) => [s.id || `P-${i + 1}`, s.nama, 'Putri', s.kelas, s.kamar, '', teacher.nama])
+        : [['P-01', 'CONTOH SANTRI PUTRI', 'Putri', teacher.waliKelasOf || '10 KHADIJAH BINTI KHUWAILID', teacher.kamarBinaan?.[0] || '10.1 Putri', '10-01 Putri', teacher.nama]];
+    const mySchedules = recap?.allMySchedules || [];
+    const jadwalRows: string[][] = [
+      ['Guru', 'Hari', 'Kelas / Halaqah', 'Mata Pelajaran', 'Jam Ke', 'Wilayah (Putra/Putri)'],
+      ...(mySchedules.length > 0
+        ? mySchedules.map((s) => [s.guru, s.hari, s.kelas, s.mapel, s.jamKe, s.gender])
+        : [[teacher.nama, 'SENIN', teacher.waliKelasOf || '10 ABU BAKAR AS-SHIDDIQ', 'BAHASA ARAB', '1-2', defWilayah]]),
+    ];
+    return {
+      filename: `Template_Upload_${cleanUser}.xlsx`,
+      sourceLabel: `Template Login ${teacher.nama}`,
+      sheets: [
+        {
+          name: '0_Panduan_Login',
+          label: 'Panduan Login Pembina',
+          rows: [
+            [`TEMPLATE UPLOAD KHUSUS LOGIN: ${teacher.nama} (${teacher.peran})`],
+            ['Upload kembali melalui menu Login Guru/Wali/Musyrif -> tab Upload Template & Input Langsung.'],
+          ],
+        },
+        {
+          name: '1A_Siswa_Putra',
+          label: 'Santri Wilayah Putra',
+          rows: [['No / NIS', 'Nama', 'Wilayah (Putra/Putri)', 'Nama Kelas', 'Kamar', 'Kelp. Al-Quran', 'Pengampu Al-Quran'], ...putraSample],
+        },
+        {
+          name: '1B_Siswa_Putri',
+          label: 'Santri Wilayah Putri',
+          rows: [['No / NIS', 'Nama', 'Wilayah (Putra/Putri)', 'Nama Kelas', 'Kamar', 'Kelp. Al-Quran', 'Pengampu Al-Quran'], ...putriSample],
+        },
+        { name: '4_Jadwal_Mengajar', label: 'Jadwal Saya', rows: jadwalRows },
+        {
+          name: '6_Catatan_Pembinaan',
+          label: 'Upload Pembinaan',
+          rows: [
+            ['Tanggal (YYYY-MM-DD)', 'Nama Santri', 'Wilayah (Putra/Putri)', 'Kategori', 'Uraian Pembinaan / Catatan', 'Poin (+/-)', 'Status (Selesai/Proses/Eskalasi)', 'Tindak Lanjut'],
+            [today, waliStudents[0]?.nama || 'CONTOH NAMA SANTRI', defWilayah, 'Pemantauan Ibadah', 'Setoran hafalan lancar dan sholat berjamaah tertib.', '5', 'Selesai', 'Pertahankan murojaah harian'],
+          ],
+        },
+      ],
+    };
+  };
+
   const handleDownloadPersonalTemplate = async () => {
     if (!unlockedTeacher) return;
     setDownloadingTpl(true);
     try {
-      const res = await fetch(
-        `/api/templates/personal-data?namaGuru=${encodeURIComponent(unlockedTeacher.nama)}`,
-      );
-      if (!res.ok) throw new Error('Gagal menyiapkan template akun.');
-      const spec: DatabaseWorkbookSpec = await res.json();
-      triggerExcelDownloadFromSpec(spec);
-      notify(`Mengunduh ${spec.filename} (Format Putra & Putri khusus akun ${unlockedTeacher.nama}).`, 'success');
-    } catch (err) {
-      notify((err as Error).message || 'Gagal mengunduh template Excel.', 'error');
+      const qs = new URLSearchParams({
+        namaGuru: unlockedTeacher.nama,
+        username: unlockedTeacher.username || '',
+        id: unlockedTeacher.id || '',
+        peran: unlockedTeacher.peran || 'Guru',
+        genderScope: unlockedTeacher.genderScope || 'Semua',
+        waliKelasOf: unlockedTeacher.waliKelasOf || '',
+        kamarBinaan: (unlockedTeacher.kamarBinaan || []).join('; '),
+      });
+      const res = await fetch(`/api/templates/personal-data?${qs.toString()}`);
+      const rawText = await res.text();
+      if (res.ok && rawText.trim().startsWith('{')) {
+        const spec = JSON.parse(rawText) as DatabaseWorkbookSpec;
+        if (spec && Array.isArray(spec.sheets) && spec.sheets.length > 0) {
+          triggerExcelDownloadFromSpec(spec);
+          notify(`Mengunduh ${spec.filename} (Format Putra & Putri khusus akun ${unlockedTeacher.nama}).`, 'success');
+          return;
+        }
+      }
+      // Fallback safely to client-side template builder if server returned HTML or transient error
+      const fallbackSpec = buildClientPersonalFallbackSpec(unlockedTeacher);
+      triggerExcelDownloadFromSpec(fallbackSpec);
+      notify(`Mengunduh ${fallbackSpec.filename} (Format Excel siap isi & upload).`, 'success');
+    } catch {
+      const fallbackSpec = buildClientPersonalFallbackSpec(unlockedTeacher);
+      triggerExcelDownloadFromSpec(fallbackSpec);
+      notify(`Mengunduh ${fallbackSpec.filename} dari builder lokal browser.`, 'success');
     } finally {
       setDownloadingTpl(false);
     }

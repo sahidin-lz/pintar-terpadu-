@@ -33,6 +33,7 @@ import {
   parseDatabaseExcelBuffer,
   triggerExcelDownloadFromSpec,
 } from '../utils/excelParser';
+import { loadSubTab, saveSubTab } from '../utils/sessionPersistence';
 
 interface JadwalModuleProps {
   currentUser: TeacherPublic | null;
@@ -103,16 +104,34 @@ export const JadwalModule: React.FC<JadwalModuleProps> = ({
   onChanged,
   notify,
 }) => {
-  const [subTab, setSubTab] = useState<'mengajar' | 'pindah' | 'asrama'>('mengajar');
-  const [viewMode, setViewMode] = useState<'matriks' | 'tabel'>('matriks');
+  const [subTab, setSubTab] = useState<'mengajar' | 'pindah' | 'asrama'>(() =>
+    loadSubTab('pintar_jadwal_subtab_v1', ['mengajar', 'pindah', 'asrama'] as const, 'mengajar'),
+  );
+  const [viewMode, setViewMode] = useState<'matriks' | 'tabel'>(() =>
+    loadSubTab('pintar_jadwal_view_v1', ['matriks', 'tabel'] as const, 'matriks'),
+  );
   const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [formMinimized, setFormMinimized] = useState<boolean>(false);
 
   const [scopeFilter, setScopeFilter] = useState<'mine' | 'all'>('all');
-  const [selectedDayMatrix, setSelectedDayMatrix] = useState<string>('SENIN');
+  const [selectedDayMatrix, setSelectedDayMatrix] = useState<string>(() =>
+    loadSubTab('pintar_jadwal_day_v1', ['SENIN', 'SELASA', 'RABU', 'KAMIS', 'JUMAT', 'SABTU'] as const, 'SENIN'),
+  );
   const [filterHari, setFilterHari] = useState<string>('SEMUA');
   const [filterWilayah, setFilterWilayah] = useState<WilayahFilter>('Semua');
+
+  useEffect(() => {
+    saveSubTab('pintar_jadwal_subtab_v1', subTab);
+  }, [subTab]);
+
+  useEffect(() => {
+    saveSubTab('pintar_jadwal_view_v1', viewMode);
+  }, [viewMode]);
+
+  useEffect(() => {
+    saveSubTab('pintar_jadwal_day_v1', selectedDayMatrix);
+  }, [selectedDayMatrix]);
 
   // Form state (create or edit schedule)
   const [editingId, setEditingId] = useState<string | null>(null);

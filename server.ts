@@ -10,7 +10,7 @@ import {
   loadAuthenticPutraRoster,
   type TemplateContext,
 } from './server/templates';
-import type { Gender, PresensiType, StatusTindakLanjut, WilayahFilter } from './src/types';
+import type { Gender, PresensiType, StatusTindakLanjut, TeacherPublic, UserRole, WilayahFilter } from './src/types';
 
 export const app = express();
 app.use(express.json({ limit: '15mb' }));
@@ -68,9 +68,15 @@ function registerApiRoutes() {
   });
 
   app.get('/api/guru/rekap', (req, res) => {
-    const namaGuru = String(req.query.namaGuru || '');
+    const namaGuru = String(req.query.namaGuru || req.query.username || req.query.id || '');
     const tanggal = String(req.query.tanggal || '');
-    const recap = store.getTeacherPersonalRecap(namaGuru, tanggal);
+    let recap = store.getTeacherPersonalRecap(namaGuru, tanggal);
+    if (!recap && req.query.username) {
+      recap = store.getTeacherPersonalRecap(String(req.query.username), tanggal);
+    }
+    if (!recap && req.query.id) {
+      recap = store.getTeacherPersonalRecap(String(req.query.id), tanggal);
+    }
     if (!recap) return res.status(404).json({ error: 'Akun guru tidak ditemukan.' });
     res.json(recap);
   });
@@ -413,11 +419,54 @@ function registerApiRoutes() {
     }
   });
 
+  const resolveTeacherForPersonalTemplate = (req: express.Request): TeacherPublic | null => {
+    const namaGuru = String(req.query.namaGuru || '').trim();
+    const username = String(req.query.username || '').trim();
+    const id = String(req.query.id || '').trim();
+
+    const found =
+      (namaGuru ? store.getTeacherByIdentifier(namaGuru) : null) ||
+      (username ? store.getTeacherByIdentifier(username) : null) ||
+      (id ? store.getTeacherByIdentifier(id) : null);
+    if (found) return found;
+
+    // Synthesize safe fallback from active session query params so template generation never fails on cold start
+    const displayName = namaGuru || username || 'GURU PEMBINA';
+    const rawPeran = String(req.query.peran || 'Guru') as UserRole;
+    const validRoles = new Set<UserRole>(['Guru', 'Wali Kelas', 'Musyrif', 'Musyrifah', 'Admin SIM', 'Admin Super', 'Pengampu Al-Quran']);
+    const peran: UserRole = validRoles.has(rawPeran) ? rawPeran : 'Guru';
+    const rawScope = String(req.query.genderScope || 'Semua');
+    const genderScope: 'Putra' | 'Putri' | 'Semua' =
+      rawScope === 'Putra' || rawScope === 'Putri' ? rawScope : 'Semua';
+    const waliKelasOf = String(req.query.waliKelasOf || '').trim() || undefined;
+    const kamarBinaanRaw = String(req.query.kamarBinaan || '').trim();
+    const kamarBinaan = kamarBinaanRaw
+      ? kamarBinaanRaw.split(/[;,]/).map((s) => s.trim()).filter(Boolean)
+      : undefined;
+
+    return {
+      id: id || `GURU-TMP-${Date.now()}`,
+      nama: displayName.toUpperCase(),
+      jabatan: peran,
+      peran,
+      genderScope,
+      waliKelasOf,
+      kamarBinaan,
+      username:
+        username ||
+        displayName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '.')
+          .replace(/^\.|\.$/g, '') ||
+        'guru',
+      whatsapp: '',
+    };
+  };
+
   app.get('/api/templates/personal-data', (req, res) => {
     try {
-      const namaGuru = String(req.query.namaGuru || '');
-      const teacher = store.getTeacherByIdentifier(namaGuru);
-      if (!teacher) return res.status(404).json({ error: 'Akun pembina tidak ditemukan.' });
+      const teacher = resolveTeacherForPersonalTemplate(req);
+      if (!teacher) return res.status(400).json({ error: 'Identitas akun pembina diperlukan.' });
       res.setHeader('Cache-Control', 'no-store');
       return res.json(buildPersonalLoginWorkbookSpec(getTemplateContext(), teacher));
     } catch (err) {
@@ -427,9 +476,8 @@ function registerApiRoutes() {
 
   app.get('/api/templates/personal-xlsx', (req, res) => {
     try {
-      const namaGuru = String(req.query.namaGuru || '');
-      const teacher = store.getTeacherByIdentifier(namaGuru);
-      if (!teacher) return res.status(404).json({ error: 'Akun pembina tidak ditemukan.' });
+      const teacher = resolveTeacherForPersonalTemplate(req);
+      if (!teacher) return res.status(400).json({ error: 'Identitas akun pembina diperlukan.' });
       const built = buildPersonalLoginWorkbookBuffer(getTemplateContext(), teacher);
       res.setHeader(
         'Content-Type',

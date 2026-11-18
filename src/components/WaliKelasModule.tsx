@@ -39,6 +39,7 @@ import {
   getTodayDateStr,
   printHtmlDocument,
 } from '../utils/exportHelpers';
+import { emitDataMutated, loadSubTab, saveSubTab } from '../utils/sessionPersistence';
 
 interface WaliKelasModuleProps {
   unlockedTeacher: TeacherPublic | null;
@@ -133,8 +134,20 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
   onRequestLogin,
   notify,
 }) => {
-  const [subTab, setSubTab] = useState<'input' | 'database' | 'portofolio' | 'analisis' | 'panduan'>('input');
-  const [wilayahFilter, setWilayahFilter] = useState<WilayahFilter>('Semua');
+  const [subTab, setSubTab] = useState<'input' | 'database' | 'portofolio' | 'analisis' | 'panduan'>(() =>
+    loadSubTab('pintar_walikelas_subtab_v1', ['input', 'database', 'portofolio', 'analisis', 'panduan'] as const, 'input'),
+  );
+  const [wilayahFilter, setWilayahFilter] = useState<WilayahFilter>(() =>
+    loadSubTab('pintar_walikelas_wilayah_v1', ['Semua', 'Putra', 'Putri'] as const, 'Semua'),
+  );
+
+  useEffect(() => {
+    saveSubTab('pintar_walikelas_subtab_v1', subTab);
+  }, [subTab]);
+
+  useEffect(() => {
+    saveSubTab('pintar_walikelas_wilayah_v1', wilayahFilter);
+  }, [wilayahFilter]);
   const [students, setStudents] = useState<Student[]>([]);
   const [records, setRecords] = useState<PembinaanRecord[]>([]);
   const [loadingRecords, setLoadingRecords] = useState(false);
@@ -427,6 +440,7 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
       setEditingProfile(false);
       loadStudents();
       if (selectedSantri === activeSingleStudent.nama) loadPortfolio(selectedSantri);
+      emitDataMutated();
       notify(`Profil pembinaan ${activeSingleStudent.nama} diperbarui.`, 'success');
     }
   };
@@ -519,6 +533,7 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
       setFormLampiranUrl('');
       loadRecords();
       if (selectedSantri === formSantri) loadPortfolio(selectedSantri);
+      emitDataMutated();
     } catch {
       notify('Gagal menyimpan catatan pembinaan.', 'error');
     } finally {
@@ -561,6 +576,7 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
       notify(`${data.saved} baris pembinaan ${batchGroupValue} berhasil disimpan dalam 1 batch.`, 'success');
       loadRecords();
       if (selectedSantri) loadPortfolio(selectedSantri);
+      emitDataMutated();
     } catch {
       notify('Gagal menyimpan pembinaan klasikal.', 'error');
     } finally {
@@ -577,6 +593,7 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
     if (res.ok) {
       loadRecords();
       if (selectedSantri) loadPortfolio(selectedSantri);
+      emitDataMutated();
       notify(`Status tindak lanjut diubah menjadi ${nextStatus}.`, 'info');
     }
   };
@@ -587,6 +604,7 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
       notify('Baris catatan dihapus.', 'info');
       loadRecords();
       if (selectedSantri) loadPortfolio(selectedSantri);
+      emitDataMutated();
     }
   };
 

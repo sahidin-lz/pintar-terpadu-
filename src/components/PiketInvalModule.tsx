@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Copy, Megaphone, Search, Send, UserX } from 'lucide-react';
 import type { Gender, TeacherAbsenceLog, TeacherPublic } from '../types';
 import { formatTanggalIndo, getNamaHariFromDate, getTodayDateStr } from '../utils/exportHelpers';
+import { emitDataMutated, loadSubTab, saveSubTab } from '../utils/sessionPersistence';
 
 interface PiketInvalModuleProps {
   teachers: TeacherPublic[];
@@ -9,7 +10,12 @@ interface PiketInvalModuleProps {
 }
 
 export const PiketInvalModule: React.FC<PiketInvalModuleProps> = ({ teachers, notify }) => {
-  const [subTab, setSubTab] = useState<'piket' | 'inval'>('piket');
+  const [subTab, setSubTab] = useState<'piket' | 'inval'>(() =>
+    loadSubTab('pintar_piket_subtab_v1', ['piket', 'inval'] as const, 'piket'),
+  );
+  useEffect(() => {
+    saveSubTab('pintar_piket_subtab_v1', subTab);
+  }, [subTab]);
 
   // Piket state
   const [tglPiket, setTglPiket] = useState<string>(getTodayDateStr());
@@ -67,6 +73,7 @@ export const PiketInvalModule: React.FC<PiketInvalModuleProps> = ({ teachers, no
         }),
       });
       const data = await res.json();
+      emitDataMutated();
       notify(data.message || 'Data piket guru disimpan.', 'success');
       setKetPiket('');
       loadAbsentTeachers();

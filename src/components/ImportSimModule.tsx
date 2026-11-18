@@ -38,6 +38,9 @@ import {
   type ParsedDatabaseWorkbook,
 } from '../utils/excelParser';
 import { auth, pushSnapshotToFirestore } from '../firebase';
+import { loadSubTab, saveSubTab } from '../utils/sessionPersistence';
+
+const IMPORT_TABS: readonly AdminTab[] = ['excel_upload', 'pegawai_amanah', 'kelola'];
 
 interface ImportSimModuleProps {
   currentUser: TeacherPublic | null;
@@ -108,13 +111,25 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const [specError, setSpecError] = useState<string | null>(null);
 
   // Active tab & Excel upload state
-  const [activeTab, setActiveTab] = useState<AdminTab>('excel_upload');
+  const [activeTab, setActiveTab] = useState<AdminTab>(() =>
+    loadSubTab('pintar_import_tab_v1', IMPORT_TABS, 'excel_upload'),
+  );
   const [excelWorkbook, setExcelWorkbook] = useState<ParsedDatabaseWorkbook | null>(null);
   const [excelPreviewSheet, setExcelPreviewSheet] = useState<
     'santri' | 'pegawai' | 'musyrif' | 'waliKelas' | 'guru' | 'jadwal' | 'ruang'
   >('santri');
-  const [previewWilayah, setPreviewWilayah] = useState<'Semua' | 'Putra' | 'Putri'>('Semua');
+  const [previewWilayah, setPreviewWilayah] = useState<'Semua' | 'Putra' | 'Putri'>(() =>
+    loadSubTab('pintar_import_wilayah_v1', ['Semua', 'Putra', 'Putri'] as const, 'Semua'),
+  );
   const [importing, setImporting] = useState<boolean>(false);
+
+  useEffect(() => {
+    saveSubTab('pintar_import_tab_v1', activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
+    saveSubTab('pintar_import_wilayah_v1', previewWilayah);
+  }, [previewWilayah]);
 
   // Upload options
   const [replaceExisting, setReplaceExisting] = useState<boolean>(false);
@@ -319,13 +334,15 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       if (mode === 'filled' && !spec) {
         spec = await loadWorkbookSpec();
       }
-      const downloadedName = downloadComponentExcelTemplate(key, mode, spec);
+      const effectiveMode: 'blank' | 'filled' = mode === 'filled' && !spec ? 'blank' : mode;
+      const downloadedName = downloadComponentExcelTemplate(key, effectiveMode, spec);
       notify(
-        `Berhasil mengunduh ${downloadedName} (${mode === 'blank' ? 'Template Kosong Siap Isi' : 'Berisi Data Saat Ini'}).`,
+        `Berhasil mengunduh ${downloadedName} (${effectiveMode === 'blank' ? 'Template Kosong Siap Isi' : 'Berisi Data Saat Ini'}).`,
         'success'
       );
     } catch (err) {
-      notify((err as Error).message || 'Gagal mengunduh template komponen.', 'error');
+      const downloadedName = downloadComponentExcelTemplate(key, 'blank', null);
+      notify(`Mengunduh template standar ${downloadedName} (${(err as Error).message || 'mode offline'}).`, 'info');
     }
   };
 

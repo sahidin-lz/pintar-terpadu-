@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ClipboardCheck, Printer, RefreshCw, Save } from 'lucide-react';
 import type { AttendanceStatus, Gender, StudentFormEntry, TeacherPublic } from '../types';
 import { formatTanggalIndo, getTodayDateStr, printHtmlDocument } from '../utils/exportHelpers';
+import { emitDataMutated, loadSubTab, saveSubTab } from '../utils/sessionPersistence';
 
 interface UjianModuleProps {
   teachers: TeacherPublic[];
@@ -16,8 +17,18 @@ export const UjianModule: React.FC<UjianModuleProps> = ({
   kelasList,
   notify,
 }) => {
-  const [subTab, setSubTab] = useState<'pelaksanaan' | 'susulan'>('pelaksanaan');
-  const [gender, setGender] = useState<Gender>('Putri');
+  const [subTab, setSubTab] = useState<'pelaksanaan' | 'susulan'>(() =>
+    loadSubTab('pintar_ujian_subtab_v1', ['pelaksanaan', 'susulan'] as const, 'pelaksanaan'),
+  );
+  const [gender, setGender] = useState<Gender>(() =>
+    loadSubTab('pintar_ujian_gender_v1', ['Putra', 'Putri'] as const, 'Putri'),
+  );
+  useEffect(() => {
+    saveSubTab('pintar_ujian_subtab_v1', subTab);
+  }, [subTab]);
+  useEffect(() => {
+    saveSubTab('pintar_ujian_gender_v1', gender);
+  }, [gender]);
   const [tanggal, setTanggal] = useState<string>(getTodayDateStr());
   const [jenisUjian, setJenisUjian] = useState<string>('ASTS GANJIL');
   const [ruangan, setRuangan] = useState<string>(ruanganUjian[0] || '');
@@ -136,6 +147,7 @@ export const UjianModule: React.FC<UjianModuleProps> = ({
         }),
       });
       const data = await res.json();
+      emitDataMutated();
       notify(data.message || 'Kehadiran ujian disimpan.', 'success');
     } catch {
       notify('Gagal menyimpan kehadiran ujian.', 'error');

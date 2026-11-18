@@ -37,6 +37,27 @@ import { QuotaBridgeModule } from './components/QuotaBridgeModule';
 import { UjianModule } from './components/UjianModule';
 import { WaliKelasModule } from './components/WaliKelasModule';
 import type { DashboardStats, ReportOptions, RoomMapping, SystemCounts, TeacherPublic } from './types';
+import {
+  loadPersistedModule,
+  loadPersistedQuickGuru,
+  loadPersistedUser,
+  savePersistedModule,
+  savePersistedQuickGuru,
+  savePersistedUser,
+} from './utils/sessionPersistence';
+
+const VALID_MODULES: readonly ActiveModule[] = [
+  'presensi',
+  'walikelas',
+  'jadwal',
+  'akunguru',
+  'ujian',
+  'piket',
+  'monitoring',
+  'parentportal',
+  'import',
+  'quota',
+];
 
 type ActiveModule =
   | 'presensi'
@@ -132,7 +153,6 @@ const MODULE_META: Record<
 
 const DB_MIRROR_KEY = 'pintar_db_mirror_v1';
 const DB_EXPLICIT_EMPTY_KEY = 'pintar_db_explicit_empty_v1';
-const SESSION_USER_KEY = 'pintar_unlocked_teacher_v1';
 
 function scoreCounts(c?: SystemCounts | null): number {
   if (!c) return 0;
@@ -162,41 +182,39 @@ function scoreSnapshot(snap: Record<string, unknown> | null): number {
 }
 
 export default function App() {
-  // Halaman depan langsung terbuka untuk input presensi & pembinaan tanpa login
+  // Halaman depan langsung terbuka untuk input presensi & pembinaan tanpa login,
+  // atau kembali ke halaman terakhir yang diakses saat refresh.
   const [entryMode, setEntryMode] = useState<'app' | 'login'>('app');
   const [loginTab, setLoginTab] = useState<LoginPortalTab>('guru');
-  const [activeModule, setActiveModule] = useState<ActiveModule>('presensi');
+  const [activeModule, setActiveModule] = useState<ActiveModule>(() => {
+    const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+    if (params?.get('guru')) return 'presensi';
+    return loadPersistedModule(VALID_MODULES, 'presensi');
+  });
   const [menuOpen, setMenuOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
-  const [unlockedTeacher, setUnlockedTeacher] = useState<TeacherPublic | null>(() => {
-    try {
-      const raw = sessionStorage.getItem(SESSION_USER_KEY);
-      return raw ? (JSON.parse(raw) as TeacherPublic) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [unlockedTeacher, setUnlockedTeacher] = useState<TeacherPublic | null>(() =>
+    loadPersistedUser(),
+  );
   const [quickGuru, setQuickGuru] = useState<string>(() => {
-    try {
-      const raw = sessionStorage.getItem(SESSION_USER_KEY);
-      const parsed = raw ? (JSON.parse(raw) as TeacherPublic) : null;
-      return parsed?.nama || '';
-    } catch {
-      return '';
-    }
+    const u = loadPersistedUser();
+    return loadPersistedQuickGuru(u?.nama || '');
   });
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const restoredOnceRef = useRef<boolean>(false);
 
   const persistSessionUser = useCallback((teacher: TeacherPublic | null) => {
-    try {
-      if (teacher) sessionStorage.setItem(SESSION_USER_KEY, JSON.stringify(teacher));
-      else sessionStorage.removeItem(SESSION_USER_KEY);
-    } catch {
-      // Ignore storage errors
-    }
+    savePersistedUser(teacher);
   }, []);
+
+  useEffect(() => {
+    savePersistedModule(activeModule);
+  }, [activeModule]);
+
+  useEffect(() => {
+    savePersistedQuickGuru(quickGuru);
+  }, [quickGuru]);
 
   const toggleGroupCollapsed = (groupName: string) => {
     setCollapsedGroups((prev) => ({ ...prev, [groupName]: !prev[groupName] }));
@@ -289,13 +307,27 @@ export default function App() {
       }
 
       setBootstrap(data);
+      setUnlockedTeacher((prev) => {
+        if (!prev) return prev;
+        const fresh = data.teachers.find(
+          (t) =>
+            t.id === prev.id ||
+            t.username.toLowerCase() === prev.username.toLowerCase() ||
+            t.nama.toUpperCase() === prev.nama.toUpperCase(),
+        );
+        if (fresh) {
+          persistSessionUser(fresh);
+          return fresh;
+        }
+        return prev;
+      });
       if (!options?.skipMirrorWrite && scoreCounts(data.counts) > 0) {
         syncBrowserMirror();
       }
     } catch {
       notify('Gagal memuat data master dari server.', 'error');
     }
-  }, [notify, syncBrowserMirror]);
+  }, [notify, persistSessionUser, syncBrowserMirror]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -307,6 +339,35 @@ export default function App() {
     }
     loadBootstrap();
   }, [loadBootstrap]);
+
+  // Sync browser mirror whenever any module emits pintar:data-mutated or when tab is backgrounded/refreshed
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let syncTimer: number | null = null;
+
+    const scheduleMirrorSync = () => {
+      if (syncTimer) window.clearTimeout(syncTimer);
+      syncTimer = window.setTimeout(() => {
+        syncBrowserMirror();
+      }, 200);
+    };
+
+    const onVisibilityOrHide = () => {
+      if (document.visibilityState === 'hidden') {
+        syncBrowserMirror();
+      }
+    };
+
+    window.addEventListener('pintar:data-mutated', scheduleMirrorSync);
+    window.addEventListener('pagehide', syncBrowserMirror);
+    document.addEventListener('visibilitychange', onVisibilityOrHide);
+    return () => {
+      window.removeEventListener('pintar:data-mutated', scheduleMirrorSync);
+      window.removeEventListener('pagehide', syncBrowserMirror);
+      document.removeEventListener('visibilitychange', onVisibilityOrHide);
+      if (syncTimer) window.clearTimeout(syncTimer);
+    };
+  }, [syncBrowserMirror]);
 
   const navGroups: Array<{
     group: string;

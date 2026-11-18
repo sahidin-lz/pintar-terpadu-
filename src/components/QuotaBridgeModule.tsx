@@ -24,6 +24,7 @@ import {
   type User,
 } from '../firebase';
 import type { QuotaMetrics } from '../types';
+import { emitDataMutated } from '../utils/sessionPersistence';
 
 interface QuotaBridgeModuleProps {
   notify: (msg: string, type?: 'success' | 'error' | 'info') => void;
@@ -160,6 +161,7 @@ export const QuotaBridgeModule: React.FC<QuotaBridgeModuleProps> = ({ notify }) 
         throw new Error(errData.error || 'Gagal menyimpan data dari Firebase ke server.');
       }
       loadMetrics();
+      emitDataMutated();
       notify(
         `Berhasil menarik ${cloudData.students.length} santri, ${cloudData.teachers.length} pegawai, dan ${cloudData.schedules.length} jadwal dari Firebase.`,
         'success'
@@ -182,6 +184,7 @@ export const QuotaBridgeModule: React.FC<QuotaBridgeModuleProps> = ({ notify }) 
       });
       const data = await res.json();
       setMetrics(data);
+      emitDataMutated();
       notify('Konfigurasi Bridge Google Apps Script disimpan.', 'success');
     } catch {
       notify('Gagal menyimpan URL bridge.', 'error');

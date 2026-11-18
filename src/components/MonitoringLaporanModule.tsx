@@ -40,6 +40,7 @@ import {
   printHtmlDocument,
   shiftDateStr,
 } from '../utils/exportHelpers';
+import { loadSubTab, saveSubTab } from '../utils/sessionPersistence';
 
 interface Props {
   options: ReportOptions | null;
@@ -54,12 +55,30 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
   initialStats,
   notify,
 }) => {
-  const [subTab, setSubTab] = useState<'monitoring' | 'statistik' | 'download'>('monitoring');
+  const [subTab, setSubTab] = useState<'monitoring' | 'statistik' | 'download'>(() =>
+    loadSubTab('pintar_monitoring_subtab_v1', ['monitoring', 'statistik', 'download'] as const, 'monitoring'),
+  );
 
   // Monitoring state
   const [tglMonitoring, setTglMonitoring] = useState(getTodayDateStr());
-  const [monGender, setMonGender] = useState<'putri' | 'putra'>('putra');
-  const [monDiv, setMonDiv] = useState<'akademik' | 'alquran' | 'asrama'>('akademik');
+  const [monGender, setMonGender] = useState<'putri' | 'putra'>(() =>
+    loadSubTab('pintar_monitoring_gender_v1', ['putri', 'putra'] as const, 'putra'),
+  );
+  const [monDiv, setMonDiv] = useState<'akademik' | 'alquran' | 'asrama'>(() =>
+    loadSubTab('pintar_monitoring_div_v1', ['akademik', 'alquran', 'asrama'] as const, 'akademik'),
+  );
+
+  useEffect(() => {
+    saveSubTab('pintar_monitoring_subtab_v1', subTab);
+  }, [subTab]);
+
+  useEffect(() => {
+    saveSubTab('pintar_monitoring_gender_v1', monGender);
+  }, [monGender]);
+
+  useEffect(() => {
+    saveSubTab('pintar_monitoring_div_v1', monDiv);
+  }, [monDiv]);
   const [monData, setMonData] = useState<MonitoringData | null>(null);
   const [loadingMon, setLoadingMon] = useState(false);
 

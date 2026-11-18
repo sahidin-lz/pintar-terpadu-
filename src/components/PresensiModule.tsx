@@ -28,6 +28,7 @@ import {
   getTodayDateStr,
   shiftDateStr,
 } from '../utils/exportHelpers';
+import { loadScopedState, loadSubTab, saveScopedState, saveSubTab } from '../utils/sessionPersistence';
 
 interface PresensiModuleProps {
   initialGuru?: string;
@@ -53,15 +54,41 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   onOpenImport,
   notify,
 }) => {
-  const [jenis, setJenis] = useState<PresensiType>(
-    loggedInUser?.peran === 'Musyrif' || loggedInUser?.peran === 'Musyrifah' ? 'Asrama' : 'Asrama'
+  const [jenis, setJenis] = useState<PresensiType>(() =>
+    loadSubTab(
+      'pintar_presensi_jenis_v1',
+      ['Asrama', 'Belajar', 'Al-Quran'] as const,
+      loggedInUser?.peran === 'Musyrif' || loggedInUser?.peran === 'Musyrifah'
+        ? 'Asrama'
+        : loggedInUser?.peran === 'Guru'
+        ? 'Belajar'
+        : 'Asrama',
+    ),
   );
-  const [gender, setGender] = useState<Gender>(
-    loggedInUser?.genderScope === 'Putri' ? 'Putri' : loggedInUser?.genderScope === 'Putra' ? 'Putra' : 'Putri'
+  const [gender, setGender] = useState<Gender>(() =>
+    loadSubTab(
+      'pintar_presensi_gender_v1',
+      ['Putra', 'Putri'] as const,
+      loggedInUser?.genderScope === 'Putri' ? 'Putri' : loggedInUser?.genderScope === 'Putra' ? 'Putra' : 'Putri',
+    ),
   );
   const [tanggal, setTanggal] = useState<string>(getTodayDateStr());
   const [teachers, setTeachers] = useState<TeacherPublic[]>([]);
-  const [namaGuru, setNamaGuru] = useState<string>(initialGuru || loggedInUser?.nama || '');
+  const [namaGuru, setNamaGuru] = useState<string>(
+    () => initialGuru || loadScopedState<string>('pintar_presensi_guru_v1', '') || loggedInUser?.nama || '',
+  );
+
+  useEffect(() => {
+    saveSubTab('pintar_presensi_jenis_v1', jenis);
+  }, [jenis]);
+
+  useEffect(() => {
+    saveSubTab('pintar_presensi_gender_v1', gender);
+  }, [gender]);
+
+  useEffect(() => {
+    if (namaGuru) saveScopedState('pintar_presensi_guru_v1', namaGuru);
+  }, [namaGuru]);
   const [targetOptions, setTargetOptions] = useState<TargetOption[]>([]);
   const [selectedTarget, setSelectedTarget] = useState<string>('');
   const [loadingTargets, setLoadingTargets] = useState<boolean>(false);
