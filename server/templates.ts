@@ -230,43 +230,37 @@ function buildCombinedRosterForTemplate(ctx: TemplateContext): {
   const livePutra = ctx.students.filter((s) => s.gender === 'Putra');
   const livePutri = ctx.students.filter((s) => s.gender === 'Putri');
 
-  const putraRoster: AuthenticRosterRow[] =
-    livePutra.length > 0
-      ? livePutra.map((s, idx) => ({
-          no: s.nis || String(idx + 1),
-          nama: s.nama,
-          kelas: s.kelas,
-          kamar: s.kamar,
-          kelompokQuran: s.kelompokQuran,
-          pengampuQuran: s.pengampuQuran || '',
-          waliKelas: s.waliKelas || '',
-          musyrif: s.musyrif || '',
-          guruWali: s.guruWali || '',
-          gender: 'Putra',
-        }))
-      : loadAuthenticPutraRoster();
+  const putraRoster: AuthenticRosterRow[] = livePutra.map((s, idx) => ({
+    no: s.nis || String(idx + 1),
+    nama: s.nama,
+    kelas: s.kelas,
+    kamar: s.kamar,
+    kelompokQuran: s.kelompokQuran,
+    pengampuQuran: s.pengampuQuran || '',
+    waliKelas: s.waliKelas || '',
+    musyrif: s.musyrif || '',
+    guruWali: s.guruWali || '',
+    gender: 'Putra',
+  }));
 
-  const putriRoster: AuthenticRosterRow[] =
-    livePutri.length > 0
-      ? livePutri.map((s, idx) => ({
-          no: s.nis || `P-${idx + 1}`,
-          nama: s.nama,
-          kelas: s.kelas,
-          kamar: s.kamar,
-          kelompokQuran: s.kelompokQuran,
-          pengampuQuran: s.pengampuQuran || '',
-          waliKelas: s.waliKelas || '',
-          musyrif: s.musyrif || '',
-          guruWali: s.guruWali || '',
-          gender: 'Putri',
-        }))
-      : DEFAULT_PUTRI_TEMPLATE_ROSTER;
+  const putriRoster: AuthenticRosterRow[] = livePutri.map((s, idx) => ({
+    no: s.nis || `P-${idx + 1}`,
+    nama: s.nama,
+    kelas: s.kelas,
+    kamar: s.kamar,
+    kelompokQuran: s.kelompokQuran,
+    pengampuQuran: s.pengampuQuran || '',
+    waliKelas: s.waliKelas || '',
+    musyrif: s.musyrif || '',
+    guruWali: s.guruWali || '',
+    gender: 'Putri',
+  }));
 
   return {
     putraRoster,
     putriRoster,
-    putraSourceNote: livePutra.length > 0 ? 'Data Aktif DB' : 'Template IntegrASI Putra',
-    putriSourceNote: livePutri.length > 0 ? 'Data Aktif DB' : 'Contoh Format Wilayah Putri (siap diedit)',
+    putraSourceNote: livePutra.length > 0 ? 'Data Upload Template' : 'Kosong — Siap Upload Template',
+    putriSourceNote: livePutri.length > 0 ? 'Data Upload Template' : 'Kosong — Siap Upload Template',
   };
 }
 
@@ -381,32 +375,7 @@ export function buildDatabaseWorkbookSpec(ctx: TemplateContext): {
     }
   }
 
-  if (!coveredRooms.has('10.4 PUTRA') && sortedRooms.includes('10.4 Putra')) {
-    musyrifPutraBody.push([
-      String(musyrifPutraBody.length + 1),
-      'UST. FATIH',
-      sortedRooms.includes('10.8 Putra') ? '10.4 Putra; 10.8 Putra' : '10.4 Putra',
-      'Putra',
-      '628123456700',
-      'ust.fatih',
-      '1234',
-    ]);
-    coveredRooms.add('10.4 PUTRA');
-    coveredRooms.add('10.8 PUTRA');
-  }
-  if (!coveredRooms.has('10.1 PUTRI') && sortedRooms.includes('10.1 Putri')) {
-    musyrifahPutriBody.push([
-      String(musyrifahPutriBody.length + 1),
-      'USTZ. RAHMAH MUSYRIFAH',
-      sortedRooms.includes('10.2 Putri') ? '10.1 Putri; 10.2 Putri' : '10.1 Putri',
-      'Putri',
-      '628123456701',
-      'ustz.rahmah',
-      '1234',
-    ]);
-    coveredRooms.add('10.1 PUTRI');
-    coveredRooms.add('10.2 PUTRI');
-  }
+  // Tidak menyisipkan data dummy Musyrif/Musyrifah; semua berasal dari upload template
 
   for (const rm of sortedRooms) {
     if (coveredRooms.has(rm.toUpperCase())) continue;
@@ -643,69 +612,22 @@ export function buildDatabaseWorkbookSpec(ctx: TemplateContext): {
     ...masterPegawaiBody,
   ];
 
-  // Sheet 4: Jadwal Mengajar & Halaqah (Putra & Putri)
-  let jadwalBody: string[][] = [];
-  if (ctx.schedules.length > 0) {
-    jadwalBody = ctx.schedules.map((s) => [
-      sanitizeXmlText(s.guru),
-      sanitizeXmlText(s.hari),
-      sanitizeXmlText(s.kelas),
-      sanitizeXmlText(s.mapel),
-      sanitizeXmlText(s.jamKe),
-      sanitizeXmlText(s.gender),
-    ]);
-  } else {
-    for (const kls of sortedClasses) {
-      const assignedWali = waliByClass.get(kls.toUpperCase());
-      if (!assignedWali) continue;
-      const klsGender = classGenderMap.get(kls) || inferGender(kls);
-      jadwalBody.push([
-        sanitizeXmlText(assignedWali.nama),
-        'SENIN',
-        sanitizeXmlText(kls),
-        'BAHASA ARAB',
-        '1-2',
-        klsGender,
-      ]);
-    }
-    const halaqahPairs = new Map<string, { guru: string; kelompok: string; gender: Gender }>();
-    for (const r of roster) {
-      if (r.pengampuQuran && r.kelompokQuran) {
-        halaqahPairs.set(`${r.pengampuQuran}|${r.kelompokQuran}`, {
-          guru: r.pengampuQuran,
-          kelompok: r.kelompokQuran,
-          gender: r.gender,
-        });
-      }
-    }
-    const putraPairs = Array.from(halaqahPairs.values()).filter((p) => p.gender === 'Putra').slice(0, 8);
-    const putriPairs = Array.from(halaqahPairs.values()).filter((p) => p.gender === 'Putri').slice(0, 8);
-    for (const pair of [...putraPairs, ...putriPairs]) {
-      jadwalBody.push([
-        sanitizeXmlText(pair.guru),
-        'SENIN',
-        sanitizeXmlText(pair.kelompok),
-        "HALAQAH AL-QUR'AN",
-        '5-6',
-        pair.gender,
-      ]);
-    }
-  }
+  // Sheet 4: Jadwal Mengajar & Halaqah (Putra & Putri) — murni dari data yang diupload
+  const jadwalBody: string[][] = ctx.schedules.map((s) => [
+    sanitizeXmlText(s.guru),
+    sanitizeXmlText(s.hari),
+    sanitizeXmlText(s.kelas),
+    sanitizeXmlText(s.mapel),
+    sanitizeXmlText(s.jamKe),
+    sanitizeXmlText(s.gender),
+  ]);
   const jadwalRows: string[][] = [
     ['Guru', 'Hari', 'Kelas / Halaqah', 'Mata Pelajaran', 'Jam Ke', 'Wilayah (Putra/Putri)'],
     ...jadwalBody,
   ];
 
-  // Sheet 5: Ruang Ujian Putra & Putri
-  const existingRooms =
-    ctx.ruanganUjian && ctx.ruanganUjian.length > 0
-      ? ctx.ruanganUjian
-      : [
-          'RUANG 01 PUTRA - AL-GHAZALI',
-          'RUANG 02 PUTRA - IBNU SINA',
-          'RUANG 01 PUTRI - KHADIJAH',
-          'RUANG 02 PUTRI - AISYAH',
-        ];
+  // Sheet 5: Ruang Ujian Putra & Putri — murni dari data yang diupload
+  const existingRooms = ctx.ruanganUjian && ctx.ruanganUjian.length > 0 ? ctx.ruanganUjian : [];
   const ruangRows: string[][] = [
     ['Nama Ruangan Ujian', 'Wilayah (Putra/Putri/Semua)'],
     ...existingRooms.map((r) => [

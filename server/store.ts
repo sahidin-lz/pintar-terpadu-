@@ -355,25 +355,9 @@ class PintarStore {
           : t.pin,
     }));
     const base = createInitialDatabase();
-    const isExplicitEmpty = Boolean(parsed.settings?.explicitEmpty);
-    const isLabkomCleared = Boolean(parsed.settings?.labkomBookingsCleared);
-    const hasLabkomBookings = Array.isArray(parsed.labkomBookings) && parsed.labkomBookings.length > 0;
-    const hasLabkomMasters = Array.isArray(parsed.labkomMasters) && parsed.labkomMasters.length > 0;
-
     let labkomBookings = Array.isArray(parsed.labkomBookings) ? parsed.labkomBookings : [];
     let labkomMasters = Array.isArray(parsed.labkomMasters) ? parsed.labkomMasters : [];
 
-    if (!isExplicitEmpty && ((!hasLabkomBookings && !isLabkomCleared) || !hasLabkomMasters)) {
-      const extraGurus = normalizedTeachers
-        .filter((t) => t.peran !== 'Admin Super')
-        .map((t) => t.nama);
-      const extraKelas = Array.from(
-        new Set((parsed.students || []).map((s) => s.kelas).filter((k) => k && k !== '-')),
-      );
-      const seed = loadLabkomSeedData(extraGurus, extraKelas);
-      if (!hasLabkomBookings && !isLabkomCleared) labkomBookings = seed.bookings;
-      if (!hasLabkomMasters) labkomMasters = seed.masters;
-    }
     labkomBookings = ensureUniqueLabkomBookingIds(labkomBookings);
     labkomMasters = ensureBaselineMasters(labkomMasters);
 
@@ -2403,7 +2387,10 @@ class PintarStore {
       exportedAt: new Date().toISOString(),
       lastModifiedAt: this.db.settings?.lastModifiedAt || new Date().toISOString(),
       students: this.db.students,
-      teachers: this.db.teachers.map(({ pin: _pin, ...pub }) => pub),
+      teachers: this.db.teachers.map((t) => ({
+        ...t,
+        pin: t.id === SUPER_ADMIN_ID ? undefined : t.pin || generateTeacherAccessToken(t.nama),
+      })),
       rooms: this.db.rooms,
       ruanganUjian: this.db.ruanganUjian,
       schedules: this.db.schedules,
@@ -2468,9 +2455,10 @@ class PintarStore {
         const restoredTeachers: TeacherRecord[] = snapshot.teachers.map((t) => ({
           ...t,
           pin:
+            t.pin ||
             existingPinByName.get(normalizeStr(t.nama)) ||
             existingPinByName.get(normalizeStr(t.username)) ||
-            '1234',
+            generateTeacherAccessToken(t.nama),
         }));
         this.db.teachers = ensureSuperAdmin(restoredTeachers);
         teachersRestored = restoredTeachers.length;
@@ -2540,7 +2528,7 @@ class PintarStore {
           if (!exists) {
             this.db.teachers.push({
               ...t,
-              pin: '1234',
+              pin: t.pin || generateTeacherAccessToken(t.nama),
             });
             teachersRestored++;
           }

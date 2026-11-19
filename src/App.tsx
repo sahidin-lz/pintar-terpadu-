@@ -213,7 +213,8 @@ const MODULE_META: Record<
   },
 };
 
-const DB_MIRROR_KEY = 'pintar_db_mirror_v1';
+const DB_MIRROR_KEY = 'pintar_db_template_only_v2';
+const LEGACY_BUNDLED_MIRROR_KEY = 'pintar_db_mirror_v1';
 const DB_EXPLICIT_EMPTY_KEY = 'pintar_db_explicit_empty_v1';
 
 function scoreCounts(c?: SystemCounts | null): number {
@@ -323,6 +324,7 @@ export default function App() {
 
       const compactSnap = { ...snap, attachments: compactAttachments };
       localStorage.setItem(DB_MIRROR_KEY, JSON.stringify(compactSnap));
+      localStorage.removeItem(LEGACY_BUNDLED_MIRROR_KEY);
       localStorage.removeItem(DB_EXPLICIT_EMPTY_KEY);
     } catch {
       // Ignore localStorage quota or transient network errors
@@ -332,6 +334,7 @@ export default function App() {
   const handleExplicitReset = useCallback(() => {
     try {
       localStorage.removeItem(DB_MIRROR_KEY);
+      localStorage.removeItem(LEGACY_BUNDLED_MIRROR_KEY);
       localStorage.setItem(DB_EXPLICIT_EMPTY_KEY, '1');
     } catch {
       // Ignore
@@ -340,12 +343,19 @@ export default function App() {
 
   const loadBootstrap = useCallback(async (options?: { skipMirrorWrite?: boolean }) => {
     try {
+      try {
+        localStorage.removeItem(LEGACY_BUNDLED_MIRROR_KEY);
+      } catch {
+        // Ignore
+      }
       const res = await fetch('/api/bootstrap');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as BootstrapPayload;
 
-      // Check if Vercel/serverless instance cold-started with fewer records than the browser mirror
-      if (!restoredOnceRef.current) {
+      // Whenever a Vercel/GitHub deployment cold-starts empty (or with fewer records than the user's uploaded template mirror),
+      // automatically restore the user's uploaded template data to the server.
+      const serverScore = scoreCounts(data.counts);
+      if (!restoredOnceRef.current || serverScore === 0) {
         restoredOnceRef.current = true;
         try {
           const explicitEmpty = localStorage.getItem(DB_EXPLICIT_EMPTY_KEY) === '1';
@@ -353,24 +363,24 @@ export default function App() {
           if (!explicitEmpty && mirrorRaw) {
             const mirrorSnap = JSON.parse(mirrorRaw) as Record<string, unknown>;
             const mirrorScore = scoreSnapshot(mirrorSnap);
-            const serverScore = scoreCounts(data.counts);
             const mirrorHasLogs =
               (Array.isArray(mirrorSnap.attendanceLogs) && mirrorSnap.attendanceLogs.length > (data.counts.attendanceLogs || 0)) ||
               (Array.isArray(mirrorSnap.pembinaanRecords) && mirrorSnap.pembinaanRecords.length > (data.counts.pembinaanRecords || 0)) ||
               (Array.isArray(mirrorSnap.examLogs) && mirrorSnap.examLogs.length > (data.counts.examLogs || 0));
 
             if (mirrorScore > serverScore || mirrorHasLogs) {
+              const restoreMode = serverScore === 0 ? 'replace' : 'merge';
               const restoreRes = await fetch('/api/system/restore-snapshot', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ snapshot: mirrorSnap, mode: 'merge' }),
+                body: JSON.stringify({ snapshot: mirrorSnap, mode: restoreMode }),
               });
               if (restoreRes.ok) {
                 const refreshed = await fetch('/api/bootstrap');
                 if (refreshed.ok) {
                   const refreshedData = (await refreshed.json()) as BootstrapPayload;
                   setBootstrap(refreshedData);
-                  notify('Data sesi sebelumnya dipulihkan otomatis ke server aktif.', 'info');
+                  notify('Data hasil upload template Anda dipulihkan otomatis setelah pembaruan server.', 'info');
                   return;
                 }
               }

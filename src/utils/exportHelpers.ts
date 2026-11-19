@@ -786,37 +786,31 @@ function buildCombinedRosterForClient(ctx: ClientTemplateContext): {
   const livePutra = ctx.students.filter((s) => s.gender === 'Putra');
   const livePutri = ctx.students.filter((s) => s.gender === 'Putri');
 
-  const putraRoster: ClientRosterRow[] =
-    livePutra.length > 0
-      ? livePutra.map((s, idx) => ({
-          no: s.nis || String(idx + 1),
-          nama: s.nama,
-          kelas: s.kelas,
-          kamar: s.kamar,
-          kelompokQuran: s.kelompokQuran,
-          pengampuQuran: s.pengampuQuran || '',
-          gender: 'Putra',
-        }))
-      : CLIENT_FALLBACK_PUTRA_ROSTER;
+  const putraRoster: ClientRosterRow[] = livePutra.map((s, idx) => ({
+    no: s.nis || String(idx + 1),
+    nama: s.nama,
+    kelas: s.kelas,
+    kamar: s.kamar,
+    kelompokQuran: s.kelompokQuran,
+    pengampuQuran: s.pengampuQuran || '',
+    gender: 'Putra',
+  }));
 
-  const putriRoster: ClientRosterRow[] =
-    livePutri.length > 0
-      ? livePutri.map((s, idx) => ({
-          no: s.nis || `P-${idx + 1}`,
-          nama: s.nama,
-          kelas: s.kelas,
-          kamar: s.kamar,
-          kelompokQuran: s.kelompokQuran,
-          pengampuQuran: s.pengampuQuran || '',
-          gender: 'Putri',
-        }))
-      : CLIENT_DEFAULT_PUTRI_ROSTER;
+  const putriRoster: ClientRosterRow[] = livePutri.map((s, idx) => ({
+    no: s.nis || `P-${idx + 1}`,
+    nama: s.nama,
+    kelas: s.kelas,
+    kamar: s.kamar,
+    kelompokQuran: s.kelompokQuran,
+    pengampuQuran: s.pengampuQuran || '',
+    gender: 'Putri',
+  }));
 
   return {
     putraRoster,
     putriRoster,
-    putraSourceNote: livePutra.length > 0 ? 'Data Aktif DB' : 'Template IntegrASI Putra',
-    putriSourceNote: livePutri.length > 0 ? 'Data Aktif DB' : 'Contoh Format Wilayah Putri (siap diedit)',
+    putraSourceNote: livePutra.length > 0 ? 'Data Upload Template' : 'Kosong — Siap Upload Template',
+    putriSourceNote: livePutri.length > 0 ? 'Data Upload Template' : 'Kosong — Siap Upload Template',
   };
 }
 
@@ -918,32 +912,7 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
     }
   }
 
-  if (!coveredRooms.has('10.4 PUTRA') && sortedRooms.includes('10.4 Putra')) {
-    musyrifPutraBody.push([
-      String(musyrifPutraBody.length + 1),
-      'UST. FATIH',
-      sortedRooms.includes('10.8 Putra') ? '10.4 Putra; 10.8 Putra' : '10.4 Putra',
-      'Putra',
-      '628123456700',
-      'ust.fatih',
-      '1234',
-    ]);
-    coveredRooms.add('10.4 PUTRA');
-    coveredRooms.add('10.8 PUTRA');
-  }
-  if (!coveredRooms.has('10.1 PUTRI') && sortedRooms.includes('10.1 Putri')) {
-    musyrifahPutriBody.push([
-      String(musyrifahPutriBody.length + 1),
-      'USTZ. RAHMAH MUSYRIFAH',
-      sortedRooms.includes('10.2 Putri') ? '10.1 Putri; 10.2 Putri' : '10.1 Putri',
-      'Putri',
-      '628123456701',
-      'ustz.rahmah',
-      '1234',
-    ]);
-    coveredRooms.add('10.1 PUTRI');
-    coveredRooms.add('10.2 PUTRI');
-  }
+  // Tidak menyisipkan data dummy Musyrif/Musyrifah; semua berasal dari upload template
 
   for (const rm of sortedRooms) {
     if (coveredRooms.has(rm.toUpperCase())) continue;
@@ -1180,69 +1149,22 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
     ...masterPegawaiBody,
   ];
 
-  // Sheet 4: Jadwal Mengajar & Halaqah (Putra & Putri)
-  let jadwalBody: string[][] = [];
-  if (ctx.schedules.length > 0) {
-    jadwalBody = ctx.schedules.map((s) => [
-      sanitizeExcelText(s.guru),
-      sanitizeExcelText(s.hari),
-      sanitizeExcelText(s.kelas),
-      sanitizeExcelText(s.mapel),
-      sanitizeExcelText(s.jamKe),
-      sanitizeExcelText(s.gender),
-    ]);
-  } else {
-    for (const kls of sortedClasses) {
-      const assignedWali = waliByClass.get(kls.toUpperCase());
-      if (!assignedWali) continue;
-      const klsGender = classGenderMap.get(kls) || inferGenderClient(kls);
-      jadwalBody.push([
-        sanitizeExcelText(assignedWali.nama),
-        'SENIN',
-        sanitizeExcelText(kls),
-        'BAHASA ARAB',
-        '1-2',
-        klsGender,
-      ]);
-    }
-    const halaqahPairs = new Map<string, { guru: string; kelompok: string; gender: Gender }>();
-    for (const r of roster) {
-      if (r.pengampuQuran && r.kelompokQuran) {
-        halaqahPairs.set(`${r.pengampuQuran}|${r.kelompokQuran}`, {
-          guru: r.pengampuQuran,
-          kelompok: r.kelompokQuran,
-          gender: r.gender,
-        });
-      }
-    }
-    const putraPairs = Array.from(halaqahPairs.values()).filter((p) => p.gender === 'Putra').slice(0, 8);
-    const putriPairs = Array.from(halaqahPairs.values()).filter((p) => p.gender === 'Putri').slice(0, 8);
-    for (const pair of [...putraPairs, ...putriPairs]) {
-      jadwalBody.push([
-        sanitizeExcelText(pair.guru),
-        'SENIN',
-        sanitizeExcelText(pair.kelompok),
-        "HALAQAH AL-QUR'AN",
-        '5-6',
-        pair.gender,
-      ]);
-    }
-  }
+  // Sheet 4: Jadwal Mengajar & Halaqah (Putra & Putri) — murni dari data yang diupload
+  const jadwalBody: string[][] = ctx.schedules.map((s) => [
+    sanitizeExcelText(s.guru),
+    sanitizeExcelText(s.hari),
+    sanitizeExcelText(s.kelas),
+    sanitizeExcelText(s.mapel),
+    sanitizeExcelText(s.jamKe),
+    sanitizeExcelText(s.gender),
+  ]);
   const jadwalRows: string[][] = [
     ['Guru', 'Hari', 'Kelas / Halaqah', 'Mata Pelajaran', 'Jam Ke', 'Wilayah (Putra/Putri)'],
     ...jadwalBody,
   ];
 
-  // Sheet 5: Ruang Ujian Putra & Putri
-  const existingRooms =
-    ctx.ruanganUjian && ctx.ruanganUjian.length > 0
-      ? ctx.ruanganUjian
-      : [
-          'RUANG 01 PUTRA - AL-GHAZALI',
-          'RUANG 02 PUTRA - IBNU SINA',
-          'RUANG 01 PUTRI - KHADIJAH',
-          'RUANG 02 PUTRI - AISYAH',
-        ];
+  // Sheet 5: Ruang Ujian Putra & Putri — murni dari data yang diupload
+  const existingRooms = ctx.ruanganUjian && ctx.ruanganUjian.length > 0 ? ctx.ruanganUjian : [];
   const ruangRows: string[][] = [
     ['Nama Ruangan Ujian', 'Wilayah (Putra/Putri/Semua)'],
     ...existingRooms.map((r) => [

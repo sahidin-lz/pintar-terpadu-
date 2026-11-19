@@ -1402,11 +1402,15 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       await parseJsonSafe(res);
       setConfirmReset(false);
       setExcelWorkbook(null);
+      setWilayahExplorerOpen(false);
+      setSelectedSheetViewName(null);
+      setAdminStudents([]);
+      setAdminSchedules([]);
       onExplicitReset?.();
       onDataUpdated();
       loadWorkbookSpec();
       loadAdminEntities();
-      notify('Seluruh data siswa, jadwal & log dikosongkan (akun Admin Super tetap terjaga).', 'info');
+      notify('Seluruh data siswa, pegawai, jadwal & log dikosongkan. Sistem siap menerima data murni dari Upload Template.', 'info');
     } catch (err) {
       notify((err as Error).message || 'Gagal mengosongkan database.', 'error');
     }
@@ -1610,6 +1614,17 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {(counts?.students ?? 0) > 0 && (
+              <button
+                type="button"
+                onClick={handleResetEmpty}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1 text-[11px] font-bold text-rose-800 hover:bg-rose-100"
+                title="Hapus seluruh data siswa bawaan/lama agar sistem kosong (0 siswa) dan murni berasal dari Upload Template"
+              >
+                <Trash2 className="h-3.5 w-3.5 text-rose-600" />
+                <span>Hapus Data Siswa (Reset 0)</span>
+              </button>
+            )}
             <button
               type="button"
               disabled={tidyingData}
@@ -2525,11 +2540,11 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
             <button
               type="button"
               disabled={loadingSpec || importing}
-              onClick={handleDirectCommitWorkbookSpec}
-              className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 font-semibold text-slate-800 hover:bg-slate-100"
+              onClick={handleResetEmpty}
+              className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-rose-50 px-2.5 py-1 font-semibold text-rose-800 hover:bg-rose-100"
             >
-              <Save className="h-3 w-3 text-teal-700" />
-              Muat Data Default Template
+              <Trash2 className="h-3 w-3 text-rose-700" />
+              Kosongkan Data Siswa (0 Siswa)
             </button>
           </div>
         </div>
