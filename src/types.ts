@@ -4,17 +4,22 @@ export type AttendanceStatus = 'H' | 'T' | 'S' | 'I' | 'A';
 
 export type UserRole =
   | 'Guru'
+  | 'Guru Wali'
   | 'Wali Kelas'
+  | 'Wali Asrama'
   | 'Musyrif'
   | 'Musyrifah'
   | 'Pengampu Al-Quran'
   | 'Admin SIM'
   | 'Admin Super';
 
+export type PembinaanJalur = 'Wali Kelas' | 'Guru Wali' | 'Room Visit Asrama';
+export type PembinaanJadwal = 'Mingguan' | 'Tentatif';
+
 export type PrioritasPembinaan = 'Mandiri' | 'Rutin' | 'Intensif' | '-';
 export type LingkupPembinaan = 'Individu' | 'Klasikal';
 export type LokasiPembinaan = 'Asrama' | 'Masjid' | 'Kelas' | 'Lapangan' | 'Ruang BK';
-export type PihakKoordinasi = 'Musyrif/ah' | 'Wali Kelas' | 'BK / Ortu' | 'Kepala Sekolah';
+export type PihakKoordinasi = 'Musyrif/ah' | 'Wali Kelas' | 'Guru Wali' | 'BK / Ortu' | 'Kepala Sekolah';
 export type StatusTindakLanjut = 'Selesai' | 'Proses' | 'Eskalasi';
 export type AttachmentCategory =
   | 'Surat Sakit Dokter'
@@ -34,6 +39,7 @@ export interface Student {
   pengampuQuran?: string;
   gender: Gender;
   waliKelas: string;
+  guruWali?: string;
   musyrif?: string;
   namaOrtu?: string;
   waOrtu?: string;
@@ -168,6 +174,8 @@ export interface PembinaanRecord {
   gender: Gender;
   pembinaNama: string;
   pembinaPeran: UserRole | string;
+  jalurPembinaan?: PembinaanJalur;
+  jadwalPembinaan?: PembinaanJadwal;
   waliKelas: string;
   lingkup: LingkupPembinaan;
   lokasi: LokasiPembinaan;
@@ -262,6 +270,11 @@ export interface PembinaanAnalisisSummary {
   statusCounts: Record<StatusTindakLanjut, number>;
   prioritasCounts: { Mandiri: number; Rutin: number; Intensif: number; BelumDiatur: number };
   kategoriCounts: Array<{ kategori: PembinaanKategori; count: number }>;
+  jalurCounts?: {
+    waliKelasMingguan: number;
+    guruWaliTentatif: number;
+    roomVisitAsrama: number;
+  };
   topAttentionStudents: Array<{
     nama: string;
     gender: Gender;
@@ -308,6 +321,17 @@ export interface AnalyticsTerpadu {
     Semua: PembinaanAnalisisSummary;
     Putra: PembinaanAnalisisSummary;
     Putri: PembinaanAnalisisSummary;
+  };
+  labkomRingkasan?: {
+    putraTotal: number;
+    putriTotal: number;
+    putraHariIni: number;
+    putriHariIni: number;
+    byLab: Array<{ lab: string; putra: number; putri: number }>;
+  };
+  waliAsramaSummary?: {
+    Putra: Array<{ kamar: string; waliAsrama: string; filledToday: boolean; studentCount: number }>;
+    Putri: Array<{ kamar: string; waliAsrama: string; filledToday: boolean; studentCount: number }>;
   };
 }
 

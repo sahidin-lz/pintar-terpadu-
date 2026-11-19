@@ -10,7 +10,7 @@ import {
   loadAuthenticPutraRoster,
   type TemplateContext,
 } from './server/templates.js';
-import type { Gender, PresensiType, StatusTindakLanjut, TeacherPublic, UserRole, WilayahFilter } from './src/types';
+import type { Gender, PembinaanJalur, PresensiType, StatusTindakLanjut, TeacherPublic, UserRole, WilayahFilter } from './src/types';
 
 export const app = express();
 app.use(express.json({ limit: '15mb' }));
@@ -520,7 +520,8 @@ function registerApiRoutes() {
 
     if (jenis === 'Asrama') {
       const rooms = store.getKamarMusyrif(guru, gender);
-      return res.json({ rooms });
+      const roomDetails = store.getAllRooms().filter((r) => r.gender === gender);
+      return res.json({ rooms, roomDetails });
     }
     const jadwal = store.getJadwal(hari, guru, gender).filter((j) =>
       jenis === 'Al-Quran'
@@ -663,6 +664,17 @@ function registerApiRoutes() {
     res.json({ student });
   });
 
+  app.post('/api/guru/assign-guru-wali', (req, res) => {
+    const { namaGuruWali, studentNames, mode } = req.body || {};
+    if (!namaGuruWali) return res.status(400).json({ error: 'Nama Guru Wali diperlukan.' });
+    const result = store.assignStudentsToGuruWali({
+      namaGuruWali: String(namaGuruWali),
+      studentNames: Array.isArray(studentNames) ? studentNames.map(String) : [],
+      mode: mode === 'add' || mode === 'remove' ? mode : 'set',
+    });
+    res.json({ ...result, counts: store.getSystemCounts() });
+  });
+
   app.get('/api/pembinaan/list', (req, res) => {
     const gender = (req.query.gender || req.query.wilayah || 'Semua') as WilayahFilter;
     const kelas = req.query.kelas ? String(req.query.kelas) : undefined;
@@ -673,7 +685,10 @@ function registerApiRoutes() {
       ? (String(req.query.statusTindakLanjut) as StatusTindakLanjut)
       : undefined;
     const pembinaPeran = req.query.pembinaPeran ? String(req.query.pembinaPeran) : undefined;
-    res.json(store.getPembinaanList({ gender, kelas, kamar, santri, pekanKe, statusTindakLanjut, pembinaPeran }));
+    const jalurPembinaan = req.query.jalurPembinaan
+      ? (String(req.query.jalurPembinaan) as PembinaanJalur | 'SEMUA')
+      : undefined;
+    res.json(store.getPembinaanList({ gender, kelas, kamar, santri, pekanKe, statusTindakLanjut, pembinaPeran, jalurPembinaan }));
   });
 
   app.get('/api/pembinaan/portfolio', (req, res) => {

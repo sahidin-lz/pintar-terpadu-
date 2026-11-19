@@ -52,6 +52,7 @@ export interface ParsedSantriSimRow {
   pengampuQuran: string;
   waliKelas?: string;
   musyrif?: string;
+  guruWali?: string;
   gender: Gender;
   warning?: string;
 }
@@ -161,7 +162,8 @@ export function parseSantriSimRows(rows: string[][], forcedGender?: Gender): Par
     : -1;
   const kamarColIdx = hasHeader ? findHeaderIdx('kamar', 'asrama', 'hujroh', 'rayon') : -1;
   const waliColIdx = hasHeader ? findHeaderIdx('wali kelas', 'walikelas', 'walas') : -1;
-  const musyrifColIdx = hasHeader ? findHeaderIdx('musyrif', 'musrif', 'murobbi', 'pembina asrama') : -1;
+  const musyrifColIdx = hasHeader ? findHeaderIdx('wali asrama', 'musyrif', 'musrif', 'murobbi', 'pembina asrama') : -1;
+  const guruWaliColIdx = hasHeader ? findHeaderIdx('guru wali', 'guruwali', 'pembimbing', 'mentor') : -1;
 
   let kelompokColIdx = -1;
   let pengampuColIdx = -1;
@@ -241,6 +243,10 @@ export function parseSantriSimRows(rows: string[][], forcedGender?: Gender): Par
       musyrifColIdx >= 0
         ? String(cols[musyrifColIdx] || '').trim().replace(/\s+/g, ' ').toUpperCase() || undefined
         : undefined;
+    const guruWali =
+      guruWaliColIdx >= 0
+        ? String(cols[guruWaliColIdx] || '').trim().replace(/\s+/g, ' ').toUpperCase() || undefined
+        : undefined;
 
     let warning: string | undefined;
     if (kelas && nama === kelas) {
@@ -265,6 +271,7 @@ export function parseSantriSimRows(rows: string[][], forcedGender?: Gender): Par
       pengampuQuran,
       waliKelas: waliKelas && waliKelas !== '-' ? waliKelas : undefined,
       musyrif: musyrif && musyrif !== '-' ? musyrif : undefined,
+      guruWali: guruWali && guruWali !== '-' ? guruWali : undefined,
       gender,
       warning,
     });
@@ -415,7 +422,9 @@ function normalizeUserRole(raw: string): UserRole | null {
   if (!low) return null;
   if (low.includes('super')) return 'Admin Super';
   if (low.includes('admin')) return 'Admin SIM';
-  if (low.includes('wali')) return 'Wali Kelas';
+  if (low.includes('guru wali') || low.includes('guruwali') || low.includes('pembimbing')) return 'Guru Wali';
+  if (low.includes('wali asrama') || low.includes('waliasrama') || low.includes('kepala asrama')) return 'Wali Asrama';
+  if (low.includes('wali kelas') || low.includes('walikelas') || low.includes('walas') || low.includes('wali')) return 'Wali Kelas';
   if (low.includes('musyrifah') || low.includes('musrifah')) return 'Musyrifah';
   if (low.includes('musyrif') || low.includes('musrif')) return 'Musyrif';
   if (low.includes('qur')) return 'Pengampu Al-Quran';
@@ -621,6 +630,10 @@ export interface ParsedPembinaanImportRow {
   poin: number;
   statusTindakLanjut: 'Selesai' | 'Proses' | 'Eskalasi';
   tindakLanjut: string;
+  jalurPembinaan?: 'Wali Kelas' | 'Guru Wali' | 'Room Visit Asrama';
+  lingkup?: 'Individu' | 'Klasikal';
+  pekanKe?: number;
+  pembinaNama?: string;
 }
 
 export function parsePembinaanImportRows(
@@ -656,6 +669,10 @@ export function parsePembinaanImportRows(
   const iPoin = findCol(5, 'poin', 'skor');
   const iStatus = findCol(6, 'status');
   const iTindak = findCol(7, 'tindak lanjut', 'tindak');
+  const iJalur = findCol(8, 'jalur', 'peran pembina');
+  const iLingkup = findCol(9, 'momen', 'lingkup', 'mode');
+  const iPekan = findCol(10, 'pekan');
+  const iPembina = findCol(11, 'pembina');
 
   const parsed: ParsedPembinaanImportRow[] = [];
   for (const cols of dataRows) {
@@ -686,6 +703,29 @@ export function parsePembinaanImportRows(
     else if (rawStatus.includes('pros')) statusTindakLanjut = 'Proses';
 
     const tindakLanjut = (cols[iTindak] || '').trim() || '-';
+
+    const rawJalur = (cols[iJalur] || '').trim().toLowerCase();
+    let jalurPembinaan: ParsedPembinaanImportRow['jalurPembinaan'];
+    if (rawJalur.includes('asrama') || rawJalur.includes('room') || rawJalur.includes('musyrif')) {
+      jalurPembinaan = 'Room Visit Asrama';
+    } else if (rawJalur.includes('guru wali') || rawJalur.includes('guruwali')) {
+      jalurPembinaan = 'Guru Wali';
+    } else if (rawJalur.includes('wali kelas') || rawJalur.includes('walikelas')) {
+      jalurPembinaan = 'Wali Kelas';
+    }
+
+    const rawLingkup = (cols[iLingkup] || '').trim().toLowerCase();
+    const lingkup: 'Individu' | 'Klasikal' | undefined =
+      rawLingkup.includes('klasikal') || rawLingkup.includes('pekan')
+        ? 'Klasikal'
+        : rawLingkup.includes('khusus') || rawLingkup.includes('individu') || rawLingkup.includes('satu')
+        ? 'Individu'
+        : undefined;
+
+    const pekanRaw = Number.parseInt((cols[iPekan] || '').trim(), 10);
+    const pekanKe = Number.isFinite(pekanRaw) && pekanRaw >= 1 && pekanRaw <= 52 ? pekanRaw : undefined;
+    const pembinaNama = (cols[iPembina] || '').trim().toUpperCase() || undefined;
+
     parsed.push({
       tanggal,
       namaSantri,
@@ -695,6 +735,10 @@ export function parsePembinaanImportRows(
       poin,
       statusTindakLanjut,
       tindakLanjut,
+      jalurPembinaan,
+      lingkup,
+      pekanKe,
+      pembinaNama,
     });
   }
   return parsed;

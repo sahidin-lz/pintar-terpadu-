@@ -1235,6 +1235,29 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                     );
                   })}
                 </div>
+
+                {monthlyReport.pembinaanSummary.jalurCounts && (
+                  <div className="border-t border-slate-100 pt-3 grid grid-cols-3 gap-2 text-xs">
+                    <div className="rounded-lg bg-slate-50 px-2.5 py-2">
+                      <div className="text-[10px] text-slate-500">Wali Kelas (Mingguan)</div>
+                      <div className="font-mono-num font-bold text-slate-900">
+                        {monthlyReport.pembinaanSummary.jalurCounts.waliKelasMingguan}
+                      </div>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-2.5 py-2">
+                      <div className="text-[10px] text-slate-500">Guru Wali (Tentatif)</div>
+                      <div className="font-mono-num font-bold text-slate-900">
+                        {monthlyReport.pembinaanSummary.jalurCounts.guruWaliTentatif}
+                      </div>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-2.5 py-2">
+                      <div className="text-[10px] text-slate-500">Room Visit (Tentatif)</div>
+                      <div className="font-mono-num font-bold text-slate-900">
+                        {monthlyReport.pembinaanSummary.jalurCounts.roomVisitAsrama}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

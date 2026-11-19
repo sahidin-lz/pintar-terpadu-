@@ -30,9 +30,9 @@ import {
   type DatabaseWorkbookSpec,
   type ParsedDatabaseWorkbook,
 } from '../utils/excelParser';
-import { loadSubTab, saveSubTab } from '../utils/sessionPersistence';
+import { emitDataMutated, loadSubTab, saveSubTab } from '../utils/sessionPersistence';
 
-const AKUN_TABS = ['mengajar', 'walikelas', 'musyrif', 'quran', 'whatsapp', 'upload'] as const;
+const AKUN_TABS = ['mengajar', 'walikelas', 'musyrif', 'guruwali', 'quran', 'whatsapp', 'upload'] as const;
 type AkunProgressTab = (typeof AKUN_TABS)[number];
 
 interface TeacherRecapResponse {
@@ -59,6 +59,39 @@ interface TeacherRecapResponse {
     jamKe: string;
     filled: boolean;
   }>;
+  learningPacing?: Array<{
+    kelas: string;
+    mapel: string;
+    gender: Gender;
+    jadwalMingguan: string;
+    totalPertemuan: number;
+    targetPertemuan: number;
+    lajuPct: number;
+    statusLaju: 'Tuntas / On-Track' | 'Berjalan Stabil' | 'Perlu Akselerasi' | 'Belum Mulai';
+    rataKehadiranPct: number;
+    jumlahTopikUnik: number;
+    materiTerakhir: string;
+    tanggalTerakhir: string;
+    riwayatMateri: Array<{
+      tanggal: string;
+      materi: string;
+      hadir: number;
+      totalSiswa: number;
+      tidakHadir: number;
+    }>;
+  }>;
+  studentAttentionAcademic?: Array<{
+    nama: string;
+    kelas: string;
+    mapel: string;
+    H: number;
+    T: number;
+    S: number;
+    I: number;
+    A: number;
+    total: number;
+    kehadiranPct: number;
+  }>;
   myRooms: Array<{
     kamar: string;
     musyrif: string;
@@ -70,33 +103,90 @@ interface TeacherRecapResponse {
   waliPembinaanCount: number;
   waliProgress: {
     kelasBinaan: string;
+    availableClasses?: string[];
     totalSantri: number;
     santriSudahDibina: number;
+    klasikalCount?: number;
+    khususCount?: number;
     kasusProsesEskalasi: number;
+    rataAkademikPct?: number;
+    rataAsramaPct?: number;
+    rataAlquranPct?: number;
     rataSholatWajibPct: number;
     rataSholatSunnahPct: number;
     santriProgress: Array<{
       nama: string;
       kelas: string;
       kamar: string;
+      gender?: Gender;
+      waliKelas?: string;
+      musyrif?: string;
+      guruWali?: string;
       prioritas: string;
       totalPembinaan: number;
+      klasikalCount?: number;
+      khususCount?: number;
       netPoin: number;
       statusTerakhir: string;
+      catatanTerakhir?: string;
       lastTanggal: string;
       absenSakit: number;
       absenIzin: number;
       absenAlfa: number;
+      akademikPct?: number;
+      asramaPct?: number;
+      alquranPct?: number;
       wajibPct: number;
+      sunnahPct?: number;
+    }>;
+    allClassesSantriProgress?: Array<{
+      nama: string;
+      kelas: string;
+      kamar: string;
+      gender?: Gender;
+      waliKelas?: string;
+      musyrif?: string;
+      guruWali?: string;
+      prioritas: string;
+      totalPembinaan: number;
+      klasikalCount?: number;
+      khususCount?: number;
+      netPoin: number;
+      statusTerakhir: string;
+      catatanTerakhir?: string;
+      lastTanggal: string;
+      absenSakit: number;
+      absenIzin: number;
+      absenAlfa: number;
+      akademikPct?: number;
+      asramaPct?: number;
+      alquranPct?: number;
+      wajibPct: number;
+      sunnahPct?: number;
     }>;
   };
   musyrifProgress: {
     kamarList: string[];
+    roomSummaries?: Array<{
+      kamar: string;
+      filledToday: boolean;
+      totalSantri: number;
+      santriDibina: number;
+      rataAsramaPct: number;
+      rataAlquranPct: number;
+      rataAkademikPct: number;
+      rataWajibPct: number;
+    }>;
     totalKamar: number;
     sudahPresensiHariIni: number;
     totalSantri: number;
     santriSudahDibina: number;
     totalPembinaanAsrama: number;
+    klasikalCount?: number;
+    khususCount?: number;
+    rataAsramaPct?: number;
+    rataAlquranPct?: number;
+    rataAkademikPct?: number;
     rataSholatWajibPct: number;
     rataSholatSunnahPct: number;
     absenHariIni: Array<{
@@ -109,11 +199,78 @@ interface TeacherRecapResponse {
       nama: string;
       kelas: string;
       kamar: string;
+      gender?: Gender;
+      waliKelas?: string;
+      guruWali?: string;
       totalPembinaan: number;
+      klasikalCount?: number;
+      khususCount?: number;
+      netPoin?: number;
+      statusTerakhir?: string;
+      catatanTerakhir?: string;
       wajibPct: number;
       sunnahPct: number;
       statusAsramaHariIni: string;
       keteranganHariIni: string;
+      asramaPct?: number;
+      asramaH?: number;
+      asramaSIA?: number;
+      alquranPct?: number;
+      alquranH?: number;
+      alquranSIA?: number;
+      lastSetoran?: string;
+      akademikPct?: number;
+      akademikH?: number;
+      akademikSIA?: number;
+      absenSakit?: number;
+      absenIzin?: number;
+      absenAlfa?: number;
+    }>;
+  };
+  guruWaliProgress?: {
+    totalSantri: number;
+    santriSudahDibina: number;
+    totalCatatan: number;
+    klasikalCount: number;
+    khususCount: number;
+    kasusProsesEskalasi: number;
+    rataAsramaPct: number;
+    rataAkademikPct: number;
+    rataAlquranPct: number;
+    rataSholatWajibPct: number;
+    rataSholatSunnahPct: number;
+    santriProgress: Array<{
+      nama: string;
+      kelas: string;
+      kamar: string;
+      gender: Gender;
+      waliKelas: string;
+      musyrif: string;
+      guruWali: string;
+      prioritas: string;
+      totalPembinaan: number;
+      klasikalCount: number;
+      khususCount: number;
+      netPoin: number;
+      statusTerakhir: string;
+      catatanTerakhir: string;
+      lastTanggal: string;
+      asramaPct: number;
+      akademikPct: number;
+      alquranPct: number;
+      lastSetoran: string;
+      absenSakit: number;
+      absenIzin: number;
+      absenAlfa: number;
+      wajibPct: number;
+      sunnahPct: number;
+    }>;
+    candidateStudents: Array<{
+      nama: string;
+      kelas: string;
+      kamar: string;
+      gender: Gender;
+      guruWali: string;
     }>;
   };
 }
@@ -226,6 +383,14 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
   const [editKamarBinaan, setEditKamarBinaan] = useState((unlockedTeacher?.kamarBinaan || []).join('; '));
   const [savingProfile, setSavingProfile] = useState(false);
 
+  // Role-specific interactive filter states
+  const [selectedAsramaRoom, setSelectedAsramaRoom] = useState<string>('SEMUA');
+  const [selectedWaliKelasFilter, setSelectedWaliKelasFilter] = useState<string>('BINAAN_SAYA');
+  const [showManageGuruWaliStudents, setShowManageGuruWaliStudents] = useState<boolean>(false);
+  const [guruWaliCandidateSearch, setGuruWaliCandidateSearch] = useState<string>('');
+  const [guruWaliCandidateClass, setGuruWaliCandidateClass] = useState<string>('SEMUA');
+  const [savingGuruWaliAssign, setSavingGuruWaliAssign] = useState<boolean>(false);
+
   useEffect(() => {
     if (!selectedName && teachers.length > 0) {
       setSelectedName(teachers[0].nama);
@@ -244,6 +409,8 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
       setEditWaliKelas(unlockedTeacher.waliKelasOf || '');
       setEditKamarBinaan((unlockedTeacher.kamarBinaan || []).join('; '));
       setPersonalExcel(null);
+      setSelectedAsramaRoom('SEMUA');
+      setSelectedWaliKelasFilter('BINAAN_SAYA');
 
       const tabKey = `pintar_akunguru_tab_${unlockedTeacher.id || 'default'}`;
       let savedTab: string | null = null;
@@ -254,10 +421,16 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
       }
       if (savedTab && (AKUN_TABS as readonly string[]).includes(savedTab)) {
         setProgressTab(savedTab as AkunProgressTab);
-      } else if (unlockedTeacher.peran === 'Musyrif' || unlockedTeacher.peran === 'Musyrifah') {
+      } else if (
+        unlockedTeacher.peran === 'Musyrif' ||
+        unlockedTeacher.peran === 'Musyrifah' ||
+        unlockedTeacher.peran === 'Wali Asrama'
+      ) {
         setProgressTab('musyrif');
       } else if (unlockedTeacher.peran === 'Wali Kelas') {
         setProgressTab('walikelas');
+      } else if (unlockedTeacher.peran === 'Guru Wali') {
+        setProgressTab('guruwali');
       } else if (unlockedTeacher.peran === 'Pengampu Al-Quran') {
         setProgressTab('quran');
       } else {
@@ -1186,7 +1359,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
       </div>
 
       {/* Role Progress Tabs */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5 rounded-xl bg-slate-100 p-1.5 border border-slate-200/80 w-full">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-1.5 rounded-xl bg-slate-100 p-1.5 border border-slate-200/80 w-full">
         <button
           type="button"
           onClick={() => setProgressTab('mengajar')}
@@ -1197,7 +1370,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
           }`}
         >
           <BookOpen className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'mengajar' ? 'text-white' : 'text-teal-600'}`} />
-          <span className="truncate">Guru Mengajar</span>
+          <span className="truncate">Guru Akademik</span>
         </button>
         <button
           type="button"
@@ -1224,7 +1397,21 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
         >
           <Home className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'musyrif' ? 'text-white' : 'text-emerald-600'}`} />
           <span className="truncate font-mono-num">
-            Musyrif ({recap?.musyrifProgress.totalKamar ?? 0})
+            Wali Asrama ({recap?.musyrifProgress.totalKamar ?? 0})
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setProgressTab('guruwali')}
+          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
+            progressTab === 'guruwali'
+              ? 'bg-indigo-600 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+          }`}
+        >
+          <Users className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'guruwali' ? 'text-white' : 'text-indigo-600'}`} />
+          <span className="truncate font-mono-num">
+            Guru Wali ({recap?.guruWaliProgress?.totalSantri ?? 0})
           </span>
         </button>
         <button
@@ -1659,6 +1846,179 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
             )}
           </div>
 
+          {/* REKAP PEMBELAJARAN & RISET LAJU MATERI (KHUSUS PERAN GURU AKADEMIK) */}
+          <div className="rounded-xl border border-teal-200 bg-gradient-to-br from-teal-50/40 via-white to-white overflow-hidden">
+            <div className="flex flex-col gap-2 border-b border-teal-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  Rekap Pembelajaran &amp; Analisis Laju Materi per Kelas / Mata Pelajaran
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Setiap input presensi KBM &amp; topik materi otomatis terhubung menjadi peta ketercapaian silabus (target 16 pekan efektif/semester), rata-rata kehadiran kelas, dan log bab yang sudah diajarkan.
+                </p>
+              </div>
+              <span className="inline-flex items-center rounded-lg bg-teal-700 px-3 py-1 text-xs font-semibold text-white shrink-0 font-mono-num">
+                {(recap.learningPacing || []).length} Kelas / Mapel Diampu
+              </span>
+            </div>
+
+            {(!recap.learningPacing || recap.learningPacing.length === 0) ? (
+              <div className="p-8 text-center text-xs text-slate-500">
+                Belum ada jadwal atau sesi pembelajaran akademik tercatat. Saat Anda menginput presensi harian Akademik beserta topik materi, laju materi per kelas akan muncul otomatis di sini.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                    <tr>
+                      <th className="px-4 py-3 font-semibold">Kelas &amp; Wilayah</th>
+                      <th className="px-3 py-3 font-semibold">Mata Pelajaran</th>
+                      <th className="px-3 py-3 font-semibold">Jadwal Mingguan</th>
+                      <th className="px-3 py-3 font-semibold">Laju Pertemuan &amp; Silabus</th>
+                      <th className="px-3 py-3 text-right font-semibold">Rata-rata Hadir</th>
+                      <th className="px-4 py-3 font-semibold">Materi / Topik Terakhir &amp; Riwayat</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {recap.learningPacing.map((lp) => (
+                      <tr key={`${lp.kelas}|${lp.mapel}`} className="hover:bg-slate-50 align-top">
+                        <td className="px-4 py-3">
+                          <div className="font-bold text-slate-900">{lp.kelas}</div>
+                          <div className="text-[11px] text-slate-500">Wilayah {lp.gender}</div>
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="font-semibold text-teal-800">{lp.mapel}</div>
+                          <div className="text-[11px] text-slate-500 font-mono-num">
+                            {lp.jumlahTopikUnik} topik materi tercatat
+                          </div>
+                        </td>
+                        <td className="px-3 py-3 text-slate-600 font-mono-num text-[11px]">
+                          {lp.jadwalMingguan}
+                        </td>
+                        <td className="px-3 py-3 min-w-[180px]">
+                          <div className="flex items-center justify-between text-[11px] font-semibold mb-1">
+                            <span className="font-mono-num text-slate-900">
+                              {lp.totalPertemuan} / {lp.targetPertemuan} Pekan ({lp.lajuPct}%)
+                            </span>
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] ${
+                                lp.statusLaju === 'Tuntas / On-Track'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : lp.statusLaju === 'Berjalan Stabil'
+                                  ? 'bg-sky-100 text-sky-800'
+                                  : lp.statusLaju === 'Perlu Akselerasi'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {lp.statusLaju}
+                            </span>
+                          </div>
+                          <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${
+                                lp.lajuPct >= 75
+                                  ? 'bg-emerald-600'
+                                  : lp.lajuPct >= 35
+                                  ? 'bg-sky-600'
+                                  : 'bg-amber-500'
+                              }`}
+                              style={{ width: `${Math.max(6, lp.lajuPct)}%` }}
+                            />
+                          </div>
+                        </td>
+                        <td className="px-3 py-3 text-right font-mono-num">
+                          <span
+                            className={`font-bold ${
+                              lp.rataKehadiranPct >= 90
+                                ? 'text-emerald-700'
+                                : lp.rataKehadiranPct >= 75
+                                ? 'text-amber-700'
+                                : 'text-rose-700'
+                            }`}
+                          >
+                            {lp.rataKehadiranPct}%
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 max-w-md">
+                          <div className="font-semibold text-slate-900">{lp.materiTerakhir}</div>
+                          {lp.tanggalTerakhir !== '-' && (
+                            <div className="text-[11px] text-slate-500 font-mono-num">
+                              Pertemuan terakhir: {formatTanggalIndo(lp.tanggalTerakhir)}
+                            </div>
+                          )}
+                          {lp.riwayatMateri.length > 1 && (
+                            <div className="mt-1.5 flex flex-wrap gap-1">
+                              {lp.riwayatMateri.slice(0, 4).map((rm, idx) => (
+                                <span
+                                  key={idx}
+                                  className="inline-flex items-center rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-600"
+                                >
+                                  {rm.tanggal.slice(5)}: {rm.materi}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* SISWA PERLU PERHATIAN AKADEMIK PADA MAPEL GURU INI */}
+          {recap.studentAttentionAcademic && recap.studentAttentionAcademic.length > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-white overflow-hidden">
+              <div className="border-b border-amber-100 bg-amber-50/50 px-5 py-3.5 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Pemantauan Siswa Perlu Perhatian pada Mata Pelajaran Saya
+                  </h3>
+                  <p className="text-xs text-slate-600">
+                    Daftar siswa yang tercatat Alfa (A) atau berulang kali Sakit/Izin/Terlambat pada sesi KBM yang Anda ampu.
+                  </p>
+                </div>
+                <span className="font-mono-num text-xs font-semibold text-amber-800">
+                  {recap.studentAttentionAcademic.length} Siswa
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                    <tr>
+                      <th className="px-4 py-2.5 font-semibold">Nama Siswa</th>
+                      <th className="px-3 py-2.5 font-semibold">Kelas</th>
+                      <th className="px-3 py-2.5 font-semibold">Mata Pelajaran</th>
+                      <th className="px-3 py-2.5 text-right font-semibold">Hadir / Telat</th>
+                      <th className="px-3 py-2.5 text-right font-semibold">S / I / A</th>
+                      <th className="px-4 py-2.5 text-right font-semibold">% Kehadiran Mapel</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {recap.studentAttentionAcademic.map((sa) => (
+                      <tr key={`${sa.nama}|${sa.kelas}`} className="hover:bg-slate-50">
+                        <td className="px-4 py-2.5 font-semibold text-slate-900">{sa.nama}</td>
+                        <td className="px-3 py-2.5 text-slate-700">{sa.kelas}</td>
+                        <td className="px-3 py-2.5 text-teal-800 font-medium">{sa.mapel}</td>
+                        <td className="px-3 py-2.5 text-right font-mono-num">
+                          {sa.H}H / {sa.T}T
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-mono-num font-semibold text-rose-700">
+                          {sa.S}/{sa.I}/{sa.A}
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono-num font-bold text-slate-900">
+                          {sa.kehadiranPct}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* Kelola Jadwal Guru Akademik & Al-Qur'an (Sistem, Edit, atau Template Excel) */}
           {renderInlineScheduleWorkbench('Akademik')}
 
@@ -1725,131 +2085,472 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
           </div>
         </div>
       ) : progressTab === 'walikelas' ? (
-        /* WALI KELAS PROGRESS TAB */
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Santri Kelas Binaan</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
-                {recap.waliProgress.totalSantri}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                {recap.waliProgress.kelasBinaan || 'Kelas wali belum ditetapkan'}
-              </div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Progres Pembinaan Kelas</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-teal-700">
-                {recap.waliProgress.santriSudahDibina}/{recap.waliProgress.totalSantri}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                Santri sudah mendapat catatan ({recap.waliPembinaanCount} total entri)
-              </div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Kasus Proses / Eskalasi</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-amber-700">
-                {recap.waliProgress.kasusProsesEskalasi}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">Menunggu tindak lanjut selesai</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Rata-rata Ibadah Kelas</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
-                {recap.waliProgress.rataSholatWajibPct}%
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                Wajib {recap.waliProgress.rataSholatWajibPct}% · Sunnah {recap.waliProgress.rataSholatSunnahPct}%
-              </div>
-            </div>
-          </div>
+        /* WALI KELAS PROGRESS TAB (TAMPIL PER KELAS & KEHADIRAN 3 KOMPONEN) */
+        (() => {
+          const allClassRows = recap.waliProgress.allClassesSantriProgress || recap.waliProgress.santriProgress;
+          const activeWaliRows =
+            selectedWaliKelasFilter === 'BINAAN_SAYA'
+              ? recap.waliProgress.santriProgress
+              : selectedWaliKelasFilter === 'SEMUA'
+              ? allClassRows
+              : allClassRows.filter((s) => s.kelas.toUpperCase() === selectedWaliKelasFilter.toUpperCase());
 
-          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-            <div className="flex flex-col gap-2 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-900">
-                  Progres Pembinaan &amp; Kehadiran Santri ({recap.waliProgress.kelasBinaan || 'Semua Binaan'})
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Pantau kemajuan ibadah, poin pembinaan, dan status ketidakhadiran setiap santri perwalian.
-                </p>
+          const activeClassLabel =
+            selectedWaliKelasFilter === 'BINAAN_SAYA'
+              ? recap.waliProgress.kelasBinaan || 'Kelas Binaan Saya'
+              : selectedWaliKelasFilter === 'SEMUA'
+              ? 'Semua Kelas'
+              : `Kelas ${selectedWaliKelasFilter}`;
+
+          const avgPct = (vals: Array<number | undefined>) => {
+            const valid = vals.filter((v): v is number => typeof v === 'number');
+            return valid.length === 0 ? 100 : Math.round(valid.reduce((a, b) => a + b, 0) / valid.length);
+          };
+
+          return (
+            <div className="space-y-6">
+              {/* Filter Pilih Per Kelas */}
+              <div className="rounded-xl border border-sky-200 bg-sky-50/40 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-xs font-bold text-slate-900">
+                    Monitoring Wali Kelas Per Kelas · Kehadiran 3 Komponen &amp; Pembinaan (Klasikal Pekanan &amp; Khusus)
+                  </div>
+                  <div className="text-[11px] text-slate-600">
+                    Menampilkan keterhubungan data presensi Akademik, Asrama, dan Al-Qur&apos;an beserta pembinaan Momen Klasikal Pekanan dan Pembinaan Khusus Satu per Satu untuk setiap siswa di kelas.
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <label className="text-xs font-semibold text-slate-700">Pilih Kelas:</label>
+                  <select
+                    value={selectedWaliKelasFilter}
+                    onChange={(e) => setSelectedWaliKelasFilter(e.target.value)}
+                    className="h-9 rounded-lg border border-sky-300 bg-white px-3 text-xs font-semibold text-slate-900"
+                  >
+                    <option value="BINAAN_SAYA">
+                      Kelas Binaan Saya ({recap.waliProgress.kelasBinaan || 'Default'})
+                    </option>
+                    {(recap.waliProgress.availableClasses || []).map((kls) => (
+                      <option key={kls} value={kls}>
+                        Kelas {kls}
+                      </option>
+                    ))}
+                    <option value="SEMUA">Semua Kelas ({allClassRows.length} siswa)</option>
+                  </select>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={onOpenWaliKelas}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800"
-              >
-                Buka Portofolio &amp; DB Pembinaan
-              </button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
-                  <tr>
-                    <th className="px-4 py-3 font-semibold">Nama Santri</th>
-                    <th className="px-3 py-3 font-semibold">Kamar</th>
-                    <th className="px-3 py-3 font-semibold">Prioritas</th>
-                    <th className="px-3 py-3 text-right font-semibold">Pembinaan</th>
-                    <th className="px-3 py-3 text-right font-semibold">Sholat Wajib</th>
-                    <th className="px-3 py-3 text-right font-semibold">Net Poin</th>
-                    <th className="px-3 py-3 font-semibold">Status Terakhir</th>
-                    <th className="px-4 py-3 text-right font-semibold">Absen (S/I/A)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {recap.waliProgress.santriProgress.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
-                        Belum ada santri yang terhubung ke kelas binaan Anda ({recap.waliProgress.kelasBinaan || 'belum diatur'}).
-                      </td>
-                    </tr>
-                  ) : (
-                    recap.waliProgress.santriProgress.map((st) => (
-                      <tr key={st.nama} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-semibold text-slate-900">{st.nama}</td>
-                        <td className="px-3 py-3 text-slate-600">{st.kamar}</td>
-                        <td className="px-3 py-3">
-                          <span
-                            className={`font-semibold ${
-                              st.prioritas === 'Intensif'
-                                ? 'text-rose-700'
-                                : st.prioritas === 'Rutin'
-                                ? 'text-amber-700'
-                                : 'text-slate-600'
-                            }`}
-                          >
-                            {st.prioritas}
-                          </span>
-                        </td>
-                        <td className="px-3 py-3 text-right font-mono-num">{st.totalPembinaan}x</td>
-                        <td className="px-3 py-3 text-right font-mono-num font-semibold text-teal-700">
-                          {st.wajibPct}%
-                        </td>
-                        <td className="px-3 py-3 text-right font-mono-num font-semibold">{st.netPoin}</td>
-                        <td className="px-3 py-3">
-                          <span
-                            className={`font-semibold ${
-                              st.statusTerakhir === 'Eskalasi'
-                                ? 'text-rose-700'
-                                : st.statusTerakhir === 'Proses'
-                                ? 'text-amber-700'
-                                : 'text-emerald-700'
-                            }`}
-                          >
-                            {st.statusTerakhir}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-right font-mono-num text-slate-700">
-                          {st.absenSakit}/{st.absenIzin}/{st.absenAlfa}
-                        </td>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="text-xs font-medium text-slate-500">Siswa di {activeClassLabel}</div>
+                  <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
+                    {activeWaliRows.length}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Terbina: {activeWaliRows.filter((s) => s.totalPembinaan > 0).length} siswa
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="text-xs font-medium text-slate-500">Kehadiran 3 Komponen Kelas</div>
+                  <div className="mt-2 font-mono-num text-xl font-bold text-teal-700">
+                    Akd {avgPct(activeWaliRows.map((s) => s.akademikPct))}% · Asr {avgPct(activeWaliRows.map((s) => s.asramaPct))}% · Qur {avgPct(activeWaliRows.map((s) => s.alquranPct))}%
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Rata-rata kehadiran Akademik, Asrama &amp; Al-Qur&apos;an
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="text-xs font-medium text-slate-500">Momen Klasikal &amp; Khusus</div>
+                  <div className="mt-2 font-mono-num text-2xl font-bold text-violet-700">
+                    {activeWaliRows.reduce((a, b) => a + (b.klasikalCount || 0), 0)} Klasikal ·{' '}
+                    {activeWaliRows.reduce((a, b) => a + (b.khususCount || 0), 0)} Khusus
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Pekanan klasikal &amp; pendampingan satu per satu
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="text-xs font-medium text-slate-500">Rata-rata Ibadah Kelas</div>
+                  <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
+                    {avgPct(activeWaliRows.map((s) => s.wajibPct))}%
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Sholat Wajib 5 Waktu &amp; Sunnah
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <div className="flex flex-col gap-2 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      Rekap Terpadu Siswa Per Kelas ({activeClassLabel} · Wilayah {recap.teacher.genderScope})
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Menghubungkan data kehadiran Akademik, Asrama, Al-Qur&apos;an dengan Pembinaan Klasikal Pekanan &amp; Khusus Individu.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onOpenWaliKelas}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                  >
+                    Input Pembinaan Klasikal / Khusus
+                  </button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold">Nama Santri</th>
+                        <th className="px-3 py-3 font-semibold">Kelas &amp; Kamar</th>
+                        <th className="px-3 py-3 font-semibold">Wali Asrama &amp; Guru Wali</th>
+                        <th className="px-3 py-3 text-right font-semibold">Akademik</th>
+                        <th className="px-3 py-3 text-right font-semibold">Asrama</th>
+                        <th className="px-3 py-3 text-right font-semibold">Al-Qur&apos;an</th>
+                        <th className="px-3 py-3 text-right font-semibold">S/I/A</th>
+                        <th className="px-3 py-3 text-right font-semibold">Klasikal / Khusus</th>
+                        <th className="px-3 py-3 text-right font-semibold">Wajib %</th>
+                        <th className="px-3 py-3 text-right font-semibold">Net Poin</th>
+                        <th className="px-4 py-3 font-semibold">Status</th>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {activeWaliRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={11} className="px-4 py-8 text-center text-slate-500">
+                            Belum ada santri pada filter kelas ini ({activeClassLabel}). Pilih kelas di bagian kanan atas atau atur Kelas Binaan pada tab Upload &amp; Input.
+                          </td>
+                        </tr>
+                      ) : (
+                        activeWaliRows.map((st) => (
+                          <tr key={st.nama} className="hover:bg-slate-50">
+                            <td className="px-4 py-3 font-semibold text-slate-900">{st.nama}</td>
+                            <td className="px-3 py-3">
+                              <div className="font-semibold text-slate-800">{st.kelas}</div>
+                              <div className="text-[11px] text-slate-500">Kamar {st.kamar}</div>
+                            </td>
+                            <td className="px-3 py-3 text-[11px]">
+                              <div className="text-slate-700">Asr: {st.musyrif || '-'}</div>
+                              <div className="text-violet-700 font-medium">GW: {st.guruWali || '-'}</div>
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-sky-700">
+                              {st.akademikPct ?? 100}%
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-emerald-700">
+                              {st.asramaPct ?? 100}%
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-amber-700">
+                              {st.alquranPct ?? 100}%
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num text-slate-700">
+                              {st.absenSakit}/{st.absenIzin}/{st.absenAlfa}
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num">
+                              <span className="font-semibold text-violet-700">{st.klasikalCount ?? 0}K</span> ·{' '}
+                              <span className="font-semibold text-slate-800">{st.khususCount ?? st.totalPembinaan}I</span>
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-teal-700">
+                              {st.wajibPct}%
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num font-semibold">{st.netPoin}</td>
+                            <td className="px-4 py-3">
+                              <span
+                                className={`font-semibold ${
+                                  st.statusTerakhir === 'Eskalasi'
+                                    ? 'text-rose-700'
+                                    : st.statusTerakhir === 'Proses'
+                                    ? 'text-amber-700'
+                                    : 'text-emerald-700'
+                                }`}
+                              >
+                                {st.statusTerakhir}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          );
+        })()
+      ) : progressTab === 'guruwali' ? (
+        /* GURU WALI PROGRESS TAB (SESUAI JUMLAH SISWA DI DALAMNYA) */
+        (() => {
+          const gw = recap.guruWaliProgress || {
+            totalSantri: 0,
+            santriSudahDibina: 0,
+            totalCatatan: 0,
+            klasikalCount: 0,
+            khususCount: 0,
+            kasusProsesEskalasi: 0,
+            rataAsramaPct: 100,
+            rataAkademikPct: 100,
+            rataAlquranPct: 100,
+            rataSholatWajibPct: 0,
+            rataSholatSunnahPct: 0,
+            santriProgress: [],
+            candidateStudents: [],
+          };
+
+          const candidateClasses = Array.from(
+            new Set(gw.candidateStudents.map((c) => c.kelas).filter((k) => k && k !== '-')),
+          ).sort();
+
+          const filteredCandidates = gw.candidateStudents.filter((c) => {
+            if (guruWaliCandidateClass !== 'SEMUA' && c.kelas !== guruWaliCandidateClass) return false;
+            if (!guruWaliCandidateSearch.trim()) return true;
+            const q = guruWaliCandidateSearch.trim().toLowerCase();
+            return (
+              c.nama.toLowerCase().includes(q) ||
+              c.kelas.toLowerCase().includes(q) ||
+              c.kamar.toLowerCase().includes(q)
+            );
+          });
+
+          const handleToggleStudentGuruWali = async (studentName: string, isCurrentlyMine: boolean) => {
+            setSavingGuruWaliAssign(true);
+            try {
+              const res = await fetch('/api/guru/assign-guru-wali', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  namaGuruWali: unlockedTeacher.nama,
+                  studentNames: [studentName],
+                  mode: isCurrentlyMine ? 'remove' : 'add',
+                }),
+              });
+              const data = await res.json();
+              if (res.ok && data.ok) {
+                fetchRecap(unlockedTeacher.nama);
+                emitDataMutated();
+                notify(data.message, 'success');
+              }
+            } finally {
+              setSavingGuruWaliAssign(false);
+            }
+          };
+
+          return (
+            <div className="space-y-6">
+              {/* Banner & Kelola Siswa Binaan Guru Wali */}
+              <div className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50/60 via-white to-white p-5 space-y-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      Dasbor Pembinaan Guru Wali ({unlockedTeacher.nama}) · {gw.totalSantri} Siswa Binaan
+                    </h3>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      Menampilkan seluruh data kehadiran (Asrama, Akademik, Al-Qur&apos;an) serta rekap <b>Momen Klasikal Pekanan</b> dan <b>Pembinaan Khusus Satu per Satu</b> sesuai jumlah siswa binaan di dalamnya.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShowManageGuruWaliStudents((v) => !v)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-300 bg-white px-3.5 py-2 text-xs font-semibold text-indigo-800 hover:bg-indigo-50"
+                    >
+                      <UserPlus className="h-3.5 w-3.5" />
+                      {showManageGuruWaliStudents ? 'Tutup Kelola Siswa Binaan' : 'Kelola / Pilih Siswa Binaan'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onOpenWaliKelas}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
+                    >
+                      <ShieldCheck className="h-3.5 w-3.5" />
+                      Input Klasikal Pekanan / Khusus
+                    </button>
+                  </div>
+                </div>
+
+                {showManageGuruWaliStudents && (
+                  <div className="rounded-xl border border-indigo-200 bg-white p-4 space-y-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="text-xs font-bold text-slate-900">
+                        Pilih Siswa yang Masuk dalam Binaan Guru Wali ({unlockedTeacher.nama})
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <input
+                          type="text"
+                          value={guruWaliCandidateSearch}
+                          onChange={(e) => setGuruWaliCandidateSearch(e.target.value)}
+                          placeholder="Cari nama siswa / kamar..."
+                          className="h-8 rounded-lg border border-slate-300 px-2.5 text-xs"
+                        />
+                        <select
+                          value={guruWaliCandidateClass}
+                          onChange={(e) => setGuruWaliCandidateClass(e.target.value)}
+                          className="h-8 rounded-lg border border-slate-300 bg-slate-50 px-2 text-xs font-semibold"
+                        >
+                          <option value="SEMUA">Semua Kelas</option>
+                          {candidateClasses.map((k) => (
+                            <option key={k} value={k}>
+                              Kelas {k}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="max-h-60 overflow-y-auto grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 pt-1">
+                      {filteredCandidates.slice(0, 90).map((cand) => {
+                        const isMine =
+                          cand.guruWali.trim().toUpperCase() === unlockedTeacher.nama.trim().toUpperCase();
+                        return (
+                          <div
+                            key={cand.nama}
+                            className={`flex items-center justify-between rounded-lg border px-3 py-2 text-xs ${
+                              isMine
+                                ? 'border-indigo-300 bg-indigo-50/70'
+                                : 'border-slate-200 bg-slate-50/60'
+                            }`}
+                          >
+                            <div className="min-w-0 pr-2">
+                              <div className="font-semibold text-slate-900 truncate">{cand.nama}</div>
+                              <div className="text-[10px] text-slate-500 truncate">
+                                {cand.kelas} · Kamar {cand.kamar}
+                                {cand.guruWali && !isMine ? ` · GW: ${cand.guruWali}` : ''}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={savingGuruWaliAssign}
+                              onClick={() => handleToggleStudentGuruWali(cand.nama, isMine)}
+                              className={`rounded px-2.5 py-1 text-[11px] font-semibold shrink-0 ${
+                                isMine
+                                  ? 'bg-rose-100 text-rose-800 hover:bg-rose-200'
+                                  : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                              }`}
+                            >
+                              {isMine ? 'Lepas' : '+ Binaan'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* KPI Cards Guru Wali */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="text-xs font-medium text-slate-500">Jumlah Siswa Binaan</div>
+                  <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
+                    {gw.totalSantri}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Sudah terbina: {gw.santriSudahDibina}/{gw.totalSantri} siswa
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="text-xs font-medium text-slate-500">Momen Klasikal &amp; Khusus</div>
+                  <div className="mt-2 font-mono-num text-2xl font-bold text-indigo-700">
+                    {gw.klasikalCount} Klasikal · {gw.khususCount} Khusus
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Total {gw.totalCatatan} catatan pembinaan Guru Wali
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="text-xs font-medium text-slate-500">Kehadiran 3 Komponen</div>
+                  <div className="mt-2 font-mono-num text-xl font-bold text-teal-700">
+                    Asr {gw.rataAsramaPct}% · Akd {gw.rataAkademikPct}% · Qur {gw.rataAlquranPct}%
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Rata-rata kehadiran siswa binaan
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="text-xs font-medium text-slate-500">Capaian Ibadah Siswa Binaan</div>
+                  <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
+                    {gw.rataSholatWajibPct}%
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Wajib {gw.rataSholatWajibPct}% · Sunnah {gw.rataSholatSunnahPct}%
+                  </div>
+                </div>
+              </div>
+
+              {/* Tabel Siswa Binaan Guru Wali */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <div className="border-b border-slate-200 px-5 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      Rekap Kehadiran 3 Komponen &amp; Pembinaan Siswa Binaan Guru Wali ({gw.totalSantri} Siswa)
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Setiap siswa binaan terpantau kehadirannya di Asrama, Kelas Akademik, dan Halaqah Al-Qur&apos;an beserta catatan Momen Klasikal Pekanan &amp; Khusus Individu.
+                    </p>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold">Nama Siswa Binaan</th>
+                        <th className="px-3 py-3 font-semibold">Kelas &amp; Kamar</th>
+                        <th className="px-3 py-3 text-right font-semibold">Asrama %</th>
+                        <th className="px-3 py-3 text-right font-semibold">Akademik %</th>
+                        <th className="px-3 py-3 text-right font-semibold">Al-Qur&apos;an %</th>
+                        <th className="px-3 py-3 text-right font-semibold">S/I/A</th>
+                        <th className="px-3 py-3 text-right font-semibold">Klasikal / Khusus</th>
+                        <th className="px-3 py-3 text-right font-semibold">Wajib %</th>
+                        <th className="px-3 py-3 text-right font-semibold">Net Poin</th>
+                        <th className="px-4 py-3 font-semibold">Catatan &amp; Status Terakhir</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {gw.santriProgress.length === 0 ? (
+                        <tr>
+                          <td colSpan={10} className="px-4 py-8 text-center text-slate-500">
+                            Belum ada siswa yang terdaftar dalam kelompok binaan Guru Wali ({unlockedTeacher.nama}). Klik tombol <b>Kelola / Pilih Siswa Binaan</b> di atas atau lakukan input pembinaan pada jalur <b>Guru Wali</b>.
+                          </td>
+                        </tr>
+                      ) : (
+                        gw.santriProgress.map((st) => (
+                          <tr key={st.nama} className="hover:bg-slate-50">
+                            <td className="px-4 py-3 font-semibold text-slate-900">{st.nama}</td>
+                            <td className="px-3 py-3">
+                              <div className="font-semibold text-slate-800">{st.kelas}</div>
+                              <div className="text-[11px] text-slate-500">Kamar {st.kamar}</div>
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-emerald-700">
+                              {st.asramaPct}%
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-sky-700">
+                              {st.akademikPct}%
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-amber-700">
+                              {st.alquranPct}%
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num text-slate-700">
+                              {st.absenSakit}/{st.absenIzin}/{st.absenAlfa}
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num">
+                              <span className="font-semibold text-indigo-700">{st.klasikalCount}K</span> ·{' '}
+                              <span className="font-semibold text-slate-800">{st.khususCount}I</span>
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-teal-700">
+                              {st.wajibPct}%
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num font-semibold">{st.netPoin}</td>
+                            <td className="px-4 py-3 max-w-xs">
+                              <div className="font-semibold text-slate-800">{st.statusTerakhir}</div>
+                              <div className="text-[11px] text-slate-500 truncate">{st.catatanTerakhir}</div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          );
+        })()
       ) : progressTab === 'quran' ? (
         /* DASBOR PENGAMPU AL-QUR'AN (HALAQAH, SETORAN ZIYADAH, TILAWAH & MURAJAAH) */
         <div className="space-y-6">
@@ -2098,158 +2799,286 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
           </div>
         </div>
       ) : (
-        /* MUSYRIF / MUSYRIFAH PROGRESS TAB */
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Presensi Kamar Hari Ini</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-teal-700">
-                {recap.musyrifProgress.sudahPresensiHariIni}/{recap.musyrifProgress.totalKamar}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">Kamar binaan sudah diisi</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Santri Kamar Binaan</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
-                {recap.musyrifProgress.santriSudahDibina}/{recap.musyrifProgress.totalSantri}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">Sudah tercatat pembinaan</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Catatan Pembinaan Asrama</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
-                {recap.musyrifProgress.totalPembinaanAsrama}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">Akumulasi seluruh pekan</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Rata-rata Ibadah Asrama</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
-                {recap.musyrifProgress.rataSholatWajibPct}%
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                Wajib {recap.musyrifProgress.rataSholatWajibPct}% · Sunnah {recap.musyrifProgress.rataSholatSunnahPct}%
-              </div>
-            </div>
-          </div>
+        /* WALI ASRAMA (MUSYRIF / MUSYRIFAH) PROGRESS TAB: PILIH PER KAMAR ATAU SEMUA KAMAR + KEHADIRAN 3 KOMPONEN */
+        (() => {
+          const allAsramaRows = recap.musyrifProgress.santriProgress;
+          const filteredAsramaRows =
+            selectedAsramaRoom === 'SEMUA'
+              ? allAsramaRows
+              : allAsramaRows.filter((s) => s.kamar.toUpperCase() === selectedAsramaRoom.toUpperCase());
 
-          {/* Status Kamar Hari Ini & Santri Tidak Hadir */}
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
-              <h3 className="text-sm font-semibold text-slate-900">
-                Checklist Kamar Asrama ({formatTanggalIndo(today)})
-              </h3>
-              {recap.myRooms.length === 0 ? (
-                <p className="text-xs text-slate-500">
-                  Belum ada kamar binaan yang ditetapkan untuk akun Anda. Atur di menu <b>Jadwal &amp; Perubahan → Penugasan Kamar</b>.
-                </p>
-              ) : (
-                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                  {recap.myRooms.map((rm) => (
-                    <div
-                      key={rm.kamar}
-                      className={`flex items-center justify-between rounded-lg border p-3 ${
-                        rm.filled ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/50'
+          const avgPct = (vals: Array<number | undefined>) => {
+            const valid = vals.filter((v): v is number => typeof v === 'number');
+            return valid.length === 0 ? 100 : Math.round(valid.reduce((a, b) => a + b, 0) / valid.length);
+          };
+
+          const roomLabel =
+            selectedAsramaRoom === 'SEMUA'
+              ? `Semua Kamar Binaan (${recap.musyrifProgress.kamarList.length} Kamar)`
+              : `Kamar ${selectedAsramaRoom}`;
+
+          return (
+            <div className="space-y-6">
+              {/* Filter Pilih Per Kamar atau Semua Kamar */}
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-xs font-bold text-slate-900">
+                      Dasbor Wali Asrama · Data Kehadiran Seluruh Siswa di Setiap Komponen (Asrama · Al-Qur&apos;an · Akademik)
+                    </div>
+                    <div className="text-[11px] text-slate-600">
+                      Pilih <b>Semua Kamar Binaan</b> atau filter <b>Per Kamar</b> yang Anda pegang untuk memantau kehadiran 3 komponen dan pembinaan kamar (Klasikal Pekanan &amp; Khusus Individu).
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => onOpenQuickPresensi(unlockedTeacher.nama)}
+                      className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800"
+                    >
+                      Input Presensi Kamar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onOpenWaliKelas}
+                      className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                    >
+                      Input Klasikal / Khusus Kamar
+                    </button>
+                  </div>
+                </div>
+
+                {/* Pill Buttons: Semua Kamar vs Per Kamar */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAsramaRoom('SEMUA')}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                      selectedAsramaRoom === 'SEMUA'
+                        ? 'bg-emerald-700 text-white shadow-xs'
+                        : 'border border-emerald-200 bg-white text-slate-700 hover:bg-emerald-50'
+                    }`}
+                  >
+                    Semua Kamar ({allAsramaRows.length} Siswa)
+                  </button>
+                  {recap.musyrifProgress.kamarList.map((km) => {
+                    const countInRoom = allAsramaRows.filter(
+                      (s) => s.kamar.toUpperCase() === km.toUpperCase(),
+                    ).length;
+                    const active = selectedAsramaRoom.toUpperCase() === km.toUpperCase();
+                    return (
+                      <button
+                        key={km}
+                        type="button"
+                        onClick={() => setSelectedAsramaRoom(km)}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors font-mono-num ${
+                          active
+                            ? 'bg-emerald-700 text-white shadow-xs'
+                            : 'border border-slate-200 bg-white text-slate-700 hover:bg-emerald-50'
+                        }`}
+                      >
+                        Kamar {km} ({countInRoom})
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* KPI Cards for Selected Room / All Rooms */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="text-xs font-medium text-slate-500">Cakupan Kamar &amp; Siswa</div>
+                  <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
+                    {filteredAsramaRows.length}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {roomLabel} · Presensi Hari Ini: {recap.musyrifProgress.sudahPresensiHariIni}/{recap.musyrifProgress.totalKamar} kamar
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="text-xs font-medium text-slate-500">Kehadiran 3 Komponen Kamar</div>
+                  <div className="mt-2 font-mono-num text-xl font-bold text-emerald-700">
+                    Asr {avgPct(filteredAsramaRows.map((s) => s.asramaPct))}% · Qur {avgPct(filteredAsramaRows.map((s) => s.alquranPct))}% · Akd {avgPct(filteredAsramaRows.map((s) => s.akademikPct))}%
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Rata-rata kehadiran siswa di kamar terpilih
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="text-xs font-medium text-slate-500">Momen Klasikal &amp; Khusus Kamar</div>
+                  <div className="mt-2 font-mono-num text-2xl font-bold text-violet-700">
+                    {filteredAsramaRows.reduce((a, b) => a + (b.klasikalCount || 0), 0)} Klasikal ·{' '}
+                    {filteredAsramaRows.reduce((a, b) => a + (b.khususCount || 0), 0)} Khusus
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Terbina: {filteredAsramaRows.filter((s) => s.totalPembinaan > 0).length}/{filteredAsramaRows.length} siswa
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="text-xs font-medium text-slate-500">Rata-rata Ibadah Kamar</div>
+                  <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
+                    {avgPct(filteredAsramaRows.map((s) => s.wajibPct))}%
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Wajib {avgPct(filteredAsramaRows.map((s) => s.wajibPct))}% · Sunnah {avgPct(filteredAsramaRows.map((s) => s.sunnahPct))}%
+                  </div>
+                </div>
+              </div>
+
+              {/* Ringkasan Perbandingan Antar Kamar Binaan (jika memiliki > 1 kamar) */}
+              {recap.musyrifProgress.roomSummaries && recap.musyrifProgress.roomSummaries.length > 1 && (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {recap.musyrifProgress.roomSummaries.map((rs) => (
+                    <button
+                      key={rs.kamar}
+                      type="button"
+                      onClick={() =>
+                        setSelectedAsramaRoom(selectedAsramaRoom === rs.kamar ? 'SEMUA' : rs.kamar)
+                      }
+                      className={`rounded-xl border p-4 text-left transition-all ${
+                        selectedAsramaRoom === rs.kamar
+                          ? 'border-emerald-600 bg-emerald-50/60 shadow-xs'
+                          : 'border-slate-200 bg-white hover:border-emerald-300'
                       }`}
                     >
-                      <div>
-                        <div className="text-xs font-semibold text-slate-900">{rm.kamar}</div>
-                        <div className="text-[11px] text-slate-500">Asrama {rm.gender}</div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-900">Kamar {rs.kamar}</span>
+                        <span
+                          className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
+                            rs.filledToday
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {rs.filledToday ? 'Presensi Hari Ini: Sudah' : 'Hari Ini: Belum'}
+                        </span>
                       </div>
-                      {rm.filled ? (
-                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
-                          <CheckCircle2 className="h-4 w-4" />
-                          Sudah
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700">
-                          <Clock className="h-4 w-4" />
-                          Belum
-                        </span>
-                      )}
-                    </div>
+                      <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] font-mono-num">
+                        <div>
+                          <div className="text-slate-500">Asrama</div>
+                          <div className="font-bold text-emerald-700">{rs.rataAsramaPct}%</div>
+                        </div>
+                        <div>
+                          <div className="text-slate-500">Al-Qur&apos;an</div>
+                          <div className="font-bold text-amber-700">{rs.rataAlquranPct}%</div>
+                        </div>
+                        <div>
+                          <div className="text-slate-500">Akademik</div>
+                          <div className="font-bold text-sky-700">{rs.rataAkademikPct}%</div>
+                        </div>
+                      </div>
+                      <div className="mt-2 text-[11px] text-slate-600">
+                        {rs.totalSantri} siswa · {rs.santriDibina} terbina · Sholat Wajib {rs.rataWajibPct}%
+                      </div>
+                    </button>
                   ))}
                 </div>
               )}
-            </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
-              <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-amber-600" />
-                Santri Sakit / Izin / Alfa Kamar Binaan Hari Ini
-              </h3>
-              {recap.musyrifProgress.absenHariIni.length === 0 ? (
-                <p className="text-xs text-slate-500">Tidak ada santri kamar binaan yang tercatat S/I/A hari ini.</p>
-              ) : (
-                <div className="space-y-2">
-                  {recap.musyrifProgress.absenHariIni.map((ab) => (
-                    <div key={ab.namaSiswa} className="rounded-lg border border-amber-200 bg-amber-50/40 px-3 py-2 text-xs">
-                      <div className="flex items-center justify-between font-semibold text-slate-900">
-                        <span>{ab.namaSiswa}</span>
-                        <span className="text-rose-700">[{ab.status}] {ab.kamar}</span>
-                      </div>
-                      {ab.keterangan && <div className="text-slate-600 mt-0.5">{ab.keterangan}</div>}
-                    </div>
-                  ))}
+              {/* Tabel Lengkap Kehadiran Seluruh Siswa di Setiap Komponen per Kamar */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <div className="border-b border-slate-200 px-5 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      Data Kehadiran Seluruh Siswa di Setiap Komponen &amp; Pembinaan ({roomLabel})
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Menampilkan kehadiran Asrama, Halaqah Al-Qur&apos;an, dan KBM Akademik beserta Momen Klasikal Pekanan &amp; Pembinaan Khusus untuk setiap penghuni kamar.
+                    </p>
+                  </div>
                 </div>
-              )}
-            </div>
-          </div>
-
-          {/* Progres Santri Kamar */}
-          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-            <div className="border-b border-slate-200 px-5 py-4 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-900">
-                Progres Ibadah &amp; Pembinaan Santri Kamar Binaan
-              </h3>
-              <button
-                type="button"
-                onClick={onOpenWaliKelas}
-                className="rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800"
-              >
-                Buka Portofolio &amp; Input Asrama
-              </button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
-                  <tr>
-                    <th className="px-4 py-3 font-semibold">Nama Santri</th>
-                    <th className="px-3 py-3 font-semibold">Kamar</th>
-                    <th className="px-3 py-3 font-semibold">Kelas</th>
-                    <th className="px-3 py-3 font-semibold">Asrama Hari Ini</th>
-                    <th className="px-3 py-3 text-right font-semibold">Pembinaan</th>
-                    <th className="px-3 py-3 text-right font-semibold">Sholat Wajib</th>
-                    <th className="px-4 py-3 text-right font-semibold">Sunnah &amp; Tilawah</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {recap.musyrifProgress.santriProgress.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
-                        Belum ada santri kamar binaan yang tercatat untuk akun ini.
-                      </td>
-                    </tr>
-                  ) : (
-                    recap.musyrifProgress.santriProgress.map((st) => (
-                      <tr key={st.nama} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-semibold text-slate-900">{st.nama}</td>
-                        <td className="px-3 py-3 font-medium text-slate-700">{st.kamar}</td>
-                        <td className="px-3 py-3 text-slate-600">{st.kelas}</td>
-                        <td className="px-3 py-3 font-mono-num font-semibold">{st.statusAsramaHariIni}</td>
-                        <td className="px-3 py-3 text-right font-mono-num">{st.totalPembinaan}x</td>
-                        <td className="px-3 py-3 text-right font-mono-num font-semibold text-teal-700">
-                          {st.wajibPct}%
-                        </td>
-                        <td className="px-4 py-3 text-right font-mono-num text-sky-700">{st.sunnahPct}%</td>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold">Nama Santri</th>
+                        <th className="px-3 py-3 font-semibold">Kamar &amp; Kelas</th>
+                        <th className="px-3 py-3 font-semibold">Asrama Hari Ini</th>
+                        <th className="px-3 py-3 text-right font-semibold">Hadir Asrama</th>
+                        <th className="px-3 py-3 text-right font-semibold">Hadir Al-Qur&apos;an</th>
+                        <th className="px-3 py-3 text-right font-semibold">Hadir Akademik</th>
+                        <th className="px-3 py-3 text-right font-semibold">Total S/I/A</th>
+                        <th className="px-3 py-3 text-right font-semibold">Klasikal / Khusus</th>
+                        <th className="px-3 py-3 text-right font-semibold">Wajib %</th>
+                        <th className="px-4 py-3 text-right font-semibold">Sunnah %</th>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredAsramaRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={10} className="px-4 py-8 text-center text-slate-500">
+                            Belum ada santri kamar binaan yang tercatat pada filter ini ({roomLabel}).
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredAsramaRows.map((st) => (
+                          <tr key={st.nama} className="hover:bg-slate-50">
+                            <td className="px-4 py-3">
+                              <div className="font-semibold text-slate-900">{st.nama}</div>
+                              {st.lastSetoran && st.lastSetoran !== '-' && (
+                                <div className="text-[10px] text-amber-800 truncate max-w-[180px]">
+                                  Setoran: {st.lastSetoran}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-3 py-3">
+                              <div className="font-semibold text-emerald-800">{st.kamar}</div>
+                              <div className="text-[11px] text-slate-500">{st.kelas}</div>
+                            </td>
+                            <td className="px-3 py-3 font-mono-num font-semibold">
+                              <span
+                                className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] ${
+                                  st.statusAsramaHariIni === 'H'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : st.statusAsramaHariIni === 'S' ||
+                                      st.statusAsramaHariIni === 'I' ||
+                                      st.statusAsramaHariIni === 'A'
+                                    ? 'bg-rose-100 text-rose-800'
+                                    : 'bg-slate-100 text-slate-600'
+                                }`}
+                              >
+                                {st.statusAsramaHariIni}
+                              </span>
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num">
+                              <div className="font-bold text-emerald-700">{st.asramaPct ?? 100}%</div>
+                              <div className="text-[10px] text-slate-500">
+                                {st.asramaH ?? 0}H / {st.asramaSIA ?? 0}A
+                              </div>
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num">
+                              <div className="font-bold text-amber-700">{st.alquranPct ?? 100}%</div>
+                              <div className="text-[10px] text-slate-500">
+                                {st.alquranH ?? 0}H / {st.alquranSIA ?? 0}A
+                              </div>
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num">
+                              <div className="font-bold text-sky-700">{st.akademikPct ?? 100}%</div>
+                              <div className="text-[10px] text-slate-500">
+                                {st.akademikH ?? 0}H / {st.akademikSIA ?? 0}A
+                              </div>
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num text-slate-700">
+                              {st.absenSakit ?? 0}/{st.absenIzin ?? 0}/{st.absenAlfa ?? 0}
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num">
+                              <span className="font-semibold text-violet-700">{st.klasikalCount ?? 0}K</span> ·{' '}
+                              <span className="font-semibold text-slate-800">{st.khususCount ?? st.totalPembinaan}I</span>
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-teal-700">
+                              {st.wajibPct}%
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono-num text-sky-700">{st.sunnahPct}%</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          );
+        })()
       )}
     </div>
   );

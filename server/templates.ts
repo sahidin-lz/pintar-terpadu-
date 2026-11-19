@@ -13,6 +13,9 @@ interface AuthenticRosterRow {
   kamar: string;
   kelompokQuran: string;
   pengampuQuran: string;
+  waliKelas?: string;
+  musyrif?: string;
+  guruWali?: string;
   gender: Gender;
 }
 
@@ -236,6 +239,9 @@ function buildCombinedRosterForTemplate(ctx: TemplateContext): {
           kamar: s.kamar,
           kelompokQuran: s.kelompokQuran,
           pengampuQuran: s.pengampuQuran || '',
+          waliKelas: s.waliKelas || '',
+          musyrif: s.musyrif || '',
+          guruWali: s.guruWali || '',
           gender: 'Putra',
         }))
       : loadAuthenticPutraRoster();
@@ -249,6 +255,9 @@ function buildCombinedRosterForTemplate(ctx: TemplateContext): {
           kamar: s.kamar,
           kelompokQuran: s.kelompokQuran,
           pengampuQuran: s.pengampuQuran || '',
+          waliKelas: s.waliKelas || '',
+          musyrif: s.musyrif || '',
+          guruWali: s.guruWali || '',
           gender: 'Putri',
         }))
       : DEFAULT_PUTRI_TEMPLATE_ROSTER;
@@ -287,6 +296,9 @@ export function buildDatabaseWorkbookSpec(ctx: TemplateContext): {
     'Kamar',
     'Kelp. Al-Quran',
     'Pengampu Al-Quran',
+    'Wali Kelas',
+    'Wali Asrama / Musyrif',
+    'Guru Wali',
   ];
 
   const sortRoster = (arr: AuthenticRosterRow[]) =>
@@ -307,6 +319,9 @@ export function buildDatabaseWorkbookSpec(ctx: TemplateContext): {
       sanitizeXmlText(r.kamar),
       sanitizeXmlText(r.kelompokQuran),
       sanitizeXmlText(r.pengampuQuran),
+      sanitizeXmlText(r.waliKelas || ''),
+      sanitizeXmlText(r.musyrif || ''),
+      sanitizeXmlText(r.guruWali || ''),
     ]),
   ];
 
@@ -321,6 +336,9 @@ export function buildDatabaseWorkbookSpec(ctx: TemplateContext): {
       sanitizeXmlText(r.kamar),
       sanitizeXmlText(r.kelompokQuran),
       sanitizeXmlText(r.pengampuQuran),
+      sanitizeXmlText(r.waliKelas || ''),
+      sanitizeXmlText(r.musyrif || ''),
+      sanitizeXmlText(r.guruWali || ''),
     ]),
   ];
 
@@ -815,6 +833,9 @@ export function buildPersonalLoginWorkbookSpec(
     'Kamar',
     'Kelp. Al-Quran',
     'Pengampu Al-Quran',
+    'Wali Kelas',
+    'Wali Asrama / Musyrif',
+    'Guru Wali',
   ];
 
   const putraPersonal = filterForTeacher(putraRoster);
@@ -830,6 +851,9 @@ export function buildPersonalLoginWorkbookSpec(
       sanitizeXmlText(r.kamar),
       sanitizeXmlText(r.kelompokQuran),
       sanitizeXmlText(r.pengampuQuran || teacher.nama),
+      sanitizeXmlText(r.waliKelas || (teacher.peran === 'Wali Kelas' ? teacher.nama : '')),
+      sanitizeXmlText(r.musyrif || (teacher.peran === 'Musyrif' || teacher.peran === 'Wali Asrama' ? teacher.nama : '')),
+      sanitizeXmlText(r.guruWali || (teacher.peran === 'Guru Wali' ? teacher.nama : '')),
     ]),
   ];
 
@@ -843,6 +867,9 @@ export function buildPersonalLoginWorkbookSpec(
       sanitizeXmlText(r.kamar),
       sanitizeXmlText(r.kelompokQuran),
       sanitizeXmlText(r.pengampuQuran || teacher.nama),
+      sanitizeXmlText(r.waliKelas || (teacher.peran === 'Wali Kelas' ? teacher.nama : '')),
+      sanitizeXmlText(r.musyrif || (teacher.peran === 'Musyrifah' || teacher.peran === 'Wali Asrama' ? teacher.nama : '')),
+      sanitizeXmlText(r.guruWali || (teacher.peran === 'Guru Wali' ? teacher.nama : '')),
     ]),
   ];
 
@@ -896,16 +923,24 @@ export function buildPersonalLoginWorkbookSpec(
       'Poin (+/-)',
       'Status (Selesai/Proses/Eskalasi)',
       'Tindak Lanjut',
+      'Jalur Pembinaan (Wali Kelas / Guru Wali / Room Visit Asrama)',
+      'Momen Pembinaan (Klasikal Pekanan / Khusus Individu)',
     ],
     [
       todayStr,
       sanitizeXmlText(pembinaanSampleSantri?.nama || 'CONTOH NAMA SANTRI'),
       pembinaanSampleSantri?.gender || defaultWilayah,
       'Pemantauan Ibadah',
-      'Contoh: Setoran hafalan lancar dan sholat berjamaah tertib.',
+      'Contoh: Momen klasikal pekanan & setoran hafalan tertib.',
       '5',
       'Selesai',
       'Pertahankan murojaah harian',
+      teacher.peran === 'Musyrif' || teacher.peran === 'Musyrifah' || teacher.peran === 'Wali Asrama'
+        ? 'Room Visit Asrama'
+        : teacher.peran === 'Guru Wali'
+        ? 'Guru Wali'
+        : 'Wali Kelas',
+      'Klasikal Pekanan',
     ],
   ];
 

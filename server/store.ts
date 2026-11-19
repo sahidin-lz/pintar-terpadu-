@@ -21,8 +21,11 @@ import type {
   LabkomPloting,
   LabkomStatePayload,
   MonitoringData,
+  MonitoringRoom,
   MonthlyWaliKelasReport,
   PembinaanAnalisisSummary,
+  PembinaanJadwal,
+  PembinaanJalur,
   PembinaanKategori,
   PembinaanRecord,
   PortfolioSummary,
@@ -246,6 +249,40 @@ function inferGender(text: string): Gender {
 function roleToJabatan(peran: UserRole, peranTambahan?: UserRole[]): string {
   const all = [peran, ...(peranTambahan || [])].filter((v, i, a) => a.indexOf(v) === i);
   return all.join(' & ');
+}
+
+function resolvePembinaanTrack(
+  rec: Pick<PembinaanRecord, 'jalurPembinaan' | 'jadwalPembinaan' | 'pembinaPeran' | 'lokasi' | 'lingkup'>,
+): { jalurPembinaan: PembinaanJalur; jadwalPembinaan: PembinaanJadwal } {
+  const defaultJadwalForLingkup = (jalur: PembinaanJalur, lingkup?: string): PembinaanJadwal => {
+    if (lingkup === 'Klasikal') return 'Mingguan';
+    if (lingkup === 'Individu') return 'Tentatif';
+    return jalur === 'Wali Kelas' ? 'Mingguan' : 'Tentatif';
+  };
+  if (rec.jalurPembinaan === 'Wali Kelas' || rec.jalurPembinaan === 'Guru Wali' || rec.jalurPembinaan === 'Room Visit Asrama') {
+    const jadwalPembinaan: PembinaanJadwal =
+      rec.jadwalPembinaan === 'Mingguan' || rec.jadwalPembinaan === 'Tentatif'
+        ? rec.jadwalPembinaan
+        : defaultJadwalForLingkup(rec.jalurPembinaan, rec.lingkup);
+    return { jalurPembinaan: rec.jalurPembinaan, jadwalPembinaan };
+  }
+  const peran = String(rec.pembinaPeran || '').toLowerCase();
+  if (peran.includes('musyrif') || peran.includes('asrama') || rec.lokasi === 'Asrama') {
+    return {
+      jalurPembinaan: 'Room Visit Asrama',
+      jadwalPembinaan: rec.jadwalPembinaan || defaultJadwalForLingkup('Room Visit Asrama', rec.lingkup),
+    };
+  }
+  if (peran.includes('guru wali') || peran === 'guru') {
+    return {
+      jalurPembinaan: 'Guru Wali',
+      jadwalPembinaan: rec.jadwalPembinaan || defaultJadwalForLingkup('Guru Wali', rec.lingkup),
+    };
+  }
+  return {
+    jalurPembinaan: 'Wali Kelas',
+    jadwalPembinaan: rec.jadwalPembinaan || defaultJadwalForLingkup('Wali Kelas', rec.lingkup),
+  };
 }
 
 class PintarStore {
@@ -847,6 +884,7 @@ class PintarStore {
       pengampuQuran: string;
       waliKelas?: string;
       musyrif?: string;
+      guruWali?: string;
       gender: Gender;
     }>;
     replaceExisting?: boolean;
@@ -878,6 +916,7 @@ class PintarStore {
       const cleanKamar = collapseWs(r.kamar);
       const cleanKelompok = collapseWs(r.kelompokQuran);
       const cleanPengampu = collapseWs(r.pengampuQuran).toUpperCase();
+      const cleanGuruWali = r.guruWali ? collapseWs(r.guruWali).toUpperCase() : '';
 
       const existing =
         this.db.students.find(
@@ -897,6 +936,7 @@ class PintarStore {
         if (cleanPengampu) existing.pengampuQuran = cleanPengampu;
         if (r.waliKelas) existing.waliKelas = collapseWs(r.waliKelas).toUpperCase();
         if (r.musyrif) existing.musyrif = collapseWs(r.musyrif).toUpperCase();
+        if (cleanGuruWali && cleanGuruWali !== '-') existing.guruWali = cleanGuruWali;
         if (r.gender) existing.gender = r.gender;
         updated++;
       } else {
@@ -911,6 +951,7 @@ class PintarStore {
           gender: r.gender,
           waliKelas: r.waliKelas ? collapseWs(r.waliKelas).toUpperCase() : '',
           musyrif: r.musyrif ? collapseWs(r.musyrif).toUpperCase() : '',
+          guruWali: cleanGuruWali && cleanGuruWali !== '-' ? cleanGuruWali : undefined,
           prioritas: '-',
         });
         inserted++;
@@ -934,9 +975,13 @@ class PintarStore {
 
     if (payload.autoCreateAccounts) {
       const pengampuList = new Map<string, Gender>();
+      const guruWaliList = new Map<string, Gender>();
       for (const r of payload.rows) {
         if (r.pengampuQuran && r.pengampuQuran !== 'TIDAK DITEMUKAN') {
           pengampuList.set(r.pengampuQuran.toUpperCase(), r.gender);
+        }
+        if (r.guruWali && r.guruWali.trim() && r.guruWali.trim() !== '-') {
+          guruWaliList.set(r.guruWali.trim().toUpperCase(), r.gender);
         }
       }
       for (const [namaPengampu, gender] of pengampuList.entries()) {
@@ -953,6 +998,28 @@ class PintarStore {
             pin: pinDefault,
           });
           accountsCreated++;
+        }
+      }
+      for (const [namaGw, gender] of guruWaliList.entries()) {
+        const existingGw = this.db.teachers.find((t) => normalizeStr(t.nama) === normalizeStr(namaGw));
+        if (!existingGw) {
+          this.db.teachers.push({
+            id: `G_GW_${Date.now()}_${accountsCreated}`,
+            username: makeUsername(namaGw),
+            nama: namaGw,
+            peran: 'Guru Wali',
+            peranTambahan: [],
+            jabatan: roleToJabatan('Guru Wali'),
+            genderScope: gender,
+            pin: pinDefault,
+          });
+          accountsCreated++;
+        } else if (existingGw.peran !== 'Guru Wali') {
+          const extras = existingGw.peranTambahan || [];
+          if (!extras.includes('Guru Wali')) {
+            existingGw.peranTambahan = [...extras, 'Guru Wali'];
+            existingGw.jabatan = roleToJabatan(existingGw.peran, existingGw.peranTambahan);
+          }
         }
       }
     }
@@ -1423,6 +1490,7 @@ class PintarStore {
       pengampuQuran: string;
       waliKelas?: string;
       musyrif?: string;
+      guruWali?: string;
       gender: Gender;
     }>;
     teacherRows?: Array<{
@@ -1455,6 +1523,10 @@ class PintarStore {
       poin: number;
       statusTindakLanjut: StatusTindakLanjut;
       tindakLanjut: string;
+      jalurPembinaan?: PembinaanJalur;
+      lingkup?: 'Individu' | 'Klasikal';
+      pekanKe?: number;
+      pembinaNama?: string;
     }>;
     replaceExisting?: boolean;
     autoCreateAccounts?: boolean;
@@ -1517,20 +1589,47 @@ class PintarStore {
           else if (lowKat.includes('karak') || lowKat.includes('konsel') || lowKat.includes('akade')) {
             kategori = 'Pembinaan Karakter';
           }
+          const resolvedJalur: PembinaanJalur =
+            p.jalurPembinaan ||
+            (lowKat.includes('room visit') || lowKat.includes('asrama')
+              ? 'Room Visit Asrama'
+              : lowKat.includes('guru wali')
+              ? 'Guru Wali'
+              : 'Wali Kelas');
+          const resolvedLingkup = p.lingkup || 'Individu';
+          const resolvedJadwal: PembinaanJadwal =
+            resolvedLingkup === 'Klasikal' || resolvedJalur === 'Wali Kelas' ? 'Mingguan' : 'Tentatif';
+          const resolvedPembinaNama =
+            p.pembinaNama?.trim().toUpperCase() ||
+            (resolvedJalur === 'Room Visit Asrama'
+              ? st?.musyrif || 'WALI ASRAMA'
+              : resolvedJalur === 'Guru Wali'
+              ? st?.guruWali || st?.waliKelas || 'GURU WALI'
+              : st?.waliKelas || 'PEMBINA');
+          if (resolvedJalur === 'Guru Wali' && st && p.pembinaNama?.trim()) {
+            st.guruWali = p.pembinaNama.trim().toUpperCase();
+          }
           return {
             tanggal: p.tanggal,
-            pekanKe: 1,
+            pekanKe: p.pekanKe || 1,
             bulan: getMonthNameFromDate(p.tanggal),
             namaSantri: p.namaSantri.trim().toUpperCase(),
             kelas: st?.kelas || '-',
             kamar: st?.kamar || '-',
             gender: st?.gender || p.gender,
-            pembinaNama: st?.waliKelas || 'PEMBINA',
-            pembinaPeran: 'Wali Kelas',
+            pembinaNama: resolvedPembinaNama,
+            pembinaPeran:
+              resolvedJalur === 'Room Visit Asrama'
+                ? 'Wali Asrama'
+                : resolvedJalur === 'Guru Wali'
+                ? 'Guru Wali'
+                : 'Wali Kelas',
             waliKelas: st?.waliKelas || 'WALI KELAS',
-            lingkup: 'Individu',
-            lokasi: 'Kelas',
-            pihakKoordinasi: 'Wali Kelas',
+            jalurPembinaan: resolvedJalur,
+            jadwalPembinaan: resolvedJadwal,
+            lingkup: resolvedLingkup,
+            lokasi: resolvedJalur === 'Room Visit Asrama' ? 'Asrama' : 'Kelas',
+            pihakKoordinasi: resolvedJalur === 'Room Visit Asrama' ? 'Musyrif/ah' : 'Wali Kelas',
             kategori,
             catatan: p.uraian,
             poin: p.poin,
@@ -1576,6 +1675,9 @@ class PintarStore {
       kamar?: string;
       kelompokQuran?: string;
       pengampuQuran?: string;
+      waliKelas?: string;
+      musyrif?: string;
+      guruWali?: string;
       gender: Gender;
     }>;
     scheduleRows?: Array<{
@@ -1596,6 +1698,10 @@ class PintarStore {
       poin: number;
       statusTindakLanjut: StatusTindakLanjut;
       tindakLanjut: string;
+      jalurPembinaan?: PembinaanJalur;
+      lingkup?: 'Individu' | 'Klasikal';
+      pekanKe?: number;
+      pembinaNama?: string;
     }>;
   }) {
     const teacher = this.db.teachers.find(
@@ -1607,6 +1713,14 @@ class PintarStore {
       return { ok: false as const, error: 'Akun pembina tidak ditemukan.' };
     }
 
+    const isGuruWali =
+      teacher.peran === 'Guru Wali' || (teacher.peranTambahan || []).includes('Guru Wali');
+    const isAsrama =
+      teacher.peran === 'Musyrif' ||
+      teacher.peran === 'Musyrifah' ||
+      teacher.peran === 'Wali Asrama' ||
+      (teacher.peranTambahan || []).some((p) => p === 'Musyrif' || p === 'Musyrifah' || p === 'Wali Asrama');
+
     let santriInserted = 0;
     let santriUpdated = 0;
     if (payload.santriRows && payload.santriRows.length > 0) {
@@ -1617,6 +1731,9 @@ class PintarStore {
         kamar: (r.kamar || teacher.kamarBinaan?.[0] || '-').trim(),
         kelompokQuran: (r.kelompokQuran || '-').trim(),
         pengampuQuran: (r.pengampuQuran || '').trim().toUpperCase(),
+        waliKelas: r.waliKelas?.trim().toUpperCase(),
+        musyrif: r.musyrif?.trim().toUpperCase(),
+        guruWali: r.guruWali?.trim().toUpperCase() || (isGuruWali ? teacher.nama : undefined),
         gender: r.gender,
       }));
       const res = this.importSantriSim({
@@ -1628,7 +1745,7 @@ class PintarStore {
       santriInserted = res.inserted;
       santriUpdated = res.updated;
 
-      // Auto-link waliKelas / musyrif to logged-in teacher when matching role/assignment
+      // Auto-link waliKelas / musyrif / guruWali to logged-in teacher when matching role/assignment
       for (const r of normalizedRows) {
         const st = this.db.students.find((s) => normalizeStr(s.nama) === normalizeStr(r.nama));
         if (!st) continue;
@@ -1639,8 +1756,7 @@ class PintarStore {
           if (!st.waliKelas) st.waliKelas = teacher.nama;
         }
         if (
-          teacher.peran === 'Musyrif' ||
-          teacher.peran === 'Musyrifah' ||
+          isAsrama ||
           (teacher.kamarBinaan && teacher.kamarBinaan.some((k) => normalizeStr(k) === normalizeStr(st.kamar)))
         ) {
           if (!st.musyrif) st.musyrif = teacher.nama;
@@ -1648,6 +1764,9 @@ class PintarStore {
             const rm = this.db.rooms.find((x) => normalizeStr(x.kamar) === normalizeStr(st.kamar));
             if (rm && !rm.musyrif) rm.musyrif = teacher.nama;
           }
+        }
+        if (isGuruWali && !st.guruWali) {
+          st.guruWali = teacher.nama;
         }
       }
     }
@@ -1677,11 +1796,13 @@ class PintarStore {
 
     let pembinaanSaved = 0;
     if (payload.pembinaanRows && payload.pembinaanRows.length > 0) {
-      const isAsrama = teacher.peran === 'Musyrif' || teacher.peran === 'Musyrifah';
       const batch: Array<Omit<PembinaanRecord, 'id' | 'timestamp'>> = payload.pembinaanRows
         .filter((p) => p.namaSantri.trim().length > 0)
         .map((p) => {
           const st = this.db.students.find((s) => normalizeStr(s.nama) === normalizeStr(p.namaSantri));
+          if (st && isGuruWali && !st.guruWali) {
+            st.guruWali = teacher.nama;
+          }
           const lowKat = (p.kategori || '').toLowerCase();
           let kategori: PembinaanKategori = 'Pemantauan Ibadah';
           if (lowKat.includes('disipl')) kategori = 'Kedisiplinan';
@@ -1690,9 +1811,19 @@ class PintarStore {
           else if (lowKat.includes('karak') || lowKat.includes('konsel') || lowKat.includes('akade')) {
             kategori = 'Pembinaan Karakter';
           }
+          const resolvedJalur: PembinaanJalur =
+            p.jalurPembinaan ||
+            (isAsrama && !teacher.waliKelasOf
+              ? 'Room Visit Asrama'
+              : isGuruWali && !teacher.waliKelasOf
+              ? 'Guru Wali'
+              : 'Wali Kelas');
+          const resolvedLingkup = p.lingkup || 'Individu';
+          const resolvedJadwal: PembinaanJadwal =
+            resolvedLingkup === 'Klasikal' || resolvedJalur === 'Wali Kelas' ? 'Mingguan' : 'Tentatif';
           return {
             tanggal: p.tanggal,
-            pekanKe: 1,
+            pekanKe: p.pekanKe || 1,
             bulan: getMonthNameFromDate(p.tanggal),
             namaSantri: p.namaSantri.trim().toUpperCase(),
             kelas: st?.kelas || teacher.waliKelasOf || '-',
@@ -1701,9 +1832,11 @@ class PintarStore {
             pembinaNama: teacher.nama,
             pembinaPeran: teacher.peran,
             waliKelas: st?.waliKelas || teacher.nama,
-            lingkup: 'Individu',
-            lokasi: isAsrama ? 'Asrama' : 'Kelas',
-            pihakKoordinasi: isAsrama ? 'Musyrif/ah' : 'Wali Kelas',
+            jalurPembinaan: resolvedJalur,
+            jadwalPembinaan: resolvedJadwal,
+            lingkup: resolvedLingkup,
+            lokasi: resolvedJalur === 'Room Visit Asrama' ? 'Asrama' : 'Kelas',
+            pihakKoordinasi: resolvedJalur === 'Room Visit Asrama' ? 'Musyrif/ah' : 'Wali Kelas',
             kategori,
             catatan: p.uraian,
             poin: p.poin,
@@ -1831,6 +1964,7 @@ class PintarStore {
         | 'kamar'
         | 'waliKelas'
         | 'musyrif'
+        | 'guruWali'
         | 'namaOrtu'
         | 'waOrtu'
         | 'gayaBelajar'
@@ -1844,10 +1978,86 @@ class PintarStore {
   ): Student | null {
     const idx = this.db.students.findIndex((s) => normalizeStr(s.nama) === normalizeStr(namaSantri));
     if (idx < 0) return null;
-    this.db.students[idx] = { ...this.db.students[idx], ...updates };
+    const nextUpdates = { ...updates };
+    if (nextUpdates.guruWali !== undefined) {
+      nextUpdates.guruWali = nextUpdates.guruWali.trim().toUpperCase() || undefined;
+    }
+    if (nextUpdates.waliKelas !== undefined) {
+      nextUpdates.waliKelas = nextUpdates.waliKelas.trim().toUpperCase() || undefined;
+    }
+    if (nextUpdates.musyrif !== undefined) {
+      nextUpdates.musyrif = nextUpdates.musyrif.trim().toUpperCase() || undefined;
+    }
+    this.db.students[idx] = { ...this.db.students[idx], ...nextUpdates };
     this.batchedWrites++;
     this.persist();
     return this.db.students[idx];
+  }
+
+  public assignStudentsToGuruWali(payload: {
+    namaGuruWali: string;
+    studentNames: string[];
+    mode?: 'set' | 'add' | 'remove';
+  }): { ok: boolean; assignedCount: number; totalBinaan: number; message: string } {
+    const cleanGuru = payload.namaGuruWali.trim().toUpperCase();
+    if (!cleanGuru) {
+      return { ok: false, assignedCount: 0, totalBinaan: 0, message: 'Nama Guru Wali wajib diisi.' };
+    }
+    const mode = payload.mode || 'set';
+    const targetSet = new Set((payload.studentNames || []).map((n) => normalizeStr(n)).filter(Boolean));
+    let changed = 0;
+
+    if (mode === 'set') {
+      for (const st of this.db.students) {
+        const key = normalizeStr(st.nama);
+        if (targetSet.has(key)) {
+          if (normalizeStr(st.guruWali || '') !== normalizeStr(cleanGuru)) {
+            st.guruWali = cleanGuru;
+            changed++;
+          }
+        } else if (normalizeStr(st.guruWali || '') === normalizeStr(cleanGuru)) {
+          st.guruWali = undefined;
+          changed++;
+        }
+      }
+    } else if (mode === 'add') {
+      for (const st of this.db.students) {
+        if (targetSet.has(normalizeStr(st.nama))) {
+          st.guruWali = cleanGuru;
+          changed++;
+        }
+      }
+    } else if (mode === 'remove') {
+      for (const st of this.db.students) {
+        if (targetSet.has(normalizeStr(st.nama)) && normalizeStr(st.guruWali || '') === normalizeStr(cleanGuru)) {
+          st.guruWali = undefined;
+          changed++;
+        }
+      }
+    }
+
+    // Ensure teacher record has Guru Wali role or extra role
+    const tRec = this.db.teachers.find((t) => normalizeStr(t.nama) === normalizeStr(cleanGuru));
+    if (tRec && tRec.peran !== 'Guru Wali') {
+      const extras = tRec.peranTambahan || [];
+      if (!extras.includes('Guru Wali')) {
+        tRec.peranTambahan = [...extras, 'Guru Wali'];
+        tRec.jabatan = roleToJabatan(tRec.peran, tRec.peranTambahan);
+      }
+    }
+
+    const totalBinaan = this.db.students.filter(
+      (s) => normalizeStr(s.guruWali || '') === normalizeStr(cleanGuru),
+    ).length;
+
+    this.batchedWrites++;
+    this.persist();
+    return {
+      ok: true,
+      assignedCount: changed,
+      totalBinaan,
+      message: `Daftar siswa binaan Guru Wali (${cleanGuru}) berhasil diperbarui (${totalBinaan} siswa terdaftar).`,
+    };
   }
 
   public updateStudentById(
@@ -1864,6 +2074,7 @@ class PintarStore {
         | 'pengampuQuran'
         | 'waliKelas'
         | 'musyrif'
+        | 'guruWali'
       >
     >
   ): Student | null {
@@ -2278,7 +2489,7 @@ class PintarStore {
           if (t.peran === 'Admin Super') return false;
           const jab = `${t.peran} ${t.jabatan}`.toLowerCase();
           if (jenis === 'Asrama') return jab.includes('musyrif') || jab.includes('asrama') || (t.kamarBinaan && t.kamarBinaan.length > 0);
-          if (jenis === 'Al-Quran') return jab.includes('qur') || jab.includes('guru') || jab.includes('musyrif');
+          if (jenis === 'Al-Quran') return jab.includes('qur') || jab.includes('guru') || jab.includes('musyrif') || (t.kelompokQuranBinaan && t.kelompokQuranBinaan.length > 0);
           return jab.includes('guru') || jab.includes('wali');
         })
         .map(({ pin: _pin, ...pub }) => pub)
@@ -3443,6 +3654,18 @@ class PintarStore {
       .sort((a, b) => a.netPoin - b.netPoin || b.pelanggaran - a.pelanggaran || a.wajibPct - b.wajibPct)
       .slice(0, 12);
 
+    const jalurCounts = {
+      waliKelasMingguan: 0,
+      guruWaliTentatif: 0,
+      roomVisitAsrama: 0,
+    };
+    for (const r of recordsScope) {
+      const track = resolvePembinaanTrack(r);
+      if (track.jalurPembinaan === 'Wali Kelas') jalurCounts.waliKelasMingguan++;
+      else if (track.jalurPembinaan === 'Guru Wali') jalurCounts.guruWaliTentatif++;
+      else jalurCounts.roomVisitAsrama++;
+    }
+
     return {
       totalSantri: studentsScope.length,
       santriDibina: dibinaSet.size,
@@ -3455,6 +3678,7 @@ class PintarStore {
       statusCounts,
       prioritasCounts,
       kategoriCounts: Array.from(kategoriMap.entries()).map(([kategori, count]) => ({ kategori, count })),
+      jalurCounts,
       topAttentionStudents,
     };
   }
@@ -3513,6 +3737,44 @@ class PintarStore {
         .slice(0, 10);
     };
 
+    const allLabBookings = this.db.labkomBookings || [];
+    const labMap = new Map<string, { lab: string; putra: number; putri: number }>();
+    for (const lb of allLabBookings) {
+      const labName = (lb.lab || 'LAINNYA').trim().toUpperCase();
+      const entry = labMap.get(labName) || { lab: labName, putra: 0, putri: 0 };
+      if (lb.kampus === 'PUTRI') entry.putri++;
+      else entry.putra++;
+      labMap.set(labName, entry);
+    }
+    const labkomRingkasan = {
+      putraTotal: allLabBookings.filter((b) => b.kampus === 'PUTRA').length,
+      putriTotal: allLabBookings.filter((b) => b.kampus === 'PUTRI').length,
+      putraHariIni: allLabBookings.filter((b) => b.kampus === 'PUTRA' && b.tanggal === targetDate).length,
+      putriHariIni: allLabBookings.filter((b) => b.kampus === 'PUTRI' && b.tanggal === targetDate).length,
+      byLab: Array.from(labMap.values())
+        .sort((a, b) => b.putra + b.putri - (a.putra + a.putri))
+        .slice(0, 8),
+    };
+
+    const buildWaliAsramaList = (g: Gender, monAsr: MonitoringRoom[]) => {
+      const filledMap = new Map(monAsr.map((r) => [normalizeStr(r.kamar), r.status === 'HADIR']));
+      const studentCounts = new Map<string, number>();
+      for (const s of this.db.students) {
+        if (s.gender !== g || !s.kamar) continue;
+        const k = normalizeStr(s.kamar);
+        studentCounts.set(k, (studentCounts.get(k) || 0) + 1);
+      }
+      return this.db.rooms
+        .filter((r) => r.gender === g)
+        .map((r) => ({
+          kamar: r.kamar,
+          waliAsrama: r.musyrif || '-',
+          filledToday: Boolean(filledMap.get(normalizeStr(r.kamar))),
+          studentCount: studentCounts.get(normalizeStr(r.kamar)) || 0,
+        }))
+        .sort((a, b) => a.kamar.localeCompare(b.kamar, 'id', { numeric: true }));
+    };
+
     return {
       tanggal: targetDate,
       presensiByWilayah: {
@@ -3546,6 +3808,11 @@ class PintarStore {
         Semua: this.buildPembinaanSummary('Semua'),
         Putra: this.buildPembinaanSummary('Putra'),
         Putri: this.buildPembinaanSummary('Putri'),
+      },
+      labkomRingkasan,
+      waliAsramaSummary: {
+        Putra: buildWaliAsramaList('Putra', mon.putra.asrama),
+        Putri: buildWaliAsramaList('Putri', mon.putri.asrama),
       },
     };
   }
@@ -3917,8 +4184,12 @@ class PintarStore {
     pekanKe?: number;
     statusTindakLanjut?: StatusTindakLanjut;
     pembinaPeran?: string;
+    jalurPembinaan?: PembinaanJalur | 'SEMUA';
   }) {
-    let rows = [...this.db.pembinaanRecords];
+    let rows = this.db.pembinaanRecords.map((r) => {
+      const track = resolvePembinaanTrack(r);
+      return r.jalurPembinaan && r.jadwalPembinaan ? r : { ...r, ...track };
+    });
     if (filters?.gender && filters.gender !== 'Semua') {
       rows = rows.filter((r) => r.gender === filters.gender);
     }
@@ -3939,6 +4210,9 @@ class PintarStore {
     }
     if (filters?.pembinaPeran && filters.pembinaPeran !== 'SEMUA') {
       rows = rows.filter((r) => normalizeStr(r.pembinaPeran) === normalizeStr(filters.pembinaPeran!));
+    }
+    if (filters?.jalurPembinaan && filters.jalurPembinaan !== 'SEMUA') {
+      rows = rows.filter((r) => resolvePembinaanTrack(r).jalurPembinaan === filters.jalurPembinaan);
     }
     return rows.sort((a, b) => b.tanggal.localeCompare(a.tanggal) || b.timestamp.localeCompare(a.timestamp));
   }
@@ -4034,8 +4308,20 @@ class PintarStore {
 
   public savePembinaanRecord(payload: Omit<PembinaanRecord, 'id' | 'timestamp'>): PembinaanRecord {
     const student = this.db.students.find((s) => s.nama.toUpperCase() === payload.namaSantri.trim().toUpperCase());
+    const track = resolvePembinaanTrack(payload);
+    const cleanPembina = (payload.pembinaNama || '').trim().toUpperCase();
+    if (student && cleanPembina) {
+      if (track.jalurPembinaan === 'Guru Wali') {
+        student.guruWali = cleanPembina;
+      } else if (track.jalurPembinaan === 'Room Visit Asrama' && !student.musyrif) {
+        student.musyrif = cleanPembina;
+      } else if (track.jalurPembinaan === 'Wali Kelas' && !student.waliKelas) {
+        student.waliKelas = cleanPembina;
+      }
+    }
     const rec: PembinaanRecord = {
       ...payload,
+      ...track,
       id: `PB_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
       timestamp: new Date().toISOString().replace('T', ' ').slice(0, 19),
       bulan: payload.bulan || getMonthNameFromDate(payload.tanggal),
@@ -4072,8 +4358,20 @@ class PintarStore {
     const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
     const created: PembinaanRecord[] = records.map((r, i) => {
       const student = this.db.students.find((s) => s.nama.toUpperCase() === r.namaSantri.trim().toUpperCase());
+      const track = resolvePembinaanTrack(r);
+      const cleanPembina = (r.pembinaNama || '').trim().toUpperCase();
+      if (student && cleanPembina) {
+        if (track.jalurPembinaan === 'Guru Wali') {
+          student.guruWali = cleanPembina;
+        } else if (track.jalurPembinaan === 'Room Visit Asrama' && !student.musyrif) {
+          student.musyrif = cleanPembina;
+        } else if (track.jalurPembinaan === 'Wali Kelas' && !student.waliKelas) {
+          student.waliKelas = cleanPembina;
+        }
+      }
       return {
         ...r,
+        ...track,
         id: `PB_${Date.now()}_${i}`,
         timestamp,
         bulan: r.bulan || getMonthNameFromDate(r.tanggal),
@@ -4133,7 +4431,7 @@ class PintarStore {
   }
 
   // ==============================================================
-  // AKUN GURU & REKAP PRIBADI OTOMATIS (GURU, WALI KELAS, MUSYRIF/AH)
+  // AKUN GURU & REKAP PRIBADI OTOMATIS (GURU, WALI KELAS, WALI ASRAMA, GURU WALI)
   // ==============================================================
   public getTeacherPersonalRecap(namaGuru: string, tanggal: string) {
     const req = normalizeStr(namaGuru);
@@ -4200,6 +4498,158 @@ class PintarStore {
         return { ...s, filled };
       });
 
+    // --- 1. GURU AKADEMIK: REKAP PEMBELAJARAN & RISET LAJU MATERI ---
+    const targetEffectiveWeeks = 16;
+    const pacingKeyMap = new Map<
+      string,
+      {
+        kelas: string;
+        mapel: string;
+        gender: Gender;
+        jadwalHariList: string[];
+        sessions: Array<{
+          tanggal: string;
+          materi: string;
+          hadir: number;
+          totalSiswa: number;
+          tidakHadir: number;
+        }>;
+      }
+    >();
+
+    for (const sc of allMySchedules) {
+      if (sc.kategori === 'Al-Quran' || sc.mapel.toUpperCase().includes('QUR')) continue;
+      const key = `${sc.kelas.toUpperCase()}|${sc.mapel.toUpperCase()}`;
+      if (!pacingKeyMap.has(key)) {
+        pacingKeyMap.set(key, {
+          kelas: sc.kelas.toUpperCase(),
+          mapel: sc.mapel.toUpperCase(),
+          gender: sc.gender,
+          jadwalHariList: [],
+          sessions: [],
+        });
+      }
+      const entry = pacingKeyMap.get(key)!;
+      entry.jadwalHariList.push(`${sc.hari} (JP ${sc.jamKe})`);
+    }
+
+    for (const ses of sessions) {
+      if (ses.jenisPresensi !== 'Belajar') continue;
+      const key = `${ses.kelas.toUpperCase()}|${ses.mapel.toUpperCase()}`;
+      if (!pacingKeyMap.has(key)) {
+        const inferredSt = this.db.students.find((st) => normalizeStr(st.kelas) === normalizeStr(ses.kelas));
+        pacingKeyMap.set(key, {
+          kelas: ses.kelas.toUpperCase(),
+          mapel: ses.mapel.toUpperCase(),
+          gender: inferredSt?.gender || (teacher.genderScope === 'Putri' ? 'Putri' : 'Putra'),
+          jadwalHariList: [],
+          sessions: [],
+        });
+      }
+      pacingKeyMap.get(key)!.sessions.push({
+        tanggal: ses.tanggal,
+        materi: ses.materi && ses.materi !== '-' ? ses.materi : '(Belum dicatat topik materi)',
+        hadir: ses.hadir,
+        totalSiswa: ses.totalSiswa,
+        tidakHadir: ses.tidakHadir,
+      });
+    }
+
+    const learningPacing = Array.from(pacingKeyMap.values())
+      .map((item) => {
+        const sortedSes = [...item.sessions].sort((a, b) => b.tanggal.localeCompare(a.tanggal));
+        const totalPertemuan = sortedSes.length;
+        const lajuPct = Math.min(100, Math.round((totalPertemuan / targetEffectiveWeeks) * 100));
+        const sumHadir = sortedSes.reduce((a, b) => a + b.hadir, 0);
+        const sumTotal = sortedSes.reduce((a, b) => a + b.totalSiswa, 0);
+        const rataKehadiranPct = sumTotal > 0 ? Math.round((sumHadir / sumTotal) * 100) : 0;
+        const distinctMateri = Array.from(
+          new Set(
+            sortedSes
+              .map((s) => s.materi.trim())
+              .filter((m) => m && m !== '-' && m !== '(Belum dicatat topik materi)'),
+          ),
+        );
+        const statusLaju: 'Tuntas / On-Track' | 'Berjalan Stabil' | 'Perlu Akselerasi' | 'Belum Mulai' =
+          totalPertemuan === 0
+            ? 'Belum Mulai'
+            : lajuPct >= 75
+            ? 'Tuntas / On-Track'
+            : lajuPct >= 35
+            ? 'Berjalan Stabil'
+            : 'Perlu Akselerasi';
+
+        return {
+          kelas: item.kelas,
+          mapel: item.mapel,
+          gender: item.gender,
+          jadwalMingguan: item.jadwalHariList.join(', ') || 'Jadwal Fleksibel',
+          totalPertemuan,
+          targetPertemuan: targetEffectiveWeeks,
+          lajuPct,
+          statusLaju,
+          rataKehadiranPct,
+          jumlahTopikUnik: distinctMateri.length,
+          materiTerakhir: sortedSes[0]?.materi || '-',
+          tanggalTerakhir: sortedSes[0]?.tanggal || '-',
+          riwayatMateri: sortedSes.slice(0, 8),
+        };
+      })
+      .sort((a, b) => a.kelas.localeCompare(b.kelas, 'id', { numeric: true }) || a.mapel.localeCompare(b.mapel));
+
+    // Students needing attention specifically in this teacher's Belajar classes
+    const myBelajarLogs = myLogs.filter((l) => l.jenisPresensi === 'Belajar');
+    const attStudentMap = new Map<
+      string,
+      {
+        nama: string;
+        kelas: string;
+        mapelList: Set<string>;
+        H: number;
+        T: number;
+        S: number;
+        I: number;
+        A: number;
+        total: number;
+      }
+    >();
+    for (const l of myBelajarLogs) {
+      const k = `${normalizeStr(l.namaSiswa)}|${normalizeStr(l.kelas)}`;
+      if (!attStudentMap.has(k)) {
+        attStudentMap.set(k, {
+          nama: l.namaSiswa,
+          kelas: l.kelas,
+          mapelList: new Set<string>(),
+          H: 0,
+          T: 0,
+          S: 0,
+          I: 0,
+          A: 0,
+          total: 0,
+        });
+      }
+      const st = attStudentMap.get(k)!;
+      st.mapelList.add(l.mapel);
+      st[l.status]++;
+      st.total++;
+    }
+    const studentAttentionAcademic = Array.from(attStudentMap.values())
+      .filter((s) => s.A > 0 || s.S + s.I >= 2 || s.T >= 2)
+      .map((s) => ({
+        nama: s.nama,
+        kelas: s.kelas,
+        mapel: Array.from(s.mapelList).join(', '),
+        H: s.H,
+        T: s.T,
+        S: s.S,
+        I: s.I,
+        A: s.A,
+        total: s.total,
+        kehadiranPct: s.total > 0 ? Math.round(((s.H + s.T) / s.total) * 100) : 0,
+      }))
+      .sort((a, b) => b.A - a.A || a.kehadiranPct - b.kehadiranPct)
+      .slice(0, 15);
+
     const boundRoomNames = new Set<string>(teacher.kamarBinaan || []);
     const matchedRooms = this.db.rooms.filter(
       (r) =>
@@ -4231,12 +4681,6 @@ class PintarStore {
 
     const myAbsences = this.db.teacherAbsences.filter((a) => normalizeStr(a.namaGuru).includes(req));
 
-    // --- WALI KELAS PROGRESS ---
-    const waliKelasTarget = teacher.waliKelasOf?.trim() || '';
-    const waliStudents = waliKelasTarget
-      ? this.db.students.filter((s) => normalizeStr(s.kelas) === normalizeStr(waliKelasTarget))
-      : [];
-
     const calcStudentIbadahStats = (records: PembinaanRecord[]) => {
       if (records.length === 0) return { wajibPct: 0, sunnahPct: 0 };
       const wajibKeys: Array<keyof IbadahChecklist> = ['subuh', 'dzuhur', 'ashar', 'maghrib', 'isya'];
@@ -4253,27 +4697,110 @@ class PintarStore {
       };
     };
 
-    const waliSantriProgress = waliStudents.map((st) => {
+    const calc3ComponentAttendance = (studentName: string) => {
+      const logs = this.db.attendanceLogs.filter((l) => normalizeStr(l.namaSiswa) === normalizeStr(studentName));
+      const asrLogs = logs.filter((l) => l.jenisPresensi === 'Asrama');
+      const akLogs = logs.filter((l) => l.jenisPresensi === 'Belajar');
+      const qrLogs = logs.filter((l) => l.jenisPresensi === 'Al-Quran');
+
+      const pctOf = (arr: AttendanceLog[]) => {
+        if (arr.length === 0) return 100;
+        const hadir = arr.filter((l) => l.status === 'H' || l.status === 'T').length;
+        return Math.round((hadir / arr.length) * 100);
+      };
+      const countH = (arr: AttendanceLog[]) => arr.filter((l) => l.status === 'H' || l.status === 'T').length;
+      const countSIA = (arr: AttendanceLog[]) =>
+        arr.filter((l) => l.status === 'S' || l.status === 'I' || l.status === 'A').length;
+
+      const sortedQr = [...qrLogs].sort((a, b) => b.tanggal.localeCompare(a.tanggal));
+      const latestQrWithSetoran = sortedQr.find((l) => (l.setoran && l.setoran.trim()) || (l.tilawah && l.tilawah.trim()));
+      const lastSetoran = latestQrWithSetoran
+        ? [latestQrWithSetoran.setoran, latestQrWithSetoran.tilawah, latestQrWithSetoran.murajaah]
+            .filter(Boolean)
+            .join(' · ')
+        : '-';
+
+      return {
+        logs,
+        asramaPct: pctOf(asrLogs),
+        asramaH: countH(asrLogs),
+        asramaSIA: countSIA(asrLogs),
+        asramaTotal: asrLogs.length,
+        akademikPct: pctOf(akLogs),
+        akademikH: countH(akLogs),
+        akademikSIA: countSIA(akLogs),
+        akademikTotal: akLogs.length,
+        alquranPct: pctOf(qrLogs),
+        alquranH: countH(qrLogs),
+        alquranSIA: countSIA(qrLogs),
+        alquranTotal: qrLogs.length,
+        lastSetoran,
+        absenSakit: logs.filter((l) => l.status === 'S').length,
+        absenIzin: logs.filter((l) => l.status === 'I').length,
+        absenAlfa: logs.filter((l) => l.status === 'A').length,
+      };
+    };
+
+    // --- 2. WALI KELAS PROGRESS (PER KELAS) ---
+    const waliKelasTarget = teacher.waliKelasOf?.trim() || '';
+    const availableClasses = Array.from(
+      new Set(
+        this.db.students
+          .filter((s) => teacher.genderScope === 'Semua' || s.gender === teacher.genderScope)
+          .map((s) => s.kelas.toUpperCase())
+          .filter((k) => k && k !== '-'),
+      ),
+    ).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
+
+    // Include students from waliKelasTarget AND students where student.waliKelas === teacher.nama
+    const waliStudents = this.db.students.filter(
+      (s) =>
+        (waliKelasTarget && normalizeStr(s.kelas) === normalizeStr(waliKelasTarget)) ||
+        (s.waliKelas && normalizeStr(s.waliKelas) === req),
+    );
+
+    // Also build a per-class directory so Wali Kelas can switch or inspect per class
+    const allClassStudentsForWali = this.db.students.filter(
+      (s) => teacher.genderScope === 'Semua' || s.gender === teacher.genderScope,
+    );
+
+    const buildWaliStudentRow = (st: Student) => {
       const pb = this.db.pembinaanRecords
         .filter((p) => normalizeStr(p.namaSantri) === normalizeStr(st.nama))
         .sort((a, b) => b.tanggal.localeCompare(a.tanggal));
-      const { wajibPct } = calcStudentIbadahStats(pb);
-      const logs = this.db.attendanceLogs.filter((l) => normalizeStr(l.namaSiswa) === normalizeStr(st.nama));
+      const { wajibPct, sunnahPct } = calcStudentIbadahStats(pb);
+      const comp = calc3ComponentAttendance(st.nama);
+      const klasikalCount = pb.filter((r) => r.lingkup === 'Klasikal').length;
+      const khususCount = pb.filter((r) => r.lingkup !== 'Klasikal').length;
       return {
         nama: st.nama,
         kelas: st.kelas,
         kamar: st.kamar,
+        gender: st.gender,
+        waliKelas: st.waliKelas || waliKelasTarget || '-',
+        musyrif: st.musyrif || '-',
+        guruWali: st.guruWali || '-',
         prioritas: st.prioritas || '-',
         totalPembinaan: pb.length,
+        klasikalCount,
+        khususCount,
         netPoin: pb.reduce((acc, r) => acc + r.poin, 0),
         statusTerakhir: pb[0]?.statusTindakLanjut || '-',
+        catatanTerakhir: pb[0]?.catatan || '-',
         lastTanggal: pb[0]?.tanggal || '-',
-        absenSakit: logs.filter((l) => l.status === 'S').length,
-        absenIzin: logs.filter((l) => l.status === 'I').length,
-        absenAlfa: logs.filter((l) => l.status === 'A').length,
+        absenSakit: comp.absenSakit,
+        absenIzin: comp.absenIzin,
+        absenAlfa: comp.absenAlfa,
+        akademikPct: comp.akademikPct,
+        asramaPct: comp.asramaPct,
+        alquranPct: comp.alquranPct,
         wajibPct,
+        sunnahPct,
       };
-    });
+    };
+
+    const waliSantriProgress = waliStudents.map(buildWaliStudentRow);
+    const allClassesSantriProgress = allClassStudentsForWali.map(buildWaliStudentRow);
 
     const waliPembinaanAll = this.db.pembinaanRecords.filter(
       (p) =>
@@ -4282,17 +4809,27 @@ class PintarStore {
     );
     const waliIbadahAvg = calcStudentIbadahStats(waliPembinaanAll);
 
+    const avgOf = (nums: number[]) =>
+      nums.length === 0 ? 100 : Math.round(nums.reduce((a, b) => a + b, 0) / nums.length);
+
     const waliProgress = {
       kelasBinaan: waliKelasTarget,
+      availableClasses,
       totalSantri: waliStudents.length,
       santriSudahDibina: waliSantriProgress.filter((s) => s.totalPembinaan > 0).length,
+      klasikalCount: waliPembinaanAll.filter((r) => r.lingkup === 'Klasikal').length,
+      khususCount: waliPembinaanAll.filter((r) => r.lingkup !== 'Klasikal').length,
       kasusProsesEskalasi: waliPembinaanAll.filter((r) => r.statusTindakLanjut !== 'Selesai').length,
+      rataAkademikPct: avgOf(waliSantriProgress.map((s) => s.akademikPct)),
+      rataAsramaPct: avgOf(waliSantriProgress.map((s) => s.asramaPct)),
+      rataAlquranPct: avgOf(waliSantriProgress.map((s) => s.alquranPct)),
       rataSholatWajibPct: waliIbadahAvg.wajibPct,
       rataSholatSunnahPct: waliIbadahAvg.sunnahPct,
       santriProgress: waliSantriProgress,
+      allClassesSantriProgress,
     };
 
-    // --- MUSYRIF / MUSYRIFAH PROGRESS ---
+    // --- 3. WALI ASRAMA (MUSYRIF / MUSYRIFAH) PROGRESS (PER KAMAR / SEMUA KAMAR) ---
     const musyrifRoomSet = new Set(myRooms.map((r) => normalizeStr(r.kamar)));
     const musyrifStudents = this.db.students.filter(
       (s) =>
@@ -4302,7 +4839,11 @@ class PintarStore {
     const musyrifPembinaanAll = this.db.pembinaanRecords.filter(
       (p) =>
         musyrifRoomSet.has(normalizeStr(p.kamar)) ||
-        ((p.pembinaPeran === 'Musyrif' || p.pembinaPeran === 'Musyrifah') && normalizeStr(p.pembinaNama).includes(req))
+        ((p.pembinaPeran === 'Musyrif' ||
+          p.pembinaPeran === 'Musyrifah' ||
+          p.pembinaPeran === 'Wali Asrama' ||
+          p.jalurPembinaan === 'Room Visit Asrama') &&
+          normalizeStr(p.pembinaNama).includes(req))
     );
     const musyrifIbadahAvg = calcStudentIbadahStats(musyrifPembinaanAll);
     const asramaTodayLogs = this.db.attendanceLogs.filter(
@@ -4314,16 +4855,59 @@ class PintarStore {
         .filter((p) => normalizeStr(p.namaSantri) === normalizeStr(st.nama))
         .sort((a, b) => b.tanggal.localeCompare(a.tanggal));
       const { wajibPct, sunnahPct } = calcStudentIbadahStats(pb);
+      const comp = calc3ComponentAttendance(st.nama);
       const todayLog = asramaTodayLogs.find((l) => normalizeStr(l.namaSiswa) === normalizeStr(st.nama));
+      const klasikalCount = pb.filter((r) => r.lingkup === 'Klasikal').length;
+      const khususCount = pb.filter((r) => r.lingkup !== 'Klasikal').length;
       return {
         nama: st.nama,
         kelas: st.kelas,
         kamar: st.kamar,
+        gender: st.gender,
+        waliKelas: st.waliKelas || '-',
+        guruWali: st.guruWali || '-',
         totalPembinaan: pb.length,
+        klasikalCount,
+        khususCount,
+        netPoin: pb.reduce((acc, r) => acc + r.poin, 0),
+        statusTerakhir: pb[0]?.statusTindakLanjut || '-',
+        catatanTerakhir: pb[0]?.catatan || '-',
         wajibPct,
         sunnahPct,
         statusAsramaHariIni: todayLog?.status || '-',
         keteranganHariIni: todayLog?.keterangan || '',
+        asramaPct: comp.asramaPct,
+        asramaH: comp.asramaH,
+        asramaSIA: comp.asramaSIA,
+        alquranPct: comp.alquranPct,
+        alquranH: comp.alquranH,
+        alquranSIA: comp.alquranSIA,
+        lastSetoran: comp.lastSetoran,
+        akademikPct: comp.akademikPct,
+        akademikH: comp.akademikH,
+        akademikSIA: comp.akademikSIA,
+        absenSakit: comp.absenSakit,
+        absenIzin: comp.absenIzin,
+        absenAlfa: comp.absenAlfa,
+      };
+    });
+
+    const musyrifKamarList = Array.from(
+      new Set([...myRooms.map((r) => r.kamar), ...musyrifStudents.map((s) => s.kamar)].filter((k) => k && k !== '-')),
+    ).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
+
+    const roomSummaries = musyrifKamarList.map((kamarName) => {
+      const rmStudents = musyrifSantriProgress.filter((s) => normalizeStr(s.kamar) === normalizeStr(kamarName));
+      const rmObj = myRooms.find((r) => normalizeStr(r.kamar) === normalizeStr(kamarName));
+      return {
+        kamar: kamarName,
+        filledToday: Boolean(rmObj?.filled),
+        totalSantri: rmStudents.length,
+        santriDibina: rmStudents.filter((s) => s.totalPembinaan > 0).length,
+        rataAsramaPct: avgOf(rmStudents.map((s) => s.asramaPct)),
+        rataAlquranPct: avgOf(rmStudents.map((s) => s.alquranPct)),
+        rataAkademikPct: avgOf(rmStudents.map((s) => s.akademikPct)),
+        rataWajibPct: avgOf(rmStudents.map((s) => s.wajibPct)),
       };
     });
 
@@ -4337,16 +4921,110 @@ class PintarStore {
       }));
 
     const musyrifProgress = {
-      kamarList: Array.from(new Set([...myRooms.map((r) => r.kamar), ...musyrifStudents.map((s) => s.kamar)])),
-      totalKamar: myRooms.length,
+      kamarList: musyrifKamarList,
+      roomSummaries,
+      totalKamar: musyrifKamarList.length,
       sudahPresensiHariIni: myRooms.filter((r) => r.filled).length,
       totalSantri: musyrifStudents.length,
       santriSudahDibina: musyrifSantriProgress.filter((s) => s.totalPembinaan > 0).length,
       totalPembinaanAsrama: musyrifPembinaanAll.length,
+      klasikalCount: musyrifPembinaanAll.filter((r) => r.lingkup === 'Klasikal').length,
+      khususCount: musyrifPembinaanAll.filter((r) => r.lingkup !== 'Klasikal').length,
+      rataAsramaPct: avgOf(musyrifSantriProgress.map((s) => s.asramaPct)),
+      rataAlquranPct: avgOf(musyrifSantriProgress.map((s) => s.alquranPct)),
+      rataAkademikPct: avgOf(musyrifSantriProgress.map((s) => s.akademikPct)),
       rataSholatWajibPct: musyrifIbadahAvg.wajibPct,
       rataSholatSunnahPct: musyrifIbadahAvg.sunnahPct,
       absenHariIni: musyrifAbsenHariIni,
       santriProgress: musyrifSantriProgress,
+    };
+
+    // --- 4. GURU WALI PROGRESS (SESUAI JUMLAH SISWA DI DALAMNYA) ---
+    const guruWaliRecordNames = new Set(
+      this.db.pembinaanRecords
+        .filter(
+          (p) =>
+            (p.jalurPembinaan === 'Guru Wali' || p.pembinaPeran === 'Guru Wali') &&
+            normalizeStr(p.pembinaNama).includes(req),
+        )
+        .map((p) => normalizeStr(p.namaSantri)),
+    );
+    const guruWaliStudents = this.db.students.filter(
+      (s) =>
+        (s.guruWali && (normalizeStr(s.guruWali) === req || normalizeStr(s.guruWali).includes(req))) ||
+        guruWaliRecordNames.has(normalizeStr(s.nama)),
+    );
+
+    const guruWaliStudentSet = new Set(guruWaliStudents.map((s) => normalizeStr(s.nama)));
+    const guruWaliPembinaanAll = this.db.pembinaanRecords.filter(
+      (p) =>
+        guruWaliStudentSet.has(normalizeStr(p.namaSantri)) ||
+        ((p.jalurPembinaan === 'Guru Wali' || p.pembinaPeran === 'Guru Wali') &&
+          normalizeStr(p.pembinaNama).includes(req)),
+    );
+    const guruWaliIbadahAvg = calcStudentIbadahStats(guruWaliPembinaanAll);
+
+    const guruWaliSantriProgress = guruWaliStudents.map((st) => {
+      const pb = this.db.pembinaanRecords
+        .filter((p) => normalizeStr(p.namaSantri) === normalizeStr(st.nama))
+        .sort((a, b) => b.tanggal.localeCompare(a.tanggal));
+      const { wajibPct, sunnahPct } = calcStudentIbadahStats(pb);
+      const comp = calc3ComponentAttendance(st.nama);
+      const klasikalCount = pb.filter((r) => r.lingkup === 'Klasikal').length;
+      const khususCount = pb.filter((r) => r.lingkup !== 'Klasikal').length;
+      return {
+        nama: st.nama,
+        kelas: st.kelas,
+        kamar: st.kamar,
+        gender: st.gender,
+        waliKelas: st.waliKelas || '-',
+        musyrif: st.musyrif || '-',
+        guruWali: st.guruWali || teacher.nama,
+        prioritas: st.prioritas || '-',
+        totalPembinaan: pb.length,
+        klasikalCount,
+        khususCount,
+        netPoin: pb.reduce((acc, r) => acc + r.poin, 0),
+        statusTerakhir: pb[0]?.statusTindakLanjut || '-',
+        catatanTerakhir: pb[0]?.catatan || '-',
+        lastTanggal: pb[0]?.tanggal || '-',
+        asramaPct: comp.asramaPct,
+        akademikPct: comp.akademikPct,
+        alquranPct: comp.alquranPct,
+        lastSetoran: comp.lastSetoran,
+        absenSakit: comp.absenSakit,
+        absenIzin: comp.absenIzin,
+        absenAlfa: comp.absenAlfa,
+        wajibPct,
+        sunnahPct,
+      };
+    });
+
+    const candidateStudents = this.db.students
+      .filter((s) => teacher.genderScope === 'Semua' || s.gender === teacher.genderScope)
+      .map((s) => ({
+        nama: s.nama,
+        kelas: s.kelas,
+        kamar: s.kamar,
+        gender: s.gender,
+        guruWali: s.guruWali || '',
+      }))
+      .sort((a, b) => a.kelas.localeCompare(b.kelas, 'id', { numeric: true }) || a.nama.localeCompare(b.nama));
+
+    const guruWaliProgress = {
+      totalSantri: guruWaliStudents.length,
+      santriSudahDibina: guruWaliSantriProgress.filter((s) => s.totalPembinaan > 0).length,
+      totalCatatan: guruWaliPembinaanAll.length,
+      klasikalCount: guruWaliPembinaanAll.filter((r) => r.lingkup === 'Klasikal').length,
+      khususCount: guruWaliPembinaanAll.filter((r) => r.lingkup !== 'Klasikal').length,
+      kasusProsesEskalasi: guruWaliPembinaanAll.filter((r) => r.statusTindakLanjut !== 'Selesai').length,
+      rataAsramaPct: avgOf(guruWaliSantriProgress.map((s) => s.asramaPct)),
+      rataAkademikPct: avgOf(guruWaliSantriProgress.map((s) => s.akademikPct)),
+      rataAlquranPct: avgOf(guruWaliSantriProgress.map((s) => s.alquranPct)),
+      rataSholatWajibPct: guruWaliIbadahAvg.wajibPct,
+      rataSholatSunnahPct: guruWaliIbadahAvg.sunnahPct,
+      santriProgress: guruWaliSantriProgress,
+      candidateStudents,
     };
 
     const { pin: _pin, ...pubTeacher } = teacher;
@@ -4358,12 +5036,15 @@ class PintarStore {
       sessions,
       allMySchedules,
       todaySchedules,
+      learningPacing,
+      studentAttentionAcademic,
       myRooms,
       myAbsences,
       waliStudents,
       waliPembinaanCount: waliPembinaanAll.length,
       waliProgress,
       musyrifProgress,
+      guruWaliProgress,
     };
   }
 

@@ -14,6 +14,7 @@ import {
   ClipboardCheck,
   Database,
   Info,
+  LayoutDashboard,
   Lock,
   LogIn,
   LogOut,
@@ -27,6 +28,7 @@ import {
   X,
 } from 'lucide-react';
 import { AkunGuruModule } from './components/AkunGuruModule';
+import { DasborTerpaduModule } from './components/DasborTerpaduModule';
 import { ImportSimModule } from './components/ImportSimModule';
 import { JadwalModule } from './components/JadwalModule';
 import { LabkomRuangModule } from './components/LabkomRuangModule';
@@ -38,7 +40,17 @@ import { PresensiModule } from './components/PresensiModule';
 import { QuotaBridgeModule } from './components/QuotaBridgeModule';
 import { UjianModule } from './components/UjianModule';
 import { WaliKelasModule } from './components/WaliKelasModule';
-import type { DashboardStats, ReportOptions, RoomMapping, SystemCounts, TeacherPublic } from './types';
+import type {
+  DashboardStats,
+  Gender,
+  PembinaanJalur,
+  PresensiType,
+  ReportOptions,
+  RoomMapping,
+  SystemCounts,
+  TeacherPublic,
+  WilayahFilter,
+} from './types';
 import { getAcademicSemester } from './utils/semesterHelpers';
 import {
   loadPersistedModule,
@@ -51,8 +63,9 @@ import {
 
 const VALID_MODULES: readonly ActiveModule[] = [
   'presensi',
-  'walikelas',
   'labkom',
+  'walikelas',
+  'dashboard',
   'jadwal',
   'akunguru',
   'ujian',
@@ -65,8 +78,9 @@ const VALID_MODULES: readonly ActiveModule[] = [
 
 type ActiveModule =
   | 'presensi'
-  | 'walikelas'
   | 'labkom'
+  | 'walikelas'
+  | 'dashboard'
   | 'jadwal'
   | 'akunguru'
   | 'ujian'
@@ -101,6 +115,14 @@ const MODULE_META: Record<
     headerAccent: string;
   }
 > = {
+  dashboard: {
+    title: 'Dasbor Terpadu (Absen Harian, Pembinaan & Labkom)',
+    group: 'Dasbor & Pemantauan',
+    tileBg: 'bg-teal-50 text-teal-700',
+    tileActive: 'bg-teal-600 text-white',
+    rowActive: 'bg-teal-50/90 text-teal-950 border-teal-200 shadow-xs',
+    headerAccent: 'border-t-2 border-t-teal-600',
+  },
   presensi: {
     title: 'Input Presensi Harian (Tanpa Login)',
     group: 'Halaman Tanpa Login',
@@ -232,7 +254,10 @@ export default function App() {
     return loadPersistedModule(VALID_MODULES, 'presensi');
   });
   const [menuOpen, setMenuOpen] = useState(false);
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({
+    'Akademik & Operasional': true,
+    'Akun Peran & Admin': true,
+  });
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
   const [unlockedTeacher, setUnlockedTeacher] = useState<TeacherPublic | null>(() =>
     loadPersistedUser(),
@@ -241,6 +266,16 @@ export default function App() {
     const u = loadPersistedUser();
     return loadPersistedQuickGuru(u?.nama || '');
   });
+  const [presensiPreset, setPresensiPreset] = useState<{
+    key: number;
+    jenis?: PresensiType;
+    gender?: Gender;
+  }>({ key: 0 });
+  const [pembinaanPreset, setPembinaanPreset] = useState<{
+    key: number;
+    jalur?: PembinaanJalur;
+    wilayah?: WilayahFilter;
+  }>({ key: 0 });
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const restoredOnceRef = useRef<boolean>(false);
 
@@ -411,32 +446,73 @@ export default function App() {
 
   const navGroups: Array<{
     group: string;
+    badge: string;
+    cardTone: string;
+    headerTone: string;
+    badgeTone: string;
     items: Array<{
       id: ActiveModule;
       label: string;
+      sub: string;
       icon: React.ComponentType<{ className?: string }>;
       requiresLogin?: boolean;
     }>;
   }> = [
     {
-      group: 'Halaman Tanpa Login (Progres & Input)',
+      group: 'Menu Utama',
+      badge: 'Utama',
+      cardTone: 'border-emerald-200/90 bg-gradient-to-b from-emerald-50/70 via-white to-white',
+      headerTone: 'text-emerald-950 hover:text-emerald-700',
+      badgeTone: 'text-emerald-700',
       items: [
-        { id: 'presensi', label: 'Input Presensi', icon: BookCheck },
-        { id: 'walikelas', label: 'Input Pembinaan', icon: ShieldCheck },
-        { id: 'labkom', label: 'Labkom & Ruang SMA', icon: Monitor },
-        { id: 'monitoring', label: 'Monitoring & Laporan', icon: BarChart3 },
-        { id: 'parentportal', label: 'Portal Wali Santri (Cek NIS)', icon: Users },
-        { id: 'ujian', label: 'Ujian & Susulan', icon: ClipboardCheck },
-        { id: 'piket', label: 'Piket & Guru Inval', icon: UserX },
+        { id: 'presensi', label: 'Presensi Harian', sub: "Asrama · Al-Qur'an · Kelas", icon: BookCheck },
+        { id: 'labkom', label: 'Peminjaman Labkom', sub: 'Lab Komputer & Ruang SMA', icon: Monitor },
       ],
     },
     {
-      group: 'Area Login (Guru & Admin Super)',
+      group: 'Pembinaan & Wali',
+      badge: 'Santri',
+      cardTone: 'border-violet-200/90 bg-gradient-to-b from-violet-50/70 via-white to-white',
+      headerTone: 'text-violet-950 hover:text-violet-700',
+      badgeTone: 'text-violet-700',
       items: [
-        { id: 'jadwal', label: 'Jadwal & Perubahan JP', icon: CalendarClock, requiresLogin: true },
-        { id: 'akunguru', label: 'Login Guru, Wali & Musyrif', icon: UserCheck, requiresLogin: true },
-        { id: 'import', label: 'Admin Super & Upload SIM', icon: Upload, requiresLogin: true },
-        { id: 'quota', label: 'Anti-Kuota & Sheets', icon: Database, requiresLogin: true },
+        { id: 'walikelas', label: 'Pembinaan Santri', sub: 'Wali Kelas · Guru Wali · Room Visit', icon: ShieldCheck },
+        { id: 'parentportal', label: 'Portal Wali Santri', sub: 'Cek Progres via NIS', icon: Users },
+      ],
+    },
+    {
+      group: 'Dasbor & Monitoring',
+      badge: 'Visual',
+      cardTone: 'border-indigo-200/90 bg-gradient-to-b from-indigo-50/70 via-white to-white',
+      headerTone: 'text-indigo-950 hover:text-indigo-700',
+      badgeTone: 'text-indigo-700',
+      items: [
+        { id: 'dashboard', label: 'Dasbor Terpadu', sub: 'Grafik Putra & Putri', icon: LayoutDashboard },
+        { id: 'monitoring', label: 'Monitoring & Laporan', sub: 'Live KBM, Kamar & Bulanan', icon: BarChart3 },
+      ],
+    },
+    {
+      group: 'Akademik & Operasional',
+      badge: 'KBM',
+      cardTone: 'border-amber-200/90 bg-gradient-to-b from-amber-50/60 via-white to-white',
+      headerTone: 'text-amber-950 hover:text-amber-700',
+      badgeTone: 'text-amber-700',
+      items: [
+        { id: 'ujian', label: 'Ujian & Berita Acara', sub: 'Presensi & Susulan Ujian', icon: ClipboardCheck },
+        { id: 'piket', label: 'Piket & Guru Inval', sub: 'Guru Absen & Pengganti', icon: UserX },
+        { id: 'jadwal', label: 'Jadwal & Perubahan JP', sub: 'Atur JP & Pindah Kelas', icon: CalendarClock, requiresLogin: true },
+      ],
+    },
+    {
+      group: 'Akun Peran & Admin',
+      badge: 'Login',
+      cardTone: 'border-sky-200/90 bg-gradient-to-b from-sky-50/70 via-white to-white',
+      headerTone: 'text-sky-950 hover:text-sky-700',
+      badgeTone: 'text-sky-700',
+      items: [
+        { id: 'akunguru', label: 'Dasbor Peran Guru/Wali', sub: 'Rekap Mengajar & Asrama', icon: UserCheck, requiresLogin: true },
+        { id: 'import', label: 'Admin Super & Upload', sub: 'Template Excel & Database', icon: Upload, requiresLogin: true },
+        { id: 'quota', label: 'Anti-Kuota & Sheets', sub: 'Sinkronisasi Cloud', icon: Database, requiresLogin: true },
       ],
     },
   ];
@@ -451,6 +527,31 @@ export default function App() {
     setActiveModule(id);
     setMenuOpen(false);
   };
+
+  const handleNavigateFromDashboard = useCallback(
+    (
+      mod: ActiveModule,
+      opts?: { presensiJenis?: PresensiType; pembinaanJalur?: PembinaanJalur; wilayah?: WilayahFilter }
+    ) => {
+      if (mod === 'presensi' && (opts?.presensiJenis || opts?.wilayah)) {
+        setPresensiPreset({
+          key: Date.now(),
+          jenis: opts.presensiJenis,
+          gender: opts.wilayah === 'Putra' || opts.wilayah === 'Putri' ? opts.wilayah : undefined,
+        });
+      }
+      if (mod === 'walikelas' && (opts?.pembinaanJalur || opts?.wilayah)) {
+        setPembinaanPreset({
+          key: Date.now(),
+          jalur: opts.pembinaanJalur,
+          wilayah: opts.wilayah,
+        });
+      }
+      setActiveModule(mod);
+      setMenuOpen(false);
+    },
+    []
+  );
 
   const handleLoginSuccess = (teacher: TeacherPublic) => {
     setUnlockedTeacher(teacher);
@@ -544,58 +645,91 @@ export default function App() {
         />
       )}
 
-      {/* SIM PINTAR Bright Slide-Out Menu Drawer (Muncul saat tombol Menu diklik) */}
+      {/* SIM PINTAR Professional Slide-Out Menu Drawer */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-72 bg-white border-r border-slate-200 shadow-xl text-slate-800 flex flex-col transition-transform duration-200 ease-out ${
+        className={`fixed inset-y-0 left-0 z-40 w-80 bg-white border-r border-slate-200 shadow-2xl text-slate-800 flex flex-col transition-transform duration-200 ease-out ${
           menuOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         aria-hidden={!menuOpen}
       >
-        <div className="flex h-16 items-center justify-between px-4 border-b border-slate-200/80 bg-gradient-to-r from-teal-50 via-sky-50/70 to-white">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-teal-600 text-white shadow-sm shrink-0">
+        <div className="flex h-16 items-center justify-between px-4 border-b border-slate-800 bg-gradient-to-r from-slate-900 via-teal-950 to-slate-900 text-white">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-teal-500 text-white shadow-sm shrink-0">
               <Users className="h-4 w-4" />
             </span>
             <div className="min-w-0">
-              <div className="font-display text-base font-bold tracking-tight text-slate-900 truncate">
+              <div className="font-display text-base font-bold tracking-tight text-white truncate">
                 SIM PINTAR
               </div>
-              <div className="text-[10px] font-medium text-teal-700 truncate">
-                Wilayah Putra &amp; Putri
+              <div className="text-[11px] font-medium text-teal-200 truncate">
+                Wilayah Putra &amp; Putri Terpisah
               </div>
             </div>
           </div>
           <button
             type="button"
             onClick={() => setMenuOpen(false)}
-            className="rounded-lg border border-slate-200/80 bg-white p-1.5 text-slate-500 hover:bg-slate-50 hover:text-slate-800 transition-colors"
+            className="rounded-lg border border-white/15 bg-white/10 p-1.5 text-slate-200 hover:bg-white/20 hover:text-white transition-colors"
             aria-label="Tutup menu SIM PINTAR"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-5">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200/80 bg-slate-50 text-xs">
+          <span className="font-display font-semibold tracking-tight text-slate-700">
+            Kelompok Menu
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              const anyCollapsed = navGroups.some((g) => collapsedGroups[g.group]);
+              if (anyCollapsed) {
+                setCollapsedGroups({});
+              } else {
+                setCollapsedGroups({
+                  'Dasbor & Monitoring': true,
+                  'Akademik & Operasional': true,
+                  'Akun Peran & Admin': true,
+                });
+              }
+            }}
+            className="font-display font-semibold text-teal-700 hover:text-teal-900 hover:underline"
+          >
+            {navGroups.some((g) => collapsedGroups[g.group]) ? 'Buka Semua' : 'Ringkas Menu'}
+          </button>
+        </div>
+
+        <nav className="flex-1 overflow-y-auto py-3 px-3 space-y-3">
           {navGroups.map((grp) => {
-            const isGroupCollapsed = Boolean(collapsedGroups[grp.group]);
+            const hasActiveItem = grp.items.some((it) => it.id === activeModule);
+            const isGroupCollapsed = Boolean(collapsedGroups[grp.group]) && !hasActiveItem;
             return (
-              <div key={grp.group}>
+              <div
+                key={grp.group}
+                className={`rounded-xl border p-2 shadow-2xs transition-colors ${grp.cardTone}`}
+              >
                 <button
                   type="button"
                   onClick={() => toggleGroupCollapsed(grp.group)}
-                  className="flex w-full items-center justify-between px-2.5 mb-2 text-[11px] font-semibold text-slate-500 hover:text-teal-700 transition-colors"
-                  title={isGroupCollapsed ? `Tampilkan ${grp.group}` : `Minimize ${grp.group}`}
+                  className={`flex w-full items-center justify-between px-2 py-1 font-display text-xs font-bold tracking-tight transition-colors ${grp.headerTone}`}
+                  title={isGroupCollapsed ? `Tampilkan ${grp.group}` : `Ringkas ${grp.group}`}
                 >
                   <span className="truncate">{grp.group}</span>
-                  {isGroupCollapsed ? (
-                    <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-                  ) : (
-                    <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-                  )}
+                  <span className="flex items-center gap-1.5 shrink-0">
+                    <span className={`text-[10px] font-semibold uppercase tracking-wider ${grp.badgeTone}`}>
+                      {grp.badge}
+                    </span>
+                    {isGroupCollapsed ? (
+                      <ChevronRight className="h-3.5 w-3.5 opacity-70" />
+                    ) : (
+                      <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+                    )}
+                  </span>
                 </button>
 
                 {!isGroupCollapsed && (
-                  <div className="space-y-1">
+                  <div className="mt-1.5 space-y-1">
                     {grp.items.map((item) => {
                       const Icon = item.icon;
                       const active = activeModule === item.id;
@@ -609,25 +743,32 @@ export default function App() {
                         <button
                           key={item.id}
                           type="button"
-                          title={item.label}
+                          title={`${item.label} — ${item.sub}`}
                           onClick={() => handleSelectModule(item.id)}
-                          className={`flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-xs font-semibold border transition-colors whitespace-nowrap ${
+                          className={`flex w-full items-center justify-between gap-2.5 rounded-lg px-2.5 py-2 text-left border transition-all ${
                             active
-                              ? meta.rowActive
-                              : 'border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                              ? `${meta.rowActive} ring-1 ring-black/5`
+                              : 'border-slate-200/70 bg-white/95 text-slate-800 hover:bg-white hover:border-slate-300 hover:shadow-2xs'
                           }`}
                         >
                           <span className="flex items-center gap-2.5 min-w-0">
                             <span
-                              className={`flex h-7 w-7 items-center justify-center rounded-lg shrink-0 transition-colors ${
+                              className={`flex h-8 w-8 items-center justify-center rounded-lg shrink-0 transition-colors ${
                                 active ? meta.tileActive : meta.tileBg
                               }`}
                             >
                               <Icon className="h-4 w-4" />
                             </span>
-                            <span className="truncate">{item.label}</span>
+                            <span className="min-w-0">
+                              <span className="block font-display text-[13px] font-semibold tracking-tight leading-snug text-slate-900 truncate">
+                                {item.label}
+                              </span>
+                              <span className="block text-[11px] font-medium text-slate-500 truncate">
+                                {item.sub}
+                              </span>
+                            </span>
                           </span>
-                          {locked && <Lock className="h-3 w-3 shrink-0 text-slate-400" />}
+                          {locked && <Lock className="h-3.5 w-3.5 shrink-0 text-slate-400" />}
                         </button>
                       );
                     })}
@@ -638,17 +779,19 @@ export default function App() {
           })}
         </nav>
 
-        <div className="border-t border-slate-200 p-3.5 bg-slate-50/90 text-[11px] text-slate-600 space-y-1">
-          <div className="font-semibold text-slate-900">Ringkasan Database</div>
-          <div className="font-mono-num text-teal-700 font-semibold">
+        <div className="border-t border-slate-200 p-3.5 bg-slate-900 text-slate-200 space-y-1">
+          <div className="font-display text-xs font-semibold tracking-tight text-white">
+            Ringkasan Database Aktif
+          </div>
+          <div className="font-mono-num text-xs text-teal-300 font-semibold">
             {bootstrap?.counts?.students ?? 0} Santri · {bootstrap?.counts?.teachers ?? 0} Pembina
           </div>
-          <div className="font-mono-num text-[10px] text-slate-500">
+          <div className="font-mono-num text-[11px] text-slate-300">
             Putra: {bootstrap?.counts?.byWilayah?.Putra.students ?? 0} · Putri:{' '}
             {bootstrap?.counts?.byWilayah?.Putri.students ?? 0} · Labkom:{' '}
             {bootstrap?.counts?.labkomBookings ?? 0}
           </div>
-          <div className="text-[10px] font-medium text-slate-500">
+          <div className="text-[11px] font-medium text-slate-400">
             {getAcademicSemester().labelLengkap}
           </div>
         </div>
@@ -674,7 +817,9 @@ export default function App() {
               <span
                 className={`hidden sm:flex h-7 w-7 items-center justify-center rounded-lg shrink-0 ${MODULE_META[activeModule].tileActive}`}
               >
-                {activeModule === 'walikelas' ? (
+                {activeModule === 'dashboard' ? (
+                  <LayoutDashboard className="h-3.5 w-3.5" />
+                ) : activeModule === 'walikelas' ? (
                   <ShieldCheck className="h-3.5 w-3.5" />
                 ) : activeModule === 'labkom' ? (
                   <Monitor className="h-3.5 w-3.5" />
@@ -761,9 +906,21 @@ export default function App() {
 
         {/* Main Workspace Viewport */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1440px] w-full mx-auto space-y-5">
+          {activeModule === 'dashboard' && (
+            <DasborTerpaduModule
+              currentUser={unlockedTeacher}
+              counts={bootstrap?.counts || null}
+              onNavigate={handleNavigateFromDashboard}
+              notify={notify}
+            />
+          )}
+
           {activeModule === 'presensi' && (
             <PresensiModule
               initialGuru={quickGuru}
+              initialJenis={presensiPreset.jenis}
+              initialGender={presensiPreset.gender}
+              presetKey={presensiPreset.key}
               loggedInUser={unlockedTeacher}
               onSaved={loadBootstrap}
               onOpenJadwal={() => setActiveModule('jadwal')}
@@ -776,6 +933,9 @@ export default function App() {
             <WaliKelasModule
               unlockedTeacher={unlockedTeacher}
               teachers={bootstrap?.teachers || []}
+              initialJalur={pembinaanPreset.jalur}
+              initialWilayah={pembinaanPreset.wilayah}
+              presetKey={pembinaanPreset.key}
               onOpenImport={() => setActiveModule('import')}
               onRequestLogin={() => openLoginPortal('guru')}
               notify={notify}

@@ -23,6 +23,8 @@ import type {
   IbadahChecklist,
   LingkupPembinaan,
   LokasiPembinaan,
+  PembinaanJadwal,
+  PembinaanJalur,
   PembinaanKategori,
   PembinaanRecord,
   PihakKoordinasi,
@@ -44,6 +46,9 @@ import { emitDataMutated, loadSubTab, saveSubTab } from '../utils/sessionPersist
 interface WaliKelasModuleProps {
   unlockedTeacher: TeacherPublic | null;
   teachers: TeacherPublic[];
+  initialJalur?: PembinaanJalur;
+  initialWilayah?: WilayahFilter;
+  presetKey?: number;
   onOpenImport?: () => void;
   onRequestLogin?: () => void;
   notify: (msg: string, type?: 'success' | 'error' | 'info') => void;
@@ -88,7 +93,7 @@ const BULAN_LIST = [
 
 const LINGKUP_LIST: LingkupPembinaan[] = ['Individu', 'Klasikal'];
 const LOKASI_LIST: LokasiPembinaan[] = ['Asrama', 'Masjid', 'Kelas', 'Lapangan', 'Ruang BK'];
-const KOORDINASI_LIST: PihakKoordinasi[] = ['Musyrif/ah', 'Wali Kelas', 'BK / Ortu', 'Kepala Sekolah'];
+const KOORDINASI_LIST: PihakKoordinasi[] = ['Musyrif/ah', 'Wali Kelas', 'Guru Wali', 'BK / Ortu', 'Kepala Sekolah'];
 const STATUS_LIST: StatusTindakLanjut[] = ['Selesai', 'Proses', 'Eskalasi'];
 const KATEGORI_LIST: PembinaanKategori[] = [
   'Pemantauan Ibadah',
@@ -130,6 +135,9 @@ const SPREADSHEET_FORMULAS = {
 export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
   unlockedTeacher,
   teachers,
+  initialJalur,
+  initialWilayah,
+  presetKey,
   onOpenImport,
   onRequestLogin,
   notify,
@@ -138,7 +146,7 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
     loadSubTab('pintar_walikelas_subtab_v1', ['input', 'database', 'portofolio', 'analisis', 'panduan'] as const, 'input'),
   );
   const [wilayahFilter, setWilayahFilter] = useState<WilayahFilter>(() =>
-    loadSubTab('pintar_walikelas_wilayah_v1', ['Semua', 'Putra', 'Putri'] as const, 'Semua'),
+    initialWilayah || loadSubTab('pintar_walikelas_wilayah_v1', ['Semua', 'Putra', 'Putri'] as const, 'Semua'),
   );
 
   useEffect(() => {
@@ -164,6 +172,19 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
   const [metaMinimized, setMetaMinimized] = useState<boolean>(false);
   const [pembinaNama, setPembinaNama] = useState<string>(unlockedTeacher?.nama || '');
   const [pembinaPeran, setPembinaPeran] = useState<string>(unlockedTeacher?.peran || 'Wali Kelas');
+  const [formJalur, setFormJalur] = useState<PembinaanJalur>(() =>
+    initialJalur ||
+    (unlockedTeacher?.peran === 'Musyrif' ||
+    unlockedTeacher?.peran === 'Musyrifah' ||
+    unlockedTeacher?.peran === 'Wali Asrama'
+      ? 'Room Visit Asrama'
+      : unlockedTeacher?.peran === 'Guru Wali'
+      ? 'Guru Wali'
+      : 'Wali Kelas')
+  );
+  const [formJadwal, setFormJadwal] = useState<PembinaanJadwal>(() =>
+    (initialJalur || 'Wali Kelas') === 'Wali Kelas' ? 'Mingguan' : 'Tentatif'
+  );
 
   // Common metadata (aligned with Sistem_Pembinaan_Wali_Kelas_Terpadu_1_Tahun)
   const today = getTodayDateStr();
@@ -172,7 +193,11 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
   const [formPekan, setFormPekan] = useState<number>(1);
   const [formLingkup, setFormLingkup] = useState<LingkupPembinaan>('Individu');
   const [formLokasi, setFormLokasi] = useState<LokasiPembinaan>(
-    unlockedTeacher?.peran === 'Musyrif' || unlockedTeacher?.peran === 'Musyrifah' ? 'Asrama' : 'Kelas'
+    unlockedTeacher?.peran === 'Musyrif' ||
+      unlockedTeacher?.peran === 'Musyrifah' ||
+      unlockedTeacher?.peran === 'Wali Asrama'
+      ? 'Asrama'
+      : 'Kelas'
   );
   const [formKoordinasi, setFormKoordinasi] = useState<PihakKoordinasi>('Wali Kelas');
   const [formStatus, setFormStatus] = useState<StatusTindakLanjut>('Selesai');
@@ -197,18 +222,28 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
   const [editingProfile, setEditingProfile] = useState(false);
   const [profPrioritas, setProfPrioritas] = useState<PrioritasPembinaan>('-');
   const [profGayaBelajar, setProfGayaBelajar] = useState<string>('');
+  const [profWaliKelas, setProfWaliKelas] = useState<string>('');
+  const [profMusyrif, setProfMusyrif] = useState<string>('');
+  const [profGuruWali, setProfGuruWali] = useState<string>('');
   const [profNamaOrtu, setProfNamaOrtu] = useState<string>('');
   const [profWaOrtu, setProfWaOrtu] = useState<string>('');
   const [profPenyakit, setProfPenyakit] = useState<string>('');
   const [profObat, setProfObat] = useState<string>('');
   const [profTarget, setProfTarget] = useState<string>('');
 
-  // Batch (Klasikal / Kamar / Halaqah) input state
-  const [batchGroupType, setBatchGroupType] = useState<'kelas' | 'kamar' | 'kelompokQuran'>(
-    unlockedTeacher?.peran === 'Musyrif' || unlockedTeacher?.peran === 'Musyrifah' ? 'kamar' : 'kelas'
+  // Batch (Momen Klasikal Pekanan: Kelas / Kamar / Siswa Binaan Guru Wali / Halaqah) input state
+  const [batchGroupType, setBatchGroupType] = useState<'kelas' | 'kamar' | 'guruWali' | 'kelompokQuran'>(
+    unlockedTeacher?.peran === 'Musyrif' ||
+      unlockedTeacher?.peran === 'Musyrifah' ||
+      unlockedTeacher?.peran === 'Wali Asrama'
+      ? 'kamar'
+      : unlockedTeacher?.peran === 'Guru Wali'
+      ? 'guruWali'
+      : 'kelas'
   );
   const [batchGroupValue, setBatchGroupValue] = useState<string>('');
   const [batchKategori, setBatchKategori] = useState<PembinaanKategori>('Pemantauan Ibadah');
+  const [batchTemaKlasikal, setBatchTemaKlasikal] = useState<string>('');
   const [batchRows, setBatchRows] = useState<
     Array<{
       namaSantri: string;
@@ -226,17 +261,64 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
   const [filterKamar, setFilterKamar] = useState<string>('SEMUA');
   const [filterPeran, setFilterPeran] = useState<string>('SEMUA');
   const [filterStatus, setFilterStatus] = useState<string>('SEMUA');
+  const [filterJalur, setFilterJalur] = useState<PembinaanJalur | 'SEMUA'>('SEMUA');
+
+  const selectJalurPembinaan = (jalur: PembinaanJalur) => {
+    setFormJalur(jalur);
+    if (jalur === 'Wali Kelas') {
+      setFormJadwal(inputMode === 'batch' ? 'Mingguan' : 'Tentatif');
+      setPembinaPeran('Wali Kelas');
+      setFormLokasi('Kelas');
+      setFormKoordinasi('Wali Kelas');
+      setBatchGroupType('kelas');
+    } else if (jalur === 'Guru Wali') {
+      setFormJadwal(inputMode === 'batch' ? 'Mingguan' : 'Tentatif');
+      setPembinaPeran('Guru Wali');
+      setFormLokasi('Kelas');
+      setFormKoordinasi('Guru Wali');
+      setBatchGroupType('guruWali');
+    } else {
+      setFormJadwal(inputMode === 'batch' ? 'Mingguan' : 'Tentatif');
+      setPembinaPeran('Wali Asrama');
+      setFormLokasi('Asrama');
+      setFormKoordinasi('Musyrif/ah');
+      setBatchGroupType('kamar');
+    }
+  };
+
+  useEffect(() => {
+    if (presetKey && initialJalur) {
+      selectJalurPembinaan(initialJalur);
+      setSubTab('input');
+    }
+    if (presetKey && initialWilayah) {
+      setWilayahFilter(initialWilayah);
+    }
+  }, [presetKey, initialJalur, initialWilayah]);
 
   useEffect(() => {
     if (unlockedTeacher) {
       setPembinaNama(unlockedTeacher.nama);
       setPembinaPeran(unlockedTeacher.peran);
-      if (unlockedTeacher.peran === 'Musyrif' || unlockedTeacher.peran === 'Musyrifah') {
+      if (
+        unlockedTeacher.peran === 'Musyrif' ||
+        unlockedTeacher.peran === 'Musyrifah' ||
+        unlockedTeacher.peran === 'Wali Asrama'
+      ) {
         setFormLokasi('Asrama');
         setBatchGroupType('kamar');
+        setFormJalur('Room Visit Asrama');
+        setFormJadwal(inputMode === 'batch' ? 'Mingguan' : 'Tentatif');
+      } else if (unlockedTeacher.peran === 'Guru Wali') {
+        setFormLokasi('Kelas');
+        setBatchGroupType('guruWali');
+        setFormJalur('Guru Wali');
+        setFormJadwal(inputMode === 'batch' ? 'Mingguan' : 'Tentatif');
       } else {
         setFormLokasi('Kelas');
         setBatchGroupType('kelas');
+        setFormJalur('Wali Kelas');
+        setFormJadwal('Mingguan');
       }
     }
   }, [unlockedTeacher]);
@@ -261,6 +343,7 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
     if (filterKamar !== 'SEMUA') params.set('kamar', filterKamar);
     if (filterPeran !== 'SEMUA') params.set('pembinaPeran', filterPeran);
     if (filterStatus !== 'SEMUA') params.set('statusTindakLanjut', filterStatus);
+    if (filterJalur !== 'SEMUA') params.set('jalurPembinaan', filterJalur);
     fetch(`/api/pembinaan/list?${params.toString()}`)
       .then((r) => r.json())
       .then((data: PembinaanRecord[]) => setRecords(data))
@@ -293,7 +376,7 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
 
   useEffect(() => {
     loadRecords();
-  }, [wilayahFilter, filterKelas, filterKamar, filterPeran, filterStatus]);
+  }, [wilayahFilter, filterKelas, filterKamar, filterPeran, filterStatus, filterJalur]);
 
   useEffect(() => {
     if (subTab === 'analisis') loadAnalisis();
@@ -336,28 +419,65 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
     () => Array.from(new Set(scopedStudents.map((s) => s.kelompokQuran).filter((k) => k && k !== '-'))).sort(),
     [scopedStudents]
   );
+  const uniqueGuruWali = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of scopedStudents) {
+      if (s.guruWali && s.guruWali.trim() && s.guruWali !== '-') {
+        set.add(s.guruWali.trim().toUpperCase());
+      }
+    }
+    for (const t of teachers) {
+      if (t.peran === 'Guru Wali' || (t.peranTambahan || []).includes('Guru Wali')) {
+        set.add(t.nama.trim().toUpperCase());
+      }
+    }
+    if (pembinaNama.trim() && (formJalur === 'Guru Wali' || pembinaPeran === 'Guru Wali')) {
+      set.add(pembinaNama.trim().toUpperCase());
+    }
+    return Array.from(set).sort();
+  }, [scopedStudents, teachers, pembinaNama, formJalur, pembinaPeran]);
 
   // Batch group options
-  const batchGroupOptions =
-    batchGroupType === 'kelas'
-      ? uniqueClasses
-      : batchGroupType === 'kamar'
-      ? uniqueRooms
-      : uniqueHalaqah;
+  const batchGroupOptions = useMemo(() => {
+    if (batchGroupType === 'kelas') return uniqueClasses;
+    if (batchGroupType === 'kamar') {
+      const myKamarList = (unlockedTeacher?.kamarBinaan || []).filter((k) => uniqueRooms.includes(k));
+      if (myKamarList.length > 1) {
+        return ['SEMUA_KAMAR_BINAAN', ...uniqueRooms];
+      }
+      return uniqueRooms;
+    }
+    if (batchGroupType === 'guruWali') {
+      return uniqueGuruWali.length > 0 ? uniqueGuruWali : uniqueClasses;
+    }
+    return uniqueHalaqah;
+  }, [batchGroupType, uniqueClasses, uniqueRooms, uniqueGuruWali, uniqueHalaqah, unlockedTeacher]);
 
   useEffect(() => {
     if (batchGroupOptions.length > 0 && !batchGroupOptions.includes(batchGroupValue)) {
       if (batchGroupType === 'kelas' && unlockedTeacher?.waliKelasOf && batchGroupOptions.includes(unlockedTeacher.waliKelasOf)) {
         setBatchGroupValue(unlockedTeacher.waliKelasOf);
-      } else if (batchGroupType === 'kamar' && unlockedTeacher?.kamarBinaan?.[0] && batchGroupOptions.includes(unlockedTeacher.kamarBinaan[0])) {
-        setBatchGroupValue(unlockedTeacher.kamarBinaan[0]);
+      } else if (batchGroupType === 'kamar' && unlockedTeacher?.kamarBinaan?.length) {
+        if (unlockedTeacher.kamarBinaan.length > 1 && batchGroupOptions.includes('SEMUA_KAMAR_BINAAN')) {
+          setBatchGroupValue('SEMUA_KAMAR_BINAAN');
+        } else if (batchGroupOptions.includes(unlockedTeacher.kamarBinaan[0])) {
+          setBatchGroupValue(unlockedTeacher.kamarBinaan[0]);
+        } else {
+          setBatchGroupValue(batchGroupOptions[0]);
+        }
+      } else if (
+        batchGroupType === 'guruWali' &&
+        pembinaNama.trim() &&
+        batchGroupOptions.includes(pembinaNama.trim().toUpperCase())
+      ) {
+        setBatchGroupValue(pembinaNama.trim().toUpperCase());
       } else {
         setBatchGroupValue(batchGroupOptions[0]);
       }
     } else if (batchGroupOptions.length === 0) {
       setBatchGroupValue('');
     }
-  }, [batchGroupType, batchGroupOptions, unlockedTeacher, batchGroupValue]);
+  }, [batchGroupType, batchGroupOptions, unlockedTeacher, batchGroupValue, pembinaNama]);
 
   // Populate batchRows whenever batchGroupValue changes
   useEffect(() => {
@@ -367,9 +487,29 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
     }
     const groupStudents = scopedStudents.filter((s) => {
       if (batchGroupType === 'kelas') return s.kelas === batchGroupValue;
-      if (batchGroupType === 'kamar') return s.kamar === batchGroupValue;
+      if (batchGroupType === 'kamar') {
+        if (batchGroupValue === 'SEMUA_KAMAR_BINAAN') {
+          const myRooms = (unlockedTeacher?.kamarBinaan || []).map((k) => k.toUpperCase());
+          return (
+            myRooms.includes((s.kamar || '').toUpperCase()) ||
+            (unlockedTeacher?.nama && (s.musyrif || '').toUpperCase() === unlockedTeacher.nama.toUpperCase())
+          );
+        }
+        return s.kamar === batchGroupValue;
+      }
+      if (batchGroupType === 'guruWali') {
+        if (uniqueGuruWali.length === 0) return s.kelas === batchGroupValue;
+        return (s.guruWali || '').toUpperCase() === batchGroupValue.toUpperCase();
+      }
       return s.kelompokQuran === batchGroupValue;
     });
+    const defaultNote =
+      batchTemaKlasikal.trim() ||
+      (formJalur === 'Room Visit Asrama'
+        ? `Momen klasikal pekanan asrama (Pekan ${formPekan})`
+        : formJalur === 'Guru Wali'
+        ? `Momen klasikal pekanan Guru Wali (Pekan ${formPekan})`
+        : `Momen klasikal pekanan Wali Kelas (Pekan ${formPekan})`);
     setBatchRows(
       groupStudents.map((s) => ({
         namaSantri: s.nama,
@@ -377,17 +517,39 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
         kamar: s.kamar,
         gender: s.gender,
         ibadah: { ...DEFAULT_IBADAH },
-        catatan: 'Pemantauan rutin pekanan',
+        catatan: defaultNote,
         poin: 0,
       }))
     );
-  }, [batchGroupValue, batchGroupType, scopedStudents]);
+  }, [batchGroupValue, batchGroupType, scopedStudents, uniqueGuruWali, unlockedTeacher, formJalur, formPekan]);
 
-  // Filtered student options for single input
+  const applyBatchTemaToAll = () => {
+    const clean = batchTemaKlasikal.trim();
+    if (!clean) {
+      notify('Ketik tema / materi momen klasikal pekan ini terlebih dahulu.', 'info');
+      return;
+    }
+    setBatchRows((prev) => prev.map((r) => ({ ...r, catatan: clean })));
+    notify(`Tema klasikal diterapkan ke ${batchRows.length} siswa.`, 'success');
+  };
+
+  // Filtered student options for single input (Pembinaan Khusus Satu per Satu)
   const filteredSingleStudents = useMemo(() => {
     const q = studentSearch.trim().toLowerCase();
+    const activePembinaUp = (pembinaNama || unlockedTeacher?.nama || '').trim().toUpperCase();
+    const myKamarUp = (unlockedTeacher?.kamarBinaan || []).map((k) => k.toUpperCase());
     return scopedStudents.filter((s) => {
-      if (studentFilterGroup !== 'SEMUA' && s.kelas !== studentFilterGroup && s.kamar !== studentFilterGroup) {
+      if (studentFilterGroup === 'BINAAN_GURU_WALI') {
+        if (!activePembinaUp || (s.guruWali || '').toUpperCase() !== activePembinaUp) return false;
+      } else if (studentFilterGroup === 'KAMAR_BINAAN') {
+        const matchKamar = myKamarUp.includes((s.kamar || '').toUpperCase());
+        const matchMusyrif = activePembinaUp && (s.musyrif || '').toUpperCase() === activePembinaUp;
+        if (!matchKamar && !matchMusyrif) return false;
+      } else if (
+        studentFilterGroup !== 'SEMUA' &&
+        s.kelas !== studentFilterGroup &&
+        s.kamar !== studentFilterGroup
+      ) {
         return false;
       }
       if (!q) return true;
@@ -395,10 +557,11 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
         s.nama.toLowerCase().includes(q) ||
         s.kelas.toLowerCase().includes(q) ||
         s.kamar.toLowerCase().includes(q) ||
+        (s.guruWali || '').toLowerCase().includes(q) ||
         (s.nis || '').toLowerCase().includes(q)
       );
     });
-  }, [scopedStudents, studentSearch, studentFilterGroup]);
+  }, [scopedStudents, studentSearch, studentFilterGroup, pembinaNama, unlockedTeacher]);
 
   const activeSingleStudent = useMemo(
     () => scopedStudents.find((s) => s.nama === formSantri) || null,
@@ -410,6 +573,9 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
     if (activeSingleStudent) {
       setProfPrioritas(activeSingleStudent.prioritas || '-');
       setProfGayaBelajar(activeSingleStudent.gayaBelajar || '');
+      setProfWaliKelas(activeSingleStudent.waliKelas || '');
+      setProfMusyrif(activeSingleStudent.musyrif || '');
+      setProfGuruWali(activeSingleStudent.guruWali || '');
       setProfNamaOrtu(activeSingleStudent.namaOrtu || '');
       setProfWaOrtu(activeSingleStudent.waOrtu || '');
       setProfPenyakit(activeSingleStudent.riwayatPenyakit || '');
@@ -428,6 +594,9 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
         updates: {
           prioritas: profPrioritas,
           gayaBelajar: profGayaBelajar,
+          waliKelas: profWaliKelas,
+          musyrif: profMusyrif,
+          guruWali: profGuruWali,
           namaOrtu: profNamaOrtu,
           waOrtu: profWaOrtu,
           riwayatPenyakit: profPenyakit,
@@ -484,6 +653,8 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
           gender: target?.gender || 'Putra',
           pembinaNama: pembinaNama.trim() || unlockedTeacher?.nama || 'PEMBINA',
           pembinaPeran: pembinaPeran || unlockedTeacher?.peran || 'Wali Kelas',
+          jalurPembinaan: formJalur,
+          jadwalPembinaan: formJadwal,
           waliKelas: target?.waliKelas || '-',
           lingkup: formLingkup,
           lokasi: formLokasi,
@@ -555,6 +726,8 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
         gender: row.gender,
         pembinaNama: pembinaNama.trim() || unlockedTeacher?.nama || 'PEMBINA',
         pembinaPeran: pembinaPeran || unlockedTeacher?.peran || 'Wali Kelas',
+        jalurPembinaan: formJalur,
+        jadwalPembinaan: formJadwal,
         waliKelas: '-',
         lingkup: 'Klasikal' as LingkupPembinaan,
         lokasi: formLokasi,
@@ -970,39 +1143,41 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-violet-100 pb-3">
               <div>
                 <h2 className="text-sm font-bold text-slate-900">
-                  Formulir Pembinaan Terpadu Boarding School
+                  Formulir Pembinaan Terpadu (Wali Kelas · Guru Wali · Wali Asrama)
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Pilih mode <b>Pembinaan Individu</b> untuk konseling/kasus santri atau <b>Klasikal / Asrama</b> untuk pemantauan 1 kelas/kamar sekaligus.
+                  Setiap peran memiliki <b>Momen Klasikal (Setiap Pekan Sekali)</b> untuk pembinaan bersama dan <b>Pembinaan Khusus (Satu per Satu)</b> untuk pendampingan individu.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <div className="inline-flex rounded-xl bg-slate-100 p-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setInputMode('single');
-                      setFormLingkup('Individu');
-                    }}
-                    className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ${
-                      inputMode === 'single' ? 'bg-violet-600 text-white shadow-sm' : 'text-slate-600'
-                    }`}
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    Pembinaan Individu
-                  </button>
+                <div className="inline-flex rounded-xl bg-slate-100 p-1 border border-slate-200/80">
                   <button
                     type="button"
                     onClick={() => {
                       setInputMode('batch');
                       setFormLingkup('Klasikal');
+                      setFormJadwal('Mingguan');
                     }}
-                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold ${
-                      inputMode === 'batch' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                      inputMode === 'batch' ? 'bg-violet-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
                     <Users className="h-3.5 w-3.5" />
-                    Input Klasikal / Kamar
+                    Momen Klasikal (Pekanan)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInputMode('single');
+                      setFormLingkup('Individu');
+                      setFormJadwal('Tentatif');
+                    }}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                      inputMode === 'single' ? 'bg-violet-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Pembinaan Khusus (Satu per Satu)
                   </button>
                 </div>
                 <button
@@ -1044,36 +1219,87 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
                 </div>
               </div>
             ) : (
-              /* Metadata Bar: Pembina, Tanggal, Bulan, Pekan, Lokasi, Koordinasi, Status */
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
-                <div className="col-span-2">
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nama Pembina &amp; Peran</label>
-                  <div className="flex gap-1.5">
-                    <input
-                      type="text"
-                      list="pembina-datalist"
-                      value={pembinaNama}
-                      onChange={(e) => setPembinaNama(e.target.value)}
-                      placeholder="Nama Pembina..."
-                      className="h-9 flex-1 rounded-lg border border-slate-300 px-2.5 text-xs font-semibold"
-                    />
-                    <datalist id="pembina-datalist">
-                      {teachers.map((t) => (
-                        <option key={t.id} value={t.nama} />
-                      ))}
-                    </datalist>
-                    <select
-                      value={pembinaPeran}
-                      onChange={(e) => setPembinaPeran(e.target.value)}
-                      className="h-9 rounded-lg border border-slate-300 bg-slate-50 px-2 text-xs font-semibold"
-                    >
-                      <option value="Wali Kelas">Wali Kelas</option>
-                      <option value="Musyrif">Musyrif</option>
-                      <option value="Musyrifah">Musyrifah</option>
-                      <option value="Guru">Guru</option>
-                    </select>
+              <div className="space-y-4">
+                {/* 3-Track Selector: Wali Kelas, Guru Wali, Wali Asrama */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1.5">
+                    Pilih Jalur Pembinaan (Mendukung Momen Klasikal Pekanan &amp; Pembinaan Khusus Satu per Satu)
+                  </label>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {(
+                      [
+                        {
+                          jalur: 'Wali Kelas' as PembinaanJalur,
+                          title: 'Pembinaan Wali Kelas',
+                          jadwal: 'Klasikal Pekanan (Per Kelas) & Khusus Individu',
+                        },
+                        {
+                          jalur: 'Guru Wali' as PembinaanJalur,
+                          title: 'Pembinaan Guru Wali',
+                          jadwal: 'Klasikal Pekanan (Siswa Binaan) & Khusus Individu',
+                        },
+                        {
+                          jalur: 'Room Visit Asrama' as PembinaanJalur,
+                          title: 'Pembinaan Wali Asrama',
+                          jadwal: 'Klasikal Pekanan (Per Kamar) & Khusus Individu',
+                        },
+                      ] as const
+                    ).map((opt) => {
+                      const active = formJalur === opt.jalur;
+                      return (
+                        <button
+                          key={opt.jalur}
+                          type="button"
+                          onClick={() => selectJalurPembinaan(opt.jalur)}
+                          className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                            active
+                              ? 'border-violet-600 bg-violet-600 text-white shadow-xs'
+                              : 'border-slate-200 bg-white text-slate-700 hover:border-violet-300 hover:bg-violet-50/60'
+                          }`}
+                        >
+                          <div className="text-xs font-bold">{opt.title}</div>
+                          <div className={`text-[10px] mt-0.5 ${active ? 'text-violet-100' : 'text-slate-500'}`}>
+                            {opt.jadwal}
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
+
+                {/* Metadata Bar: Pembina, Tanggal, Bulan, Pekan, Lokasi, Koordinasi, Status */}
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
+                  <div className="col-span-2">
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nama Pembina &amp; Peran</label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        list="pembina-datalist"
+                        value={pembinaNama}
+                        onChange={(e) => setPembinaNama(e.target.value)}
+                        placeholder="Nama Pembina..."
+                        className="h-9 flex-1 rounded-lg border border-slate-300 px-2.5 text-xs font-semibold"
+                      />
+                      <datalist id="pembina-datalist">
+                        {teachers.map((t) => (
+                          <option key={t.id} value={t.nama} />
+                        ))}
+                      </datalist>
+                      <select
+                        value={pembinaPeran}
+                        onChange={(e) => setPembinaPeran(e.target.value)}
+                        className="h-9 rounded-lg border border-slate-300 bg-slate-50 px-2 text-xs font-semibold"
+                      >
+                        <option value="Wali Kelas">Wali Kelas</option>
+                        <option value="Guru Wali">Guru Wali</option>
+                        <option value="Wali Asrama">Wali Asrama</option>
+                        <option value="Musyrif">Musyrif</option>
+                        <option value="Musyrifah">Musyrifah</option>
+                        <option value="Pengampu Al-Quran">Pengampu Al-Qur&apos;an</option>
+                        <option value="Guru">Guru</option>
+                      </select>
+                    </div>
+                  </div>
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600 mb-1">Tanggal</label>
@@ -1160,6 +1386,7 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
                   </select>
                 </div>
               </div>
+              </div>
             )}
           </div>
 
@@ -1183,9 +1410,13 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
                     <select
                       value={studentFilterGroup}
                       onChange={(e) => setStudentFilterGroup(e.target.value)}
-                      className="h-9 max-w-[160px] rounded-lg border border-slate-300 bg-slate-50 px-2 text-xs font-medium"
+                      className="h-9 max-w-[175px] rounded-lg border border-slate-300 bg-slate-50 px-2 text-xs font-medium"
                     >
                       <option value="SEMUA">Semua Kelas/Kamar</option>
+                      <option value="BINAAN_GURU_WALI">Siswa Binaan Guru Wali</option>
+                      {unlockedTeacher?.kamarBinaan && unlockedTeacher.kamarBinaan.length > 0 && (
+                        <option value="KAMAR_BINAAN">Kamar Binaan Saya</option>
+                      )}
                       {uniqueClasses.map((k) => (
                         <option key={k} value={k}>
                           Kelas: {k}
@@ -1207,6 +1438,7 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
                     {filteredSingleStudents.map((s) => (
                       <option key={s.id} value={s.nama}>
                         {s.nama} — {s.kelas} · {s.kamar}
+                        {s.guruWali ? ` · GW: ${s.guruWali}` : ''}
                       </option>
                     ))}
                   </select>
@@ -1243,8 +1475,16 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
                           <span className="font-semibold text-slate-800">{activeSingleStudent.kamar}</span>
                         </div>
                         <div>
-                          <span className="text-slate-500">Musyrif/ah:</span>{' '}
+                          <span className="text-slate-500">Wali Kelas:</span>{' '}
+                          <span className="font-semibold text-slate-800">{activeSingleStudent.waliKelas || '-'}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500">Wali Asrama:</span>{' '}
                           <span className="font-semibold text-slate-800">{activeSingleStudent.musyrif || '-'}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500">Guru Wali:</span>{' '}
+                          <span className="font-semibold text-violet-800">{activeSingleStudent.guruWali || '-'}</span>
                         </div>
                         <div>
                           <span className="text-slate-500">Prioritas:</span>{' '}
@@ -1283,6 +1523,41 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
                       </div>
                     ) : (
                       <div className="space-y-2.5 text-xs">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-600 mb-0.5">Wali Kelas</label>
+                            <input
+                              type="text"
+                              list="pembina-datalist"
+                              value={profWaliKelas}
+                              onChange={(e) => setProfWaliKelas(e.target.value)}
+                              placeholder="Nama Wali Kelas"
+                              className="h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-600 mb-0.5">Wali Asrama</label>
+                            <input
+                              type="text"
+                              list="pembina-datalist"
+                              value={profMusyrif}
+                              onChange={(e) => setProfMusyrif(e.target.value)}
+                              placeholder="Nama Wali Asrama"
+                              className="h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-violet-700 mb-0.5">Guru Wali</label>
+                            <input
+                              type="text"
+                              list="pembina-datalist"
+                              value={profGuruWali}
+                              onChange={(e) => setProfGuruWali(e.target.value)}
+                              placeholder="Nama Guru Wali"
+                              className="h-8 w-full rounded border border-violet-300 bg-white px-2 text-xs font-semibold"
+                            />
+                          </div>
+                        </div>
                         <div className="grid grid-cols-2 gap-2">
                           <div>
                             <label className="block text-[11px] font-semibold text-slate-600 mb-0.5">Prioritas</label>
@@ -1602,23 +1877,50 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
               </form>
             </div>
           ) : (
-            /* Mode B: Batch 1 Kelas / 1 Kamar / 1 Halaqah */
+            /* Mode B: Momen Klasikal Pekanan (Per Kelas / Per Kamar / Siswa Binaan Guru Wali / Halaqah) */
             <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
+              <div className="rounded-lg border border-violet-200 bg-violet-50/60 p-3.5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-xs font-bold text-violet-950">
+                    Momen Klasikal Setiap Pekan Sekali · {formJalur} (Pekan ke-{formPekan})
+                  </div>
+                  <div className="text-[11px] text-violet-700">
+                    Pilih kelompok sesuai peran Anda (Per Kelas untuk Wali Kelas, Per Kamar / Semua Kamar untuk Wali Asrama, atau Siswa Binaan untuk Guru Wali), isi tema pekanan, dan simpan serentak.
+                  </div>
+                </div>
+                <span className="inline-flex items-center rounded-md bg-violet-700 px-2.5 py-1 text-[11px] font-semibold text-white shrink-0">
+                  {batchRows.length} Siswa Terpilih
+                </span>
+              </div>
+
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Kelompokkan Berdasarkan</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Kelompokkan Berdasarkan Peran</label>
                   <select
                     value={batchGroupType}
-                    onChange={(e) => setBatchGroupType(e.target.value as 'kelas' | 'kamar' | 'kelompokQuran')}
+                    onChange={(e) =>
+                      setBatchGroupType(e.target.value as 'kelas' | 'kamar' | 'guruWali' | 'kelompokQuran')
+                    }
                     className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold"
                   >
-                    <option value="kelas">Per Kelas (Wali Kelas / Guru)</option>
-                    <option value="kamar">Per Kamar (Musyrif / Musyrifah)</option>
+                    <option value="kelas">Per Kelas (Wali Kelas)</option>
+                    <option value="kamar">Per Kamar / Semua Kamar (Wali Asrama)</option>
+                    <option value="guruWali">Sesuai Siswa Binaan Guru Wali</option>
                     <option value="kelompokQuran">Per Kelompok Al-Qur&apos;an</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Pilih Target</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {batchGroupType === 'kelas'
+                      ? 'Pilih Kelas Binaan'
+                      : batchGroupType === 'kamar'
+                      ? 'Pilih Kamar / Semua Kamar'
+                      : batchGroupType === 'guruWali'
+                      ? uniqueGuruWali.length > 0
+                        ? 'Pilih Guru Wali Pembimbing'
+                        : 'Pilih Kelas (Belum Ada Guru Wali Terikat)'
+                      : "Pilih Kelompok Al-Qur'an"}
+                  </label>
                   <select
                     value={batchGroupValue}
                     onChange={(e) => setBatchGroupValue(e.target.value)}
@@ -1626,13 +1928,15 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
                   >
                     {batchGroupOptions.map((opt) => (
                       <option key={opt} value={opt}>
-                        {opt}
+                        {opt === 'SEMUA_KAMAR_BINAAN'
+                          ? `Semua Kamar Binaan Saya (${(unlockedTeacher?.kamarBinaan || []).join(', ')})`
+                          : opt}
                       </option>
                     ))}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Kategori Default</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Kategori Pembinaan Klasikal</label>
                   <select
                     value={batchKategori}
                     onChange={(e) => setBatchKategori(e.target.value as PembinaanKategori)}
@@ -1645,6 +1949,29 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
                     ))}
                   </select>
                 </div>
+              </div>
+
+              {/* Tema / Materi Momen Klasikal Pekanan */}
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="flex-1">
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    Tema / Materi Momen Klasikal Pekan Ini (Otomatis mengisi catatan seluruh siswa di bawah)
+                  </label>
+                  <input
+                    type="text"
+                    value={batchTemaKlasikal}
+                    onChange={(e) => setBatchTemaKlasikal(e.target.value)}
+                    placeholder={`Contoh: Evaluasi adab, kebersihan, & ibadah pekan ke-${formPekan}...`}
+                    className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-xs"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={applyBatchTemaToAll}
+                  className="h-9 sm:mt-5 rounded-lg bg-violet-600 px-3.5 text-xs font-semibold text-white hover:bg-violet-700 shrink-0"
+                >
+                  Terapkan ke Semua Siswa
+                </button>
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs">
@@ -2074,12 +2401,24 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
                 ))}
               </select>
               <select
+                value={filterJalur}
+                onChange={(e) => setFilterJalur(e.target.value as PembinaanJalur | 'SEMUA')}
+                className="h-8 rounded-md border border-slate-200 bg-slate-50 px-2 text-xs font-medium"
+              >
+                <option value="SEMUA">Semua Jalur</option>
+                <option value="Wali Kelas">Wali Kelas (Mingguan)</option>
+                <option value="Guru Wali">Guru Wali (Tentatif)</option>
+                <option value="Room Visit Asrama">Room Visit Asrama (Tentatif)</option>
+              </select>
+              <select
                 value={filterPeran}
                 onChange={(e) => setFilterPeran(e.target.value)}
                 className="h-8 rounded-md border border-slate-200 bg-slate-50 px-2 text-xs font-medium"
               >
                 <option value="SEMUA">Semua Peran</option>
                 <option value="Wali Kelas">Wali Kelas</option>
+                <option value="Guru Wali">Guru Wali</option>
+                <option value="Wali Asrama">Wali Asrama</option>
                 <option value="Musyrif">Musyrif</option>
                 <option value="Musyrifah">Musyrifah</option>
                 <option value="Guru">Guru</option>
@@ -2171,7 +2510,7 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
                       <td className="px-3 py-2.5">
                         <div className="font-medium text-slate-800">{r.pembinaNama}</div>
                         <div className="text-[11px] text-slate-500">
-                          {r.pembinaPeran} · {r.lokasi}
+                          {r.jalurPembinaan || r.pembinaPeran} · {r.jadwalPembinaan || 'Mingguan'} · {r.lokasi}
                         </div>
                       </td>
                       <td className="px-3 py-2.5 max-w-xs">
@@ -2348,6 +2687,13 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
                           <span>· Proses {sum.statusCounts.Proses}</span>
                           <span className="text-rose-700 font-semibold">· Eskalasi {sum.statusCounts.Eskalasi}</span>
                         </div>
+                        {sum.jalurCounts && (
+                          <div className="text-[11px] text-slate-600 font-mono-num flex flex-wrap gap-x-3 gap-y-1">
+                            <span>Wali Kelas (Mingguan): <b>{sum.jalurCounts.waliKelasMingguan}</b></span>
+                            <span>· Guru Wali (Tentatif): <b>{sum.jalurCounts.guruWaliTentatif}</b></span>
+                            <span>· Room Visit (Tentatif): <b>{sum.jalurCounts.roomVisitAsrama}</b></span>
+                          </div>
+                        )}
                       </div>
                     );
                   })}

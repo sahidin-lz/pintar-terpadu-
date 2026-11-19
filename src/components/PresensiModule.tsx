@@ -17,6 +17,7 @@ import type {
   AttendanceStatus,
   Gender,
   PresensiType,
+  RoomMapping,
   StudentFormEntry,
   TeacherPublic,
 } from '../types';
@@ -32,6 +33,9 @@ import { loadScopedState, loadSubTab, saveScopedState, saveSubTab } from '../uti
 
 interface PresensiModuleProps {
   initialGuru?: string;
+  initialJenis?: PresensiType;
+  initialGender?: Gender;
+  presetKey?: number;
   loggedInUser?: TeacherPublic | null;
   onSaved?: () => void;
   onOpenJadwal?: () => void;
@@ -48,6 +52,9 @@ interface TargetOption {
 
 export const PresensiModule: React.FC<PresensiModuleProps> = ({
   initialGuru,
+  initialJenis,
+  initialGender,
+  presetKey,
   loggedInUser,
   onSaved,
   onOpenJadwal,
@@ -55,10 +62,11 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   notify,
 }) => {
   const [jenis, setJenis] = useState<PresensiType>(() =>
+    initialJenis ||
     loadSubTab(
       'pintar_presensi_jenis_v1',
       ['Asrama', 'Belajar', 'Al-Quran'] as const,
-      loggedInUser?.peran === 'Musyrif' || loggedInUser?.peran === 'Musyrifah'
+      loggedInUser?.peran === 'Musyrif' || loggedInUser?.peran === 'Musyrifah' || loggedInUser?.peran === 'Wali Asrama'
         ? 'Asrama'
         : loggedInUser?.peran === 'Guru'
         ? 'Belajar'
@@ -103,6 +111,11 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   const [controlsMinimized, setControlsMinimized] = useState<boolean>(false);
 
   const hari = getNamaHariFromDate(tanggal);
+
+  useEffect(() => {
+    if (presetKey && initialJenis) setJenis(initialJenis);
+    if (presetKey && initialGender) setGender(initialGender);
+  }, [presetKey, initialJenis, initialGender]);
 
   useEffect(() => {
     if (initialGuru) {
@@ -153,6 +166,8 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
         if (!active) return;
         const opts: TargetOption[] = [];
         if (jenis === 'Asrama' && Array.isArray(data.rooms)) {
+          const details: RoomMapping[] = Array.isArray(data.roomDetails) ? data.roomDetails : [];
+          const detailMap = new Map(details.map((d) => [d.kamar.toUpperCase(), d.musyrif]));
           if (data.rooms.length > 1) {
             opts.push({
               value: `${data.rooms.join(',')}|KELUAR ASRAMA`,
@@ -162,9 +177,10 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
             });
           }
           data.rooms.forEach((rm: string) => {
+            const wali = detailMap.get(rm.toUpperCase());
             opts.push({
               value: `${rm}|KELUAR ASRAMA`,
-              label: rm,
+              label: wali ? `${rm} — Wali Asrama: ${wali}` : rm,
               grup: rm,
               mapel: 'KELUAR ASRAMA',
             });
@@ -295,11 +311,11 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   const roleLabel =
     jenis === 'Asrama'
       ? gender === 'Putra'
-        ? 'Musyrif Asrama'
-        : 'Musyrifah Asrama'
+        ? 'Wali Asrama (Musyrif Putra)'
+        : 'Wali Asrama (Musyrifah Putri)'
       : jenis === 'Al-Quran'
       ? "Pengampu Al-Qur'an"
-      : 'Guru Pengajar';
+      : 'Guru Akademik';
 
   const syncedCount = siswaList.filter((s) => s.syncedFromAsrama).length;
   const counts = siswaList.reduce(
