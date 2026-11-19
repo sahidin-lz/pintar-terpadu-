@@ -616,35 +616,25 @@ class PintarStore {
     const cleanInput = String(rawInputPin || '').trim();
     if (!cleanInput) return false;
     const teacherPin = (teacher.pin || generateTeacherAccessToken(teacher.nama)).trim();
-    const autoToken = generateTeacherAccessToken(teacher.nama);
 
     const normInput = cleanInput.toUpperCase().replace(/[^A-Z0-9]/g, '');
     const normStored = teacherPin.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const normAuto = autoToken.toUpperCase().replace(/[^A-Z0-9]/g, '');
     const digitsStored = teacherPin.replace(/^PN-/i, '').trim();
-    const digitsAuto = autoToken.replace(/^PN-/i, '').trim();
 
     if (cleanInput.toUpperCase() === teacherPin.toUpperCase()) return true;
     if (normInput && normInput === normStored) return true;
-    if (normInput && normInput === normAuto) return true;
-    if (digitsStored.length >= 4 && cleanInput === digitsStored) return true;
-    if (digitsAuto.length >= 4 && cleanInput === digitsAuto) return true;
-    // Allow '1234' fallback for accounts still using the default system token
-    if (cleanInput === '1234' && (teacherPin === '1234' || teacherPin.toUpperCase() === autoToken.toUpperCase())) {
-      return true;
-    }
+    if (digitsStored.length >= 4 && cleanInput.toUpperCase() === digitsStored.toUpperCase()) return true;
     return false;
   }
 
   public verifyTeacherPin(identifier: string, pin: string): { ok: boolean; teacher?: TeacherPublic; error?: string } {
-    // Reconcile any newly added teachers from schedules, attendance, pembinaan, or students into Database Pegawai
     this.reconcileDatabaseRelations();
 
     const req = normalizeStr(identifier);
     const cleanPin = String(pin || '').trim();
 
     if (!cleanPin) {
-      return { ok: false, error: 'Masukkan Token / PIN akses pegawai.' };
+      return { ok: false, error: 'Masukkan Token Login pegawai sesuai sheet Master_Pegawai pada Template.' };
     }
 
     // 1. Fast-path Super Admin verification
@@ -661,8 +651,8 @@ class PintarStore {
       };
     }
 
-    // 2. Match by explicit teacher name / username + token/PIN
-    let teacher = req
+    // 2. Match by explicit teacher name / username + Token Login from uploaded Template
+    const teacher = req
       ? this.db.teachers.find(
           (t) =>
             normalizeStr(t.nama) === req ||
@@ -673,66 +663,36 @@ class PintarStore {
       : undefined;
 
     if (teacher && this.doesPinMatchTeacher(teacher, cleanPin)) {
-      if (!teacher.pin || teacher.pin === '1234') {
+      if (!teacher.pin) {
         teacher.pin = generateTeacherAccessToken(teacher.nama);
         this.persist();
       }
       return { ok: true, teacher: { ...teacher } };
     }
 
-    // 3. Token-first lookup: if the user entered a unique Pegawai Token/PIN directly
-    // (even if they didn't select their name or left the dropdown on another name), match by unique Token!
-    if (cleanPin !== '1234') {
-      const tokenMatches = this.db.teachers.filter(
-        (t) => t.id !== SUPER_ADMIN_ID && this.doesPinMatchTeacher(t, cleanPin),
-      );
-      if (tokenMatches.length === 1) {
-        const matched = tokenMatches[0];
-        if (!matched.pin || matched.pin === '1234') {
-          matched.pin = generateTeacherAccessToken(matched.nama);
-          this.persist();
-        }
-        return { ok: true, teacher: { ...matched } };
-      }
-    }
-
-    // 4. If a valid teacher name was typed that is not yet in Database Pegawai, auto-register into Database Pegawai
-    if (!teacher && req && !isPlaceholderTeacherName(identifier)) {
-      const cleanNama = identifier.trim().toUpperCase();
-      const autoToken = generateTeacherAccessToken(cleanNama);
-      if (
-        cleanPin === '1234' ||
-        cleanPin.toUpperCase() === autoToken.toUpperCase() ||
-        cleanPin === autoToken.replace(/^PN-/i, '')
-      ) {
-        const autoRec: TeacherRecord = {
-          id: `G_AUTO_${Date.now()}_${this.db.teachers.length}`,
-          username: makeUsername(cleanNama),
-          nama: cleanNama,
-          peran: 'Guru',
-          peranTambahan: [],
-          jabatan: 'Guru',
-          genderScope: inferGender(cleanNama),
-          whatsapp: '',
-          pin: autoToken,
-        };
-        this.db.teachers.push(autoRec);
-        this.batchedWrites++;
+    // 3. Token-first lookup: if the user entered their unique Token Login from the Template directly
+    const tokenMatches = this.db.teachers.filter(
+      (t) => t.id !== SUPER_ADMIN_ID && this.doesPinMatchTeacher(t, cleanPin),
+    );
+    if (tokenMatches.length === 1) {
+      const matched = tokenMatches[0];
+      if (!matched.pin) {
+        matched.pin = generateTeacherAccessToken(matched.nama);
         this.persist();
-        return { ok: true, teacher: { ...autoRec } };
       }
+      return { ok: true, teacher: { ...matched } };
     }
 
     if (!teacher) {
       return {
         ok: false,
-        error: 'Akun atau Token tidak ditemukan di Database Pegawai. Periksa Nama atau Token/PIN Kartu Akses Anda.',
+        error: 'Akun atau Token Login tidak ditemukan. Pastikan data pegawai sudah diupload melalui Template (sheet Master_Pegawai).',
       };
     }
 
     return {
       ok: false,
-      error: `Token / PIN untuk ${teacher.nama} tidak sesuai. Gunakan Token Pegawai pada Kartu Akses Login Anda.`,
+      error: `Token Login untuk ${teacher.nama} tidak sesuai dengan data di Template (Master_Pegawai).`,
     };
   }
 
@@ -1409,9 +1369,9 @@ class PintarStore {
         }
         if (r.whatsapp && r.whatsapp !== '628') existing.whatsapp = r.whatsapp;
         if (r.username) existing.username = r.username.toLowerCase();
-        if (r.pin && r.pin.trim() && r.pin.trim() !== '1234') {
+        if (r.pin && r.pin.trim()) {
           existing.pin = r.pin.trim();
-        } else if (!existing.pin || existing.pin === '1234') {
+        } else if (!existing.pin) {
           existing.pin = generateTeacherAccessToken(cleanNama);
         }
         updated++;
@@ -1421,7 +1381,7 @@ class PintarStore {
             ? Array.from(new Set(r.peranTambahan.filter((p) => p !== r.peran)))
             : undefined;
         const cleanPin =
-          r.pin && r.pin.trim() && r.pin.trim() !== '1234'
+          r.pin && r.pin.trim()
             ? r.pin.trim()
             : generateTeacherAccessToken(cleanNama);
         this.db.teachers.push({
@@ -1546,8 +1506,8 @@ class PintarStore {
 
       if (rec.id === SUPER_ADMIN_ID) return;
 
-      // Ensure unique Token/PIN exists on existing record
-      if (!rec.pin || rec.pin === '1234') {
+      // Ensure unique Token Login exists on existing record if missing
+      if (!rec.pin) {
         rec.pin = generateTeacherAccessToken(rec.nama);
       }
 
@@ -1582,10 +1542,10 @@ class PintarStore {
       }
     };
 
-    // 1. Ensure all existing teachers have a valid Token/PIN
+    // 1. Ensure all existing teachers have a valid Token Login
     for (const t of this.db.teachers) {
       if (t.id === SUPER_ADMIN_ID) continue;
-      if (!t.pin || t.pin === '1234') {
+      if (!t.pin) {
         t.pin = generateTeacherAccessToken(t.nama);
       }
       t.jabatan = roleToJabatan(t.peran, t.peranTambahan);
@@ -1787,6 +1747,16 @@ class PintarStore {
     autoCreateQuranSchedules?: boolean;
     defaultPin?: string;
   }) {
+    if (payload.replaceExisting) {
+      const superAdmin =
+        this.db.teachers.find((t) => t.id === SUPER_ADMIN_ID || t.peran === 'Admin Super') ||
+        createSuperAdminRecord();
+      this.db.teachers = [superAdmin];
+      this.db.rooms = [];
+      this.db.students = [];
+      this.db.schedules = [];
+    }
+
     const santriResult =
       payload.santriRows && payload.santriRows.length > 0
         ? this.importSantriSim({

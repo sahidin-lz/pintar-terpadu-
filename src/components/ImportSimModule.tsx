@@ -29,11 +29,8 @@ import {
 } from 'lucide-react';
 import type { RoomMapping, ScheduleItem, Student, SystemCounts, TeacherPublic, UserRole } from '../types';
 import {
-  COMPONENT_TEMPLATES,
-  downloadComponentExcelTemplate,
   parseDatabaseExcelBuffer,
   parseDatabaseWorkbookFromSpec,
-  type ComponentTemplateKey,
   type DatabaseWorkbookSpec,
   type ParsedDatabaseWorkbook,
 } from '../utils/excelParser';
@@ -121,9 +118,6 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   // Collapsible panels & Template spec state (dirakit 100% di sisi klien browser)
   const [inventoryMinimized, setInventoryMinimized] = useState<boolean>(false);
   const [templateMinimized, setTemplateMinimized] = useState<boolean>(false);
-  const [componentTemplatesMinimized, setComponentTemplatesMinimized] = useState<boolean>(false);
-  const [uploadingComponentKey, setUploadingComponentKey] = useState<ComponentTemplateKey | null>(null);
-  const [componentUploadStatus, setComponentUploadStatus] = useState<Record<string, string>>({});
   const [loadingSpec, setLoadingSpec] = useState<boolean>(false);
 
   // Active tab & Excel upload state
@@ -369,115 +363,11 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     }
   };
 
-  const handleDownloadComponentTemplate = (
-    key: ComponentTemplateKey,
-    mode: 'blank' | 'filled'
-  ) => {
-    try {
-      const downloadedName = downloadComponentExcelTemplate(key, mode, workbookSpec);
-      notify(
-        `Berhasil mengunduh ${downloadedName} (${mode === 'blank' ? 'Template Kosong Siap Isi' : 'Berisi Data Saat Ini'}).`,
-        'success'
-      );
-    } catch (err) {
-      const downloadedName = downloadComponentExcelTemplate(key, 'blank', null);
-      notify(`Mengunduh template standar ${downloadedName} (${(err as Error).message || 'mode lokal'}).`, 'info');
-    }
-  };
-
-  const handleSingleComponentFileUpload = (
-    key: ComponentTemplateKey,
-    title: string,
-    e: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-
-    setUploadingComponentKey(key);
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const buf = ev.target?.result as ArrayBuffer;
-      if (!buf) {
-        setUploadingComponentKey(null);
-        return;
-      }
-      try {
-        const parsed = parseDatabaseExcelBuffer(buf, file.name);
-        const cleanSantri = parsed.santriRows.filter(
-          (r) => !r.warning || r.warning !== 'Nama identik dengan Nama Kelas'
-        );
-        const combinedTeachers = [
-          ...parsed.pegawaiRows,
-          ...parsed.musyrifRows,
-          ...parsed.waliKelasRows,
-          ...parsed.guruRows,
-        ];
-
-        const payload = {
-          santriRows: cleanSantri,
-          teacherRows: combinedTeachers,
-          scheduleRows: parsed.scheduleRows,
-          ruanganUjian: parsed.ruanganUjian,
-          pembinaanRows: parsed.pembinaanRows,
-          replaceExisting: false,
-          autoCreateAccounts: true,
-          autoCreateQuranSchedules: key === 'santri',
-          defaultPin: defaultPin || '1234',
-        };
-
-        const totalDetected =
-          cleanSantri.length +
-          combinedTeachers.length +
-          parsed.scheduleRows.length +
-          parsed.ruanganUjian.length +
-          parsed.pembinaanRows.length;
-
-        if (totalDetected === 0) {
-          throw new Error(
-            `Tidak ada baris data yang terbaca pada file ${file.name}. Pastikan header sesuai template ${title}.`
-          );
-        }
-
-        const res = await fetch('/api/import/all-in-one', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        await parseJsonSafe(res);
-
-        if (auth.currentUser) {
-          fetch('/api/firebase/snapshot')
-            .then((r) => (r.ok ? r.json() : null))
-            .then((snap) => (snap ? pushSnapshotToFirestore(snap) : null))
-            .then(() => fetch('/api/firebase/mark-synced', { method: 'POST' }))
-            .catch(() => {});
-        }
-
-        setExcelWorkbook(parsed);
-        onDataUpdated();
-        await loadWorkbookSpec();
-        loadAdminEntities();
-
-        const summaryBadge = `Tersimpan (${totalDetected} baris dari ${file.name})`;
-        setComponentUploadStatus((prev) => ({ ...prev, [key]: summaryBadge }));
-        notify(
-          `Komponen "${title}" berhasil diupload! (${totalDetected} baris diproses & disimpan tanpa menghapus data sebelumnya).`,
-          'success'
-        );
-      } catch (err) {
-        notify((err as Error).message || `Gagal menyimpan file komponen ${title}.`, 'error');
-      } finally {
-        setUploadingComponentKey(null);
-      }
-    };
-    reader.readAsArrayBuffer(file);
-  };
-
   const handleLoadServerTemplateToPreview = () => {
     try {
       const parsed = parseDatabaseWorkbookFromSpec(workbookSpec);
       setExcelWorkbook(parsed);
+      setExcelPreviewSheet(parsed.pegawaiRows.length > 0 ? 'pegawai' : 'santri');
       setActiveTab('excel_upload');
       notify('Template Database Excel 11 sheet berhasil dirakit di browser & dimuat ke pratinjau.', 'success');
     } catch (err) {
@@ -492,25 +382,19 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       const cleanSantri = targetWorkbook.santriRows.filter(
         (r) => !r.warning || r.warning !== 'Nama identik dengan Nama Kelas'
       );
-      const combinedTeachers = [
-        ...targetWorkbook.pegawaiRows,
-        ...targetWorkbook.musyrifRows,
-        ...targetWorkbook.waliKelasRows,
-        ...targetWorkbook.guruRows,
-      ];
       const res = await fetch('/api/import/all-in-one', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           santriRows: cleanSantri,
-          teacherRows: combinedTeachers,
+          teacherRows: targetWorkbook.pegawaiRows,
           scheduleRows: targetWorkbook.scheduleRows,
           ruanganUjian: targetWorkbook.ruanganUjian,
           pembinaanRows: targetWorkbook.pembinaanRows,
           replaceExisting: false,
           autoCreateAccounts,
           autoCreateQuranSchedules,
-          defaultPin: defaultPin || '1234',
+          defaultPin,
         }),
       });
       const data = await parseJsonSafe<{
@@ -857,15 +741,9 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
         const cleanSantri = parsed.santriRows.filter(
           (r) => !r.warning || r.warning !== 'Nama identik dengan Nama Kelas',
         );
-        const combinedTeachers = [
-          ...parsed.pegawaiRows,
-          ...parsed.musyrifRows,
-          ...parsed.waliKelasRows,
-          ...parsed.guruRows,
-        ];
         const totalRows =
           cleanSantri.length +
-          combinedTeachers.length +
+          parsed.pegawaiRows.length +
           parsed.scheduleRows.length +
           parsed.ruanganUjian.length +
           parsed.pembinaanRows.length;
@@ -884,7 +762,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             santriRows: cleanSantri,
-            teacherRows: combinedTeachers,
+            teacherRows: parsed.pegawaiRows,
             scheduleRows: parsed.scheduleRows,
             ruanganUjian: parsed.ruanganUjian,
             pembinaanRows: parsed.pembinaanRows,
@@ -900,6 +778,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
           schedules: { added: number; updated?: number };
           ruanganUjianAdded: number;
         }>(res);
+        setExcelWorkbook(parsed);
 
         if (auth.currentUser) {
           fetch('/api/firebase/snapshot')
@@ -979,12 +858,6 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     const cleanSantri = excelWorkbook.santriRows.filter(
       (r) => !r.warning || r.warning !== 'Nama identik dengan Nama Kelas',
     );
-    const combinedTeachers = [
-      ...excelWorkbook.pegawaiRows,
-      ...excelWorkbook.musyrifRows,
-      ...excelWorkbook.waliKelasRows,
-      ...excelWorkbook.guruRows,
-    ];
     setImporting(true);
     try {
       const res = await fetch('/api/import/all-in-one', {
@@ -992,7 +865,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           santriRows: cleanSantri,
-          teacherRows: combinedTeachers,
+          teacherRows: excelWorkbook.pegawaiRows,
           scheduleRows: excelWorkbook.scheduleRows,
           ruanganUjian: excelWorkbook.ruanganUjian,
           pembinaanRows: excelWorkbook.pembinaanRows,
@@ -1026,7 +899,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       onDataUpdated();
       loadWorkbookSpec();
       loadAdminEntities();
-      if (cleanSantri.length === 0 && combinedTeachers.length > 0) {
+      if (cleanSantri.length === 0 && excelWorkbook.pegawaiRows.length > 0) {
         setActiveTab('pegawai_amanah');
       }
     } catch (err) {
@@ -2429,14 +2302,14 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-base font-bold text-slate-900 leading-snug">
-                  1. Template &amp; Upload Seluruh Database Sekolah Sekaligus (1 File Excel · 11 Sheet Terpadu)
+                  Template &amp; Upload Database Sekolah Terpadu (1 File Excel · 11 Sheet)
                 </h2>
                 <span className="rounded-md bg-emerald-600 px-2.5 py-0.5 text-[11px] font-bold text-white shadow-2xs">
-                  Seluruh Database (All-in-One)
+                  Token Login Terpusat di Master_Pegawai
                 </span>
               </div>
               <p className="text-xs text-slate-700 mt-1 leading-relaxed">
-                Tempat unduh dan upload <b>1 file Excel (<span className="font-mono-num">.xlsx</span>) yang berisi seluruh database sekolah sekaligus</b>: Santri Putra, Santri Putri, Master Pegawai, Wali Asrama (Musyrif &amp; Musyrifah), Wali Kelas, Guru &amp; Pengampu Al-Qur&apos;an, Jadwal KBM/Halaqah, Ruang Ujian, dan Pembinaan ({workbookSpec?.sourceLabel || 'memuat...'}).
+                Satu template resmi (<span className="font-mono-num font-semibold">Template_Database_PINTAR_SIM.xlsx</span>) untuk seluruh database sekolah: Santri Putra &amp; Putri, <b>Master_Pegawai (sumber tunggal Username &amp; Token Login)</b>, Wali Asrama, Wali Kelas, Guru &amp; Pengampu Al-Qur&apos;an, Jadwal KBM/Halaqah, Ruang Ujian, dan Pembinaan ({workbookSpec?.sourceLabel || 'memuat...'}).
               </p>
             </div>
           </div>
@@ -2449,7 +2322,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
             {templateMinimized ? (
               <>
                 <ChevronDown className="h-3.5 w-3.5" />
-                Tampilkan 11 Sheet
+                Tampilkan 10 Sheet Data
               </>
             ) : (
               <>
@@ -2460,7 +2333,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
           </button>
         </div>
 
-        {/* Tombol Utama Unduh & Upload Seluruh Database Sekaligus */}
+        {/* Langkah & Tombol Utama Unduh & Upload Template */}
         <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4 border-t border-emerald-200/80 pt-3.5">
           <button
             type="button"
@@ -2469,13 +2342,13 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 px-4 py-3 text-xs font-bold text-white shadow-sm hover:from-emerald-700 hover:to-teal-800 whitespace-nowrap disabled:opacity-50"
           >
             <Download className="h-4 w-4 shrink-0" />
-            <span>1. Unduh Template Seluruh Database (.xlsx)</span>
+            <span>1. Unduh Template Database (.xlsx)</span>
           </button>
 
           <label className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#0B1324] px-4 py-3 text-xs font-bold text-white shadow-sm hover:bg-slate-800 cursor-pointer whitespace-nowrap transition-colors">
             <Upload className="h-4 w-4 text-teal-300 shrink-0" />
             <span>
-              {importing ? 'Mengupload & Menyimpan...' : '2. Upload & Simpan Seluruh Database (.xlsx)'}
+              {importing ? 'Mengupload & Menyimpan...' : '2. Upload & Simpan Template (.xlsx)'}
             </span>
             <input
               type="file"
@@ -2488,7 +2361,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
 
           <label className="inline-flex items-center justify-center gap-2 rounded-xl border-2 border-emerald-600 bg-white px-4 py-3 text-xs font-bold text-emerald-900 hover:bg-emerald-50 cursor-pointer whitespace-nowrap transition-colors">
             <FileSpreadsheet className="h-4 w-4 text-emerald-700 shrink-0" />
-            <span>Upload &amp; Pratinjau Dulu (.xlsx)</span>
+            <span>3. Upload &amp; Pratinjau Dulu (.xlsx)</span>
             <input
               type="file"
               accept=".xlsx,.xls,.csv"
@@ -2523,10 +2396,38 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white/80 border border-emerald-200/80 px-3.5 py-2 text-[11px] text-slate-700">
-          <span>
-            <b>Cara Pakai:</b> Klik <b>1. Unduh Template Seluruh Database (.xlsx)</b> → isi/edit sheet di Excel → klik <b>2. Upload &amp; Simpan Seluruh Database (.xlsx)</b> untuk langsung memasukkan seluruh data ke sistem. <b>Klik salah satu kartu sheet di bawah untuk melihat isi tabelnya.</b>
-          </span>
+        {/* Baris Kontrol Mode Upload & Tindakan Cepat */}
+        <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-lg bg-white/90 border border-emerald-200/80 px-3.5 py-2.5 text-[11px] text-slate-700">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-bold text-slate-900">Mode Upload Template:</span>
+            <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+              <button
+                type="button"
+                onClick={() => setReplaceExisting(false)}
+                className={`rounded-md px-2.5 py-1 font-semibold transition-colors ${
+                  !replaceExisting
+                    ? 'bg-emerald-700 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Gabungkan / Perbarui Data
+              </button>
+              <button
+                type="button"
+                onClick={() => setReplaceExisting(true)}
+                className={`rounded-md px-2.5 py-1 font-semibold transition-colors ${
+                  replaceExisting
+                    ? 'bg-rose-600 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Ganti / Timpa Data Lama
+              </button>
+            </div>
+            <span className="text-slate-500">
+              • <b>Token Login</b> pegawai diambil langsung dari sheet <span className="font-mono-num font-semibold text-teal-800">Master_Pegawai</span>.
+            </span>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -2535,7 +2436,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
               className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-900 hover:bg-emerald-100"
             >
               <Sparkles className="h-3 w-3" />
-              Lihat Pratinjau Isi Template
+              Pratinjau Isi Template Aktif
             </button>
             <button
               type="button"
@@ -2702,178 +2603,6 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
         )}
       </div>
 
-      {/* 2. OPSIONAL: PER-COMPONENT INDIVIDUAL TEMPLATES (8 SEPARATE EXCEL FILES) */}
-      <div className="rounded-xl border border-teal-300 bg-white p-5 space-y-4 shadow-xs">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-4">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-700 text-white shadow-sm shrink-0">
-              <FileSpreadsheet className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-base font-bold text-slate-900">
-                  2. Opsi Template Terpisah Per Komponen (8 File Excel Satuan)
-                </h2>
-                <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[11px] font-semibold text-teal-900">
-                  Jika Ingin Upload Per Bagian Saja
-                </span>
-              </div>
-              <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                Gunakan bagian ini jika Anda hanya ingin mengunduh atau mengupload <b>salah satu komponen saja</b> secara terpisah (misalnya hanya Siswa Putri atau hanya Master Pegawai).
-              </p>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setComponentTemplatesMinimized((v) => !v)}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 whitespace-nowrap shrink-0"
-          >
-            {componentTemplatesMinimized ? (
-              <>
-                <ChevronDown className="h-3.5 w-3.5" />
-                Tampilkan 8 Template Komponen
-              </>
-            ) : (
-              <>
-                <ChevronUp className="h-3.5 w-3.5" />
-                Sembunyikan
-              </>
-            )}
-          </button>
-        </div>
-
-        {!componentTemplatesMinimized && (
-          <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 xl:grid-cols-4">
-            {COMPONENT_TEMPLATES.map((tpl) => {
-              const isUploadingThis = uploadingComponentKey === tpl.key;
-              const statusText = componentUploadStatus[tpl.key];
-
-              // Calculate current live row count from server workbookSpec for this component
-              const currentRowCount = workbookSpec
-                ? workbookSpec.sheets
-                    .filter((s) => tpl.sheetNamesInSpec.includes(s.name))
-                    .reduce((acc, s) => acc + Math.max(0, s.rows.length - 1), 0)
-                : 0;
-
-              return (
-                <div
-                  key={tpl.key}
-                  className="flex flex-col justify-between rounded-xl border border-slate-200 bg-slate-50/60 p-4 hover:border-teal-300 hover:bg-white transition-all space-y-3"
-                >
-                  <div className="space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#0B1324] font-mono-num text-[11px] font-bold text-teal-300 shrink-0">
-                          {tpl.stepNumber}
-                        </span>
-                        <h3 className="text-xs font-bold text-slate-900 leading-snug">{tpl.title}</h3>
-                      </div>
-                      <span className="rounded-md border border-slate-200 bg-white px-2 py-0.5 font-mono-num text-[10px] font-semibold text-slate-700 whitespace-nowrap shrink-0">
-                        {currentRowCount} data
-                      </span>
-                    </div>
-
-                    <p className="text-[11px] text-slate-600 leading-relaxed">{tpl.subtitle}</p>
-
-                    <div className="rounded-lg border border-slate-200/80 bg-white p-2.5">
-                      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                        Kolom di File Excel:
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {tpl.columnsSummary.map((col) => (
-                          <span
-                            key={col}
-                            className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-700"
-                          >
-                            {col}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    {statusText && (
-                      <div className="flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                        <span className="truncate">{statusText}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="pt-2 border-t border-slate-200/80 space-y-1.5">
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadComponentTemplate(tpl.key, 'blank')}
-                        className="inline-flex items-center justify-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-800 hover:bg-slate-100 transition-colors whitespace-nowrap shrink-0"
-                        title="Unduh template kosong (hanya kolom & 2 contoh baris)"
-                      >
-                        <Download className="h-3 w-3 text-teal-700 shrink-0" />
-                        Template Kosong
-                      </button>
-                      <button
-                        type="button"
-                        disabled={loadingSpec}
-                        onClick={() => handleDownloadComponentTemplate(tpl.key, 'filled')}
-                        className="inline-flex items-center justify-center gap-1 rounded-lg border border-teal-300 bg-teal-50/80 px-2.5 py-1.5 text-[11px] font-semibold text-teal-900 hover:bg-teal-100 transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
-                        title="Unduh template berisi data saat ini"
-                      >
-                        <Download className="h-3 w-3 text-teal-700 shrink-0" />
-                        + Data Saat Ini
-                      </button>
-                    </div>
-
-                    <label className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#0B1324] px-3 py-2 text-[11px] font-semibold text-white hover:bg-slate-800 cursor-pointer transition-colors whitespace-nowrap shrink-0">
-                      <Upload className="h-3.5 w-3.5 text-teal-300 shrink-0" />
-                      <span>
-                        {isUploadingThis ? 'Mengupload & Menyimpan...' : `Upload ${tpl.title.split(' ')[0]} (.xlsx / .csv)`}
-                      </span>
-                      <input
-                        type="file"
-                        accept=".xlsx,.xls,.csv"
-                        disabled={isUploadingThis}
-                        onChange={(e) => handleSingleComponentFileUpload(tpl.key, tpl.title, e)}
-                        className="hidden"
-                      />
-                    </label>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (tpl.key === 'master_pegawai') {
-                          setActiveTab('pegawai_amanah');
-                        } else {
-                          setActiveTab('kelola');
-                          if (tpl.key === 'guru_quran') {
-                            setJKategori('Al-Quran');
-                            setMPeran('Pengampu Al-Quran');
-                          } else if (tpl.key === 'wali_kelas') {
-                            setMPeran('Wali Kelas');
-                          } else if (tpl.key === 'musyrif_kamar') {
-                            setMPeran('Musyrif');
-                          }
-                        }
-                        notify(
-                          `Membuka form Input & Edit Langsung untuk komponen "${tpl.title}".`,
-                          'info'
-                        );
-                        setTimeout(() => {
-                          managementPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                        }, 80);
-                      }}
-                      className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50/60 px-3 py-1.5 text-[11px] font-semibold text-teal-900 hover:bg-teal-100/80 transition-colors whitespace-nowrap shrink-0"
-                    >
-                      <Edit3 className="h-3 w-3 text-teal-700 shrink-0" />
-                      <span>Isi / Edit Langsung di Sistem →</span>
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
       {/* UPLOAD & MANAGEMENT PANEL */}
       <div ref={managementPanelRef} className="rounded-xl border border-slate-200 bg-white p-5 space-y-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between border-b border-slate-200 pb-4">
@@ -2887,7 +2616,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                   : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'
               }`}
             >
-              1. Upload Excel (.xlsx)
+              1. Pratinjau &amp; Upload Template (.xlsx)
             </button>
             <button
               type="button"
@@ -2898,7 +2627,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                   : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'
               }`}
             >
-              2. Pegawai &amp; Amanah ({staffDirectory.length})
+              2. Pegawai, Amanah &amp; Token ({staffDirectory.length})
             </button>
             <button
               type="button"
@@ -2913,7 +2642,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
             </button>
           </div>
           <p className="text-xs text-slate-500">
-            Tidak wajib isi semua template: bisa upload <b>Master_Pegawai</b> saja lalu klik nama pegawai untuk menetapkan amanah kamar, kelas, atau musyrif.
+            Seluruh <b>Token Login</b> pegawai terpusat hanya pada sheet <b>Master_Pegawai</b> di dalam template.
           </p>
         </div>
 
@@ -2925,10 +2654,10 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                   <FileSpreadsheet className="h-5 w-5" />
                 </span>
                 <span className="text-xs font-bold text-slate-900">
-                  {excelWorkbook ? excelWorkbook.fileName : 'Pilih File Excel / CSV (.xlsx / .xls / .csv)'}
+                  {excelWorkbook ? excelWorkbook.fileName : 'Pilih File Template Excel (.xlsx)'}
                 </span>
                 <span className="mt-1 text-[11px] text-slate-500">
-                  Bisa upload lengkap seluruh sheet ATAU hanya file/sheet Data Putri atau Master Pegawai saja
+                  Pilih file <b>Template_Database_PINTAR_SIM.xlsx</b> untuk memeriksa pratinjau data &amp; Token Login sebelum disimpan
                 </span>
                 <input
                   type="file"
@@ -2943,12 +2672,12 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                 onClick={() => setActiveTab('pegawai_amanah')}
                 className="flex w-full items-center justify-between rounded-xl border border-indigo-200 bg-indigo-50/70 px-3.5 py-2.5 text-left text-xs font-semibold text-indigo-900 hover:bg-indigo-100/70 transition-colors"
               >
-                <span>Atur Amanah via Klik Nama Pegawai →</span>
+                <span>Atur Amanah &amp; Token Pegawai →</span>
                 <UserCheck className="h-4 w-4 text-indigo-700 shrink-0" />
               </button>
 
               <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 space-y-2.5 text-xs">
-                <div className="font-semibold text-slate-900">Opsi Upload Sekaligus</div>
+                <div className="font-semibold text-slate-900">Pengaturan Saat Upload Template</div>
                 <label className="flex items-start gap-2 cursor-pointer">
                   <input
                     type="checkbox"
@@ -2957,7 +2686,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                     className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-700"
                   />
                   <span className="text-slate-700">
-                    Otomatis buat akun <b>Pengampu Al-Qur&apos;an</b> yang belum terdaftar
+                    Otomatis sinkronkan akun <b>Pengampu Al-Qur&apos;an</b> dari sheet Santri
                   </span>
                 </label>
                 <label className="flex items-start gap-2 cursor-pointer">
@@ -2978,18 +2707,18 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                     onChange={(e) => setReplaceExisting(e.target.checked)}
                     className="mt-0.5 h-4 w-4 rounded border-slate-300 text-rose-600"
                   />
-                  <span className="text-slate-700">Ganti daftar santri &amp; jadwal lama sebelum impor</span>
+                  <span className="text-slate-700">
+                    <b>Ganti / Timpa Data Lama</b> (hapus data santri, pegawai &amp; jadwal lama sebelum upload template)
+                  </span>
                 </label>
-                <div className="pt-1">
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    PIN Default Akun Baru
-                  </label>
-                  <input
-                    type="text"
-                    value={defaultPin}
-                    onChange={(e) => setDefaultPin(e.target.value)}
-                    className="h-8 w-full rounded border border-slate-300 bg-white px-2.5 text-xs font-mono-num"
-                  />
+                <div className="rounded-lg border border-teal-200 bg-teal-50/80 p-2.5 text-[11px] text-teal-900 leading-relaxed">
+                  <div className="font-bold flex items-center gap-1.5 text-teal-950">
+                    <KeyRound className="h-3.5 w-3.5 text-teal-700 shrink-0" />
+                    <span>Token Login Hanya di Master_Pegawai</span>
+                  </div>
+                  <p className="mt-0.5 text-teal-800">
+                    Token masuk untuk seluruh guru, wali kelas, dan wali asrama diambil langsung dari kolom <b>Token Login</b> pada sheet <b>Master_Pegawai</b> di template.
+                  </p>
                 </div>
               </div>
             </div>
@@ -3158,6 +2887,8 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                               <th className="px-3 py-2 font-semibold">Amanah Tambahan</th>
                               <th className="px-3 py-2 font-semibold">Kelas Binaan</th>
                               <th className="px-3 py-2 font-semibold">Kamar Binaan</th>
+                              <th className="px-3 py-2 font-semibold">Username Login</th>
+                              <th className="px-3 py-2 font-semibold">Token Login</th>
                             </tr>
                           )}
                           {excelPreviewSheet === 'musyrif' && (
@@ -3167,7 +2898,6 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                               <th className="px-3 py-2 font-semibold">Wilayah</th>
                               <th className="px-3 py-2 font-semibold">Kamar Binaan</th>
                               <th className="px-3 py-2 font-semibold">WhatsApp</th>
-                              <th className="px-3 py-2 font-semibold">Username</th>
                             </tr>
                           )}
                           {excelPreviewSheet === 'waliKelas' && (
@@ -3176,7 +2906,6 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                               <th className="px-3 py-2 font-semibold">Wilayah</th>
                               <th className="px-3 py-2 font-semibold">Kelas Binaan</th>
                               <th className="px-3 py-2 font-semibold">WhatsApp</th>
-                              <th className="px-3 py-2 font-semibold">Username</th>
                             </tr>
                           )}
                           {excelPreviewSheet === 'guru' && (
@@ -3185,7 +2914,6 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                               <th className="px-3 py-2 font-semibold">Peran</th>
                               <th className="px-3 py-2 font-semibold">Wilayah</th>
                               <th className="px-3 py-2 font-semibold">WhatsApp</th>
-                              <th className="px-3 py-2 font-semibold">Username</th>
                             </tr>
                           )}
                           {excelPreviewSheet === 'jadwal' && (
@@ -3234,7 +2962,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                                   r.genderScope === previewWilayah ||
                                   r.genderScope === 'Semua',
                               )
-                              .slice(0, 50)
+                              .slice(0, 80)
                               .map((r, i) => (
                                 <tr key={i} className="hover:bg-slate-50">
                                   <td className="px-3 py-1.5 font-semibold text-slate-900">{r.nama}</td>
@@ -3257,6 +2985,14 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                                     {r.waliKelasOf || '-'}
                                   </td>
                                   <td className="px-3 py-1.5">{r.kamarBinaan?.join(', ') || '-'}</td>
+                                  <td className="px-3 py-1.5 font-mono-num text-slate-600">
+                                    {r.username || '-'}
+                                  </td>
+                                  <td className="px-3 py-1.5">
+                                    <span className="inline-flex items-center rounded-md border border-teal-300 bg-teal-50 px-2 py-0.5 font-mono-num text-[11px] font-bold text-teal-900">
+                                      {r.pin || generateClientTeacherToken(r.nama)}
+                                    </span>
+                                  </td>
                                 </tr>
                               ))}
                           {excelPreviewSheet === 'musyrif' &&
@@ -3282,9 +3018,6 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                                   <td className="px-3 py-1.5">{r.kamarBinaan?.join(', ') || '-'}</td>
                                   <td className="px-3 py-1.5 font-mono-num text-slate-600">
                                     {r.whatsapp || '-'}
-                                  </td>
-                                  <td className="px-3 py-1.5 font-mono-num text-slate-500">
-                                    {r.username || 'otomatis'}
                                   </td>
                                 </tr>
                               ))}
@@ -3313,9 +3046,6 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                                   <td className="px-3 py-1.5 font-mono-num text-slate-600">
                                     {r.whatsapp || '-'}
                                   </td>
-                                  <td className="px-3 py-1.5 font-mono-num text-slate-500">
-                                    {r.username || 'otomatis'}
-                                  </td>
                                 </tr>
                               ))}
                           {excelPreviewSheet === 'guru' &&
@@ -3334,9 +3064,6 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                                   <td className="px-3 py-1.5">{r.genderScope}</td>
                                   <td className="px-3 py-1.5 font-mono-num text-slate-600">
                                     {r.whatsapp || '-'}
-                                  </td>
-                                  <td className="px-3 py-1.5 font-mono-num text-slate-500">
-                                    {r.username || 'otomatis'}
                                   </td>
                                 </tr>
                               ))}

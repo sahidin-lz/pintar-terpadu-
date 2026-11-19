@@ -245,8 +245,8 @@ export const COMPONENT_TEMPLATES: ComponentTemplateDefinition[] = [
   {
     key: 'master_pegawai',
     stepNumber: '01',
-    title: 'Master Pegawai & Amanah',
-    subtitle: 'Daftar induk guru/pembina. Bisa isi Nama Pegawai saja dulu, lalu klik amanah di aplikasi.',
+    title: 'Master Pegawai & Token Login',
+    subtitle: 'Daftar induk pegawai & pusat Token Login. Token Login hanya diatur pada sheet Master_Pegawai ini.',
     filenameBlank: 'Template_01_Master_Pegawai_Kosong.xlsx',
     filenameFilled: 'Template_01_Master_Pegawai_Data_Saat_Ini.xlsx',
     columnsSummary: [
@@ -258,29 +258,29 @@ export const COMPONENT_TEMPLATES: ComponentTemplateDefinition[] = [
       'Wali Kelas Dari',
       'Kamar Binaan (pisah ;)',
       'WhatsApp',
-      'Username',
-      'PIN',
+      'Username Login',
+      'Token Login',
     ],
     sheetNamesInSpec: ['Master_Pegawai'],
     blankSheets: [
       {
         name: 'Master_Pegawai',
-        label: 'Daftar Induk Pegawai',
+        label: 'Pegawai & Token Login',
         rows: [
           [
             'No',
             'Nama Pegawai (Wajib)',
             'Wilayah (Putra/Putri/Semua)',
-            'Peran Utama (Guru/Wali Kelas/Wali Asrama/Guru Wali/Musyrif/Musyrifah/Admin SIM)',
+            'Peran Utama (Guru/Wali Kelas/Wali Asrama/Guru Wali/Musyrif/Musyrifah/Pimpinan/Admin SIM)',
             'Amanah Tambahan (Pisahkan dengan ; misal: Wali Kelas; Guru Wali; Wali Asrama)',
             'Amanah Wali Kelas Dari (Contoh: 10 ABU BAKAR AS-SHIDDIQ)',
             'Amanah Kamar Binaan (Pisahkan dengan ; misal: 10.1 Putra; 10.2 Putra)',
             'WhatsApp',
             'Username Login',
-            'PIN Login',
+            'Token Login',
           ],
-          ['1', 'UST. AHMAD FAUZI', 'Putra', 'Wali Kelas', 'Guru; Guru Wali; Wali Asrama', '10 ABU BAKAR AS-SHIDDIQ', '10.1 Putra', '6281234567890', 'ahmad.fauzi', '1234'],
-          ['2', 'USTZ. SITI MARIYAM', 'Putri', 'Musyrifah', 'Wali Kelas; Guru Wali', '10 KHADIJAH BINTI KHUWAILID', '10.1 Putri', '6281298765432', 'siti.mariyam', '1234'],
+          ['1', 'UST. AHMAD FAUZI', 'Putra', 'Wali Kelas', 'Guru; Guru Wali; Wali Asrama', '10 ABU BAKAR AS-SHIDDIQ', '10.1 Putra', '6281234567890', 'ahmad.fauzi', 'PN-4821'],
+          ['2', 'USTZ. SITI MARIYAM', 'Putri', 'Musyrifah', 'Wali Kelas; Guru Wali', '10 KHADIJAH BINTI KHUWAILID', '10.1 Putri', '6281298765432', 'siti.mariyam', 'PN-7392'],
         ],
       },
     ],
@@ -330,7 +330,7 @@ export const COMPONENT_TEMPLATES: ComponentTemplateDefinition[] = [
     key: 'musyrif_kamar',
     stepNumber: '03',
     title: 'Musyrif/ah & Kamar Asrama',
-    subtitle: 'Khusus pembagian kamar asrama Putra & Putri beserta akun Musyrif / Musyrifah.',
+    subtitle: 'Khusus pembagian kamar asrama Putra & Putri (Token Login terpusat di Master_Pegawai).',
     filenameBlank: 'Template_03_Musyrif_Kamar_Asrama_Kosong.xlsx',
     filenameFilled: 'Template_03_Musyrif_Kamar_Asrama_Data_Saat_Ini.xlsx',
     columnsSummary: [
@@ -339,8 +339,6 @@ export const COMPONENT_TEMPLATES: ComponentTemplateDefinition[] = [
       'Kamar Binaan (pisah ;)',
       'Wilayah (Putra/Putri)',
       'WhatsApp',
-      'Username',
-      'PIN',
     ],
     sheetNamesInSpec: ['2A_Musyrif_Putra', '2B_Musyrifah_Putri'],
     blankSheets: [
@@ -348,16 +346,16 @@ export const COMPONENT_TEMPLATES: ComponentTemplateDefinition[] = [
         name: '2A_Musyrif_Putra',
         label: 'Musyrif Asrama Putra',
         rows: [
-          ['No', 'Nama Musyrif', 'Kamar Binaan (Pisahkan dengan ;)', 'Wilayah', 'WhatsApp', 'Username Login', 'PIN Login'],
-          ['1', 'UST. RIZKI PRATAMA', '10.1 Putra; 10.2 Putra', 'Putra', '62812000111', 'rizki.pratama', '1234'],
+          ['No', 'Nama Musyrif', 'Kamar Binaan (Pisahkan dengan ;)', 'Wilayah', 'WhatsApp'],
+          ['1', 'UST. RIZKI PRATAMA', '10.1 Putra; 10.2 Putra', 'Putra', '62812000111'],
         ],
       },
       {
         name: '2B_Musyrifah_Putri',
         label: 'Musyrifah Asrama Putri',
         rows: [
-          ['No', 'Nama Musyrifah', 'Kamar Binaan (Pisahkan dengan ;)', 'Wilayah', 'WhatsApp', 'Username Login', 'PIN Login'],
-          ['1', 'USTZ. SITI MARIYAM', '10.1 Putri; 10.2 Putri', 'Putri', '62812000222', 'siti.mariyam', '1234'],
+          ['No', 'Nama Musyrifah', 'Kamar Binaan (Pisahkan dengan ;)', 'Wilayah', 'WhatsApp'],
+          ['1', 'USTZ. SITI MARIYAM', '10.1 Putri; 10.2 Putri', 'Putri', '62812000222'],
         ],
       },
     ],
@@ -366,7 +364,7 @@ export const COMPONENT_TEMPLATES: ComponentTemplateDefinition[] = [
     key: 'wali_kelas',
     stepNumber: '04',
     title: 'Wali Kelas (Putra & Putri)',
-    subtitle: 'Khusus daftar Wali Kelas dan penugasan Kelas Binaan Akademik.',
+    subtitle: 'Khusus daftar Wali Kelas dan penugasan Kelas Binaan Akademik (Token Login terpusat di Master_Pegawai).',
     filenameBlank: 'Template_04_Wali_Kelas_Kosong.xlsx',
     filenameFilled: 'Template_04_Wali_Kelas_Data_Saat_Ini.xlsx',
     columnsSummary: [
@@ -375,8 +373,6 @@ export const COMPONENT_TEMPLATES: ComponentTemplateDefinition[] = [
       'Kelas Binaan',
       'Wilayah (Putra/Putri)',
       'WhatsApp',
-      'Username',
-      'PIN',
     ],
     sheetNamesInSpec: ['3A_Wali_Kelas_Putra', '3B_Wali_Kelas_Putri'],
     blankSheets: [
@@ -384,16 +380,16 @@ export const COMPONENT_TEMPLATES: ComponentTemplateDefinition[] = [
         name: '3A_Wali_Kelas_Putra',
         label: 'Wali Kelas Putra',
         rows: [
-          ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'WhatsApp', 'Username Login', 'PIN Login'],
-          ['1', 'UST. NUR FAIZIN', '10 ABU BAKAR AS-SHIDDIQ', 'Putra', '62812000333', 'nur.faizin', '1234'],
+          ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'WhatsApp'],
+          ['1', 'UST. NUR FAIZIN', '10 ABU BAKAR AS-SHIDDIQ', 'Putra', '62812000333'],
         ],
       },
       {
         name: '3B_Wali_Kelas_Putri',
         label: 'Wali Kelas Putri',
         rows: [
-          ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'WhatsApp', 'Username Login', 'PIN Login'],
-          ['1', 'USTZ. HANIFAH', '10 KHADIJAH BINTI KHUWAILID', 'Putri', '62812000444', 'hanifah', '1234'],
+          ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'WhatsApp'],
+          ['1', 'USTZ. HANIFAH', '10 KHADIJAH BINTI KHUWAILID', 'Putri', '62812000444'],
         ],
       },
     ],
@@ -402,7 +398,7 @@ export const COMPONENT_TEMPLATES: ComponentTemplateDefinition[] = [
     key: 'guru_quran',
     stepNumber: '05',
     title: "Guru Mapel & Pengampu Al-Qur'an",
-    subtitle: "Khusus akun Guru Mata Pelajaran Akademik dan Ustadz/ah Pengampu Halaqah Al-Qur'an.",
+    subtitle: "Khusus daftar Guru Mapel & Pengampu Halaqah Al-Qur'an (Token Login terpusat di Master_Pegawai).",
     filenameBlank: 'Template_05_Guru_dan_Pengampu_Quran_Kosong.xlsx',
     filenameFilled: 'Template_05_Guru_dan_Pengampu_Quran_Data_Saat_Ini.xlsx',
     columnsSummary: [
@@ -411,8 +407,6 @@ export const COMPONENT_TEMPLATES: ComponentTemplateDefinition[] = [
       'Peran (Guru / Pengampu Al-Quran)',
       'Wilayah (Putra/Putri/Semua)',
       'WhatsApp',
-      'Username',
-      'PIN',
     ],
     sheetNamesInSpec: ['3C_Guru_Pengampu'],
     blankSheets: [
@@ -420,9 +414,9 @@ export const COMPONENT_TEMPLATES: ComponentTemplateDefinition[] = [
         name: '3C_Guru_Pengampu',
         label: 'Guru & Pengampu Quran',
         rows: [
-          ['No', 'Nama Guru', 'Peran (Guru / Pengampu Al-Quran)', 'Wilayah (Putra/Putri/Semua)', 'WhatsApp', 'Username Login', 'PIN Login'],
-          ['1', 'UST. DAFFA M Z', 'Pengampu Al-Quran', 'Putra', '62812000555', 'daffa.mz', '1234'],
-          ['2', 'UST. SOFYAN IMAM KELSABA', 'Guru', 'Putra', '62812000666', 'sofyan.imam', '1234'],
+          ['No', 'Nama Guru', 'Peran (Guru / Pengampu Al-Quran)', 'Wilayah (Putra/Putri/Semua)', 'WhatsApp'],
+          ['1', 'UST. DAFFA M Z', 'Pengampu Al-Quran', 'Putra', '62812000555'],
+          ['2', 'UST. SOFYAN IMAM KELSABA', 'Guru', 'Putra', '62812000666'],
         ],
       },
     ],
@@ -719,6 +713,102 @@ export function parseDatabaseExcelBuffer(buffer: ArrayBuffer, fileName: string):
       }
     }
   }
+
+  // Konsolidasi pusat Token Login ke Master_Pegawai:
+  // Token Login hanya berasal dari Master_Pegawai (atau dibuat deterministik PN-XXXX jika kosong di Master_Pegawai),
+  // sedangkan sub-sheet (2A, 2B, 3A, 3B, 3C) hanya menyumbang amanah kamar/kelas/peran tanpa menimpa Token Login.
+  const makeDeterministicToken = (nama: string): string => {
+    const clean = String(nama || '')
+      .trim()
+      .toLowerCase()
+      .replace(/["']/g, '')
+      .replace(/\s+/g, ' ');
+    let hash = 2166136261;
+    for (let i = 0; i < clean.length; i++) {
+      hash ^= clean.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    let code = (Math.abs(hash) % 8900) + 1000;
+    if (code === 1234) code = 2468;
+    return `PN-${code}`;
+  };
+
+  const makeUsernameFromNama = (name: string): string =>
+    name
+      .toLowerCase()
+      .replace(/^(ust\.|ustadz\.|ustz\.|ustadzah\.|ust,)\s*/i, '')
+      .replace(/[^a-z0-9]+/g, '.')
+      .replace(/^\.+|\.+$/g, '')
+      .slice(0, 24) || 'user';
+
+  const masterMap = new Map<string, ParsedTeacherRow>();
+
+  // 1. Masukkan seluruh baris Master_Pegawai terlebih dahulu (sumber tunggal Token Login di template)
+  for (const p of pegawaiRows) {
+    const key = p.nama.trim().toUpperCase();
+    if (!key) continue;
+    masterMap.set(key, {
+      ...p,
+      nama: key,
+      username: p.username || makeUsernameFromNama(key),
+      pin: p.pin && p.pin.trim() ? p.pin.trim() : makeDeterministicToken(key),
+    });
+  }
+
+  // 2. Gabungkan amanah dari sub-sheet (2A, 2B, 3A, 3B, 3C) tanpa pernah menimpa Token Login di Master_Pegawai
+  const mergeSubRowIntoMaster = (sub: ParsedTeacherRow, allowPinIfNew: boolean) => {
+    const key = sub.nama.trim().toUpperCase();
+    if (!key || key === '(BELUM DITENTUKAN)' || key === 'BELUM DIATUR' || key === '-') return;
+    const existing = masterMap.get(key);
+    if (existing) {
+      const extras = new Set(existing.peranTambahan || []);
+      if (existing.peran !== sub.peran) {
+        if (existing.peran === 'Guru' && sub.peran !== 'Guru') {
+          extras.add('Guru');
+          existing.peran = sub.peran;
+        } else {
+          extras.add(sub.peran);
+        }
+      }
+      (sub.peranTambahan || []).forEach((r) => {
+        if (r !== existing.peran) extras.add(r);
+      });
+      existing.peranTambahan = extras.size > 0 ? Array.from(extras) : undefined;
+      if (!existing.waliKelasOf && sub.waliKelasOf) existing.waliKelasOf = sub.waliKelasOf;
+      if (sub.kamarBinaan && sub.kamarBinaan.length > 0) {
+        existing.kamarBinaan = Array.from(new Set([...(existing.kamarBinaan || []), ...sub.kamarBinaan]));
+      }
+      if ((!existing.whatsapp || existing.whatsapp === '628') && sub.whatsapp) {
+        existing.whatsapp = sub.whatsapp;
+      }
+      if (existing.genderScope !== sub.genderScope && existing.genderScope !== 'Semua' && sub.genderScope !== 'Semua') {
+        existing.genderScope = 'Semua';
+      }
+    } else {
+      masterMap.set(key, {
+        ...sub,
+        nama: key,
+        username: sub.username || makeUsernameFromNama(key),
+        pin: allowPinIfNew && sub.pin && sub.pin.trim() ? sub.pin.trim() : makeDeterministicToken(key),
+      });
+    }
+  };
+
+  const hasExplicitMasterSheet = pegawaiRows.length > 0;
+  for (const r of musyrifRows) {
+    mergeSubRowIntoMaster(r, !hasExplicitMasterSheet);
+    r.pin = masterMap.get(r.nama.trim().toUpperCase())?.pin;
+  }
+  for (const r of waliKelasRows) {
+    mergeSubRowIntoMaster(r, !hasExplicitMasterSheet);
+    r.pin = masterMap.get(r.nama.trim().toUpperCase())?.pin;
+  }
+  for (const r of guruRows) {
+    mergeSubRowIntoMaster(r, !hasExplicitMasterSheet);
+    r.pin = masterMap.get(r.nama.trim().toUpperCase())?.pin;
+  }
+
+  pegawaiRows = Array.from(masterMap.values());
 
   return {
     fileName,

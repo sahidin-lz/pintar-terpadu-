@@ -905,14 +905,10 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
         sanitizeExcelText((t.kamarBinaan || []).join('; ')),
         isPutri ? 'Putri' : 'Putra',
         sanitizeExcelText(t.whatsapp || '628'),
-        sanitizeExcelText(t.username),
-        sanitizeExcelText(t.pin || generateClientTeacherToken(t.nama)),
       ]);
       (t.kamarBinaan || []).forEach((km) => coveredRooms.add(km.toUpperCase()));
     }
   }
-
-  // Tidak menyisipkan data dummy Musyrif/Musyrifah; semua berasal dari upload template
 
   for (const rm of sortedRooms) {
     if (coveredRooms.has(rm.toUpperCase())) continue;
@@ -925,18 +921,16 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
       sanitizeExcelText(rm),
       isPutri ? 'Putri' : 'Putra',
       '',
-      '',
-      '',
     ]);
   }
 
   const musyrifPutraRows: string[][] = [
-    ['No', 'Nama Musyrif', 'Kamar Binaan (pisah ;)', 'Wilayah', 'WhatsApp', 'Username / Email', 'PIN'],
+    ['No', 'Nama Musyrif', 'Kamar Binaan (pisah ;)', 'Wilayah', 'WhatsApp'],
     ...musyrifPutraBody,
   ];
 
   const musyrifahPutriRows: string[][] = [
-    ['No', 'Nama Musyrifah', 'Kamar Binaan (pisah ;)', 'Wilayah', 'WhatsApp', 'Username / Email', 'PIN'],
+    ['No', 'Nama Musyrifah', 'Kamar Binaan (pisah ;)', 'Wilayah', 'WhatsApp'],
     ...musyrifahPutriBody,
   ];
 
@@ -974,8 +968,6 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
         sanitizeExcelText(kls),
         isPutri ? 'Putri' : 'Putra',
         sanitizeExcelText(existing.whatsapp || '628'),
-        sanitizeExcelText(existing.username),
-        sanitizeExcelText(existing.pin || generateClientTeacherToken(existing.nama)),
       ]);
       addedWaliNames.add(existing.nama.toUpperCase());
     } else {
@@ -985,36 +977,32 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
         sanitizeExcelText(kls),
         isPutri ? 'Putri' : 'Putra',
         '',
-        '',
-        '',
       ]);
     }
   }
 
   const waliPutraRows: string[][] = [
-    ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'WhatsApp', 'Username / Email', 'PIN'],
+    ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'WhatsApp'],
     ...waliPutraBody,
   ];
 
   const waliPutriRows: string[][] = [
-    ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'WhatsApp', 'Username / Email', 'PIN'],
+    ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'WhatsApp'],
     ...waliPutriBody,
   ];
 
-  // Sheet 3C: Guru Mapel & Pengampu Al-Qur'an
+  // Sheet 3C: Guru Mapel & Pengampu Al-Qur'an (tanpa kolom PIN ganda — Token Login terpusat di Master_Pegawai)
   const guruBody: string[][] = [];
   const addedGuruNames = new Set<string>();
   for (const t of ctx.teachers) {
     if (t.peran === 'Admin Super') continue;
-    if (t.peran === 'Guru') {
+    if (t.peran === 'Guru' || t.peran === 'Pengampu Al-Quran') {
       guruBody.push([
         String(guruBody.length + 1),
         sanitizeExcelText(t.nama),
-        'Guru',
+        t.peran === 'Pengampu Al-Quran' ? 'Pengampu Al-Quran' : 'Guru',
         sanitizeExcelText(t.genderScope || 'Semua'),
         sanitizeExcelText(t.whatsapp || '628'),
-        sanitizeExcelText(t.username),
-        sanitizeExcelText(t.pin || generateClientTeacherToken(t.nama)),
       ]);
       addedGuruNames.add(t.nama.toUpperCase());
     }
@@ -1024,20 +1012,18 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
     guruBody.push([
       String(guruBody.length + 1),
       sanitizeExcelText(pengampu),
-      'Guru / Pengampu Al-Quran',
+      'Pengampu Al-Quran',
       g,
       '628',
-      makeUsernameClient(pengampu),
-      '1234',
     ]);
     addedGuruNames.add(pengampu);
   }
   const guruRows: string[][] = [
-    ['No', 'Nama Guru / Pengampu', 'Peran / Bidang', 'Wilayah (Putra/Putri/Semua)', 'WhatsApp', 'Username / Email', 'PIN'],
+    ['No', 'Nama Guru / Pengampu', 'Peran / Bidang', 'Wilayah (Putra/Putri/Semua)', 'WhatsApp'],
     ...guruBody,
   ];
 
-  // Sheet Master_Pegawai: Daftar seluruh Pegawai / Ustadz / Ustadzah
+  // Sheet Master_Pegawai: SATU-SATUNYA pusat Daftar Pegawai & Token Login di dalam Template
   const pegawaiMap = new Map<
     string,
     {
@@ -1049,7 +1035,7 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
       kamarBinaan: string;
       whatsapp: string;
       username: string;
-      pin: string;
+      tokenLogin: string;
     }
   >();
 
@@ -1063,8 +1049,8 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
       kelasBinaan: sanitizeExcelText(t.waliKelasOf || ''),
       kamarBinaan: sanitizeExcelText((t.kamarBinaan || []).join('; ')),
       whatsapp: sanitizeExcelText(t.whatsapp || '628'),
-      username: sanitizeExcelText(t.username),
-      pin: sanitizeExcelText(t.pin || generateClientTeacherToken(t.nama)),
+      username: sanitizeExcelText(t.username || makeUsernameClient(t.nama)),
+      tokenLogin: sanitizeExcelText(t.pin || generateClientTeacherToken(t.nama)),
     });
   }
 
@@ -1072,10 +1058,10 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
     nama: string,
     wilayah: 'Putra' | 'Putri' | 'Semua',
     role: string,
-    opts: { kelas?: string; kamar?: string; wa?: string; user?: string },
+    opts: { kelas?: string; kamar?: string; wa?: string },
   ) => {
     const key = nama.trim().toUpperCase();
-    if (!key || key === '(BELUM DITENTUKAN)' || key === 'BELUM DIATUR') return;
+    if (!key || key === '(BELUM DITENTUKAN)' || key === 'BELUM DIATUR' || key === '-') return;
     const prev = pegawaiMap.get(key);
     if (prev) {
       if (prev.amanahUtama !== role && !prev.amanahTambahan.includes(role)) {
@@ -1084,7 +1070,6 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
       if (!prev.kelasBinaan && opts.kelas) prev.kelasBinaan = opts.kelas;
       if (!prev.kamarBinaan && opts.kamar) prev.kamarBinaan = opts.kamar;
       if ((!prev.whatsapp || prev.whatsapp === '628') && opts.wa) prev.whatsapp = opts.wa;
-      if (!prev.username && opts.user) prev.username = opts.user;
     } else {
       pegawaiMap.set(key, {
         nama: sanitizeExcelText(nama),
@@ -1094,28 +1079,38 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
         kelasBinaan: sanitizeExcelText(opts.kelas || ''),
         kamarBinaan: sanitizeExcelText(opts.kamar || ''),
         whatsapp: sanitizeExcelText(opts.wa || '628'),
-        username: sanitizeExcelText(opts.user || makeUsernameClient(nama)),
-        pin: '1234',
+        username: sanitizeExcelText(makeUsernameClient(nama)),
+        tokenLogin: sanitizeExcelText(generateClientTeacherToken(nama)),
       });
     }
   };
 
   for (const r of musyrifPutraBody) {
-    upsertTemplatePegawai(r[1], 'Putra', 'Musyrif', { kamar: r[2], wa: r[4], user: r[5] });
+    upsertTemplatePegawai(r[1], 'Putra', 'Musyrif', { kamar: r[2], wa: r[4] });
   }
   for (const r of musyrifahPutriBody) {
-    upsertTemplatePegawai(r[1], 'Putri', 'Musyrifah', { kamar: r[2], wa: r[4], user: r[5] });
+    upsertTemplatePegawai(r[1], 'Putri', 'Musyrifah', { kamar: r[2], wa: r[4] });
   }
   for (const r of waliPutraBody) {
-    upsertTemplatePegawai(r[1], 'Putra', 'Wali Kelas', { kelas: r[2], wa: r[4], user: r[5] });
+    upsertTemplatePegawai(r[1], 'Putra', 'Wali Kelas', { kelas: r[2], wa: r[4] });
   }
   for (const r of waliPutriBody) {
-    upsertTemplatePegawai(r[1], 'Putri', 'Wali Kelas', { kelas: r[2], wa: r[4], user: r[5] });
+    upsertTemplatePegawai(r[1], 'Putri', 'Wali Kelas', { kelas: r[2], wa: r[4] });
   }
   for (const r of guruBody) {
     const w: 'Putra' | 'Putri' | 'Semua' =
       r[3] === 'Putri' ? 'Putri' : r[3] === 'Putra' ? 'Putra' : 'Semua';
-    upsertTemplatePegawai(r[1], w, 'Guru', { wa: r[4], user: r[5] });
+    upsertTemplatePegawai(r[1], w, r[2] === 'Pengampu Al-Quran' ? 'Pengampu Al-Quran' : 'Guru', { wa: r[4] });
+  }
+  for (const sc of ctx.schedules) {
+    if (sc.guru) {
+      upsertTemplatePegawai(
+        sc.guru,
+        sc.gender || inferGenderClient(sc.guru),
+        sc.kategori === 'Al-Quran' ? 'Pengampu Al-Quran' : 'Guru',
+        {},
+      );
+    }
   }
 
   const masterPegawaiBody: string[][] = Array.from(pegawaiMap.values())
@@ -1130,7 +1125,7 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
       p.kamarBinaan,
       p.whatsapp,
       p.username,
-      p.pin,
+      p.tokenLogin,
     ]);
 
   const masterPegawaiRows: string[][] = [
@@ -1138,13 +1133,13 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
       'No',
       'Nama Pegawai',
       'Wilayah (Putra/Putri/Semua)',
-      'Amanah Utama (Guru/Wali Kelas/Musyrif/Musyrifah)',
+      'Amanah Utama (Guru/Wali Kelas/Musyrif/Musyrifah/Pimpinan)',
       'Amanah Tambahan (pisah ;)',
       'Kelas Binaan',
       'Kamar Binaan (pisah ;)',
       'WhatsApp',
-      'Username / Email',
-      'PIN',
+      'Username Login',
+      'Token Login',
     ],
     ...masterPegawaiBody,
   ];
@@ -1176,31 +1171,31 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
   // Sheet 0: Panduan Singkat + Ringkasan Tabel Terpisah
   const guideRows: string[][] = [
     ['TEMPLATE DATABASE MASTER SEKOLAH (.XLSX) - PINTAR TERPADU (WILAYAH PUTRA & PUTRI)'],
-    ['TIPS CEPAT: Anda TIDAK harus mengisi semua sheet. Cukup upload Sheet Master_Pegawai (bahkan hanya Nama Pegawai saja), lalu di aplikasi Admin Super klik Nama Pegawai -> klik Amanah Kamar / Wali Kelas / Musyrif / Guru!'],
-    ['Pemisahan Sheet: Siswa (1A/1B), Master_Pegawai, Musyrif Putra (2A), Musyrifah Putri (2B), Wali Kelas Putra (3A), Wali Kelas Putri (3B), dan Guru Pengampu (3C).'],
+    ['PUSAT TOKEN LOGIN: Kolom "Token Login" HANYA ada di sheet "Master_Pegawai". Seluruh guru, wali kelas, wali asrama, dan pimpinan menggunakan Token Login dari sheet Master_Pegawai ini.'],
+    ['Pemisahan Sheet: Siswa (1A/1B), Master_Pegawai (Pusat Akun & Token Login), Musyrif Putra (2A), Musyrifah Putri (2B), Wali Kelas Putra (3A), Wali Kelas Putri (3B), dan Guru Pengampu (3C).'],
     [''],
     ['Nama Sheet', 'Isi Tabel Khusus', 'Jumlah Baris', 'Kolom Utama & Keterangan'],
     ['1A_Siswa_Putra', 'Master Santri Wilayah Putra', String(santriPutraRows.length - 1), `${putraCount} santri Putra (${putraSourceNote}).`],
     ['1B_Siswa_Putri', 'Master Santri Wilayah Putri', String(santriPutriRows.length - 1), `${putriCount} santri Putri (${putriSourceNote}).`],
-    ['Master_Pegawai', 'Daftar Induk Seluruh Pegawai', String(masterPegawaiRows.length - 1), 'Boleh isi Nama Pegawai saja dulu, lalu klik amanah kamar/kelas di aplikasi!'],
-    ['2A_Musyrif_Putra', 'Tabel Musyrif Asrama Putra', String(musyrifPutraRows.length - 1), 'No | Nama Musyrif | Kamar Binaan (pisah ;) | Wilayah | WhatsApp | Username | PIN'],
-    ['2B_Musyrifah_Putri', 'Tabel Musyrifah Asrama Putri', String(musyrifahPutriRows.length - 1), 'No | Nama Musyrifah | Kamar Binaan (pisah ;) | Wilayah | WhatsApp | Username | PIN'],
-    ['3A_Wali_Kelas_Putra', 'Tabel Wali Kelas Wilayah Putra', String(waliPutraRows.length - 1), 'No | Nama Wali Kelas | Kelas Binaan | Wilayah | WhatsApp | Username | PIN'],
-    ['3B_Wali_Kelas_Putri', 'Tabel Wali Kelas Wilayah Putri', String(waliPutriRows.length - 1), 'No | Nama Wali Kelas | Kelas Binaan | Wilayah | WhatsApp | Username | PIN'],
-    ['3C_Guru_Pengampu', 'Tabel Guru Mapel & Pengampu Qur’an', String(guruRows.length - 1), 'No | Nama Guru | Peran | Wilayah (Putra/Putri/Semua) | WhatsApp | Username | PIN'],
+    ['Master_Pegawai', 'Daftar Induk Pegawai & Token Login', String(masterPegawaiRows.length - 1), 'No | Nama Pegawai | Wilayah | Amanah Utama | Amanah Tambahan | Kelas Binaan | Kamar Binaan | WhatsApp | Username Login | Token Login'],
+    ['2A_Musyrif_Putra', 'Tabel Musyrif Asrama Putra', String(musyrifPutraRows.length - 1), 'No | Nama Musyrif | Kamar Binaan (pisah ;) | Wilayah | WhatsApp (Token Login terpusat di Master_Pegawai)'],
+    ['2B_Musyrifah_Putri', 'Tabel Musyrifah Asrama Putri', String(musyrifahPutriRows.length - 1), 'No | Nama Musyrifah | Kamar Binaan (pisah ;) | Wilayah | WhatsApp (Token Login terpusat di Master_Pegawai)'],
+    ['3A_Wali_Kelas_Putra', 'Tabel Wali Kelas Wilayah Putra', String(waliPutraRows.length - 1), 'No | Nama Wali Kelas | Kelas Binaan | Wilayah | WhatsApp (Token Login terpusat di Master_Pegawai)'],
+    ['3B_Wali_Kelas_Putri', 'Tabel Wali Kelas Wilayah Putri', String(waliPutriRows.length - 1), 'No | Nama Wali Kelas | Kelas Binaan | Wilayah | WhatsApp (Token Login terpusat di Master_Pegawai)'],
+    ['3C_Guru_Pengampu', 'Tabel Guru Mapel & Pengampu Qur’an', String(guruRows.length - 1), 'No | Nama Guru | Peran | Wilayah (Putra/Putri/Semua) | WhatsApp (Token Login terpusat di Master_Pegawai)'],
     ['4_Jadwal_Mengajar', 'Jadwal Akademik & Halaqah Putra/Putri', String(jadwalRows.length - 1), 'Hari: SENIN-SABTU (Senin/Jumat 6 JP, Sel-Kam 9 JP, Sabtu 7 JP).'],
     ['5_Ruang_Ujian', 'Daftar Ruangan Ujian Putra & Putri', String(ruangRows.length - 1), 'Tandai ruangan Putra / Putri / Semua.'],
     [''],
-    ['CARA PRAKTIS:'],
-    ['1. Upload Sheet Master_Pegawai (atau paste daftar nama di panel Admin Super -> tab 2. Master Pegawai & Amanah).'],
-    ['2. Klik nama pegawai yang sudah masuk, lalu klik amanah Kamar Asrama, Kelas Wali, Musyrif/ah, atau Guru langsung dari aplikasi.'],
+    ['ALUR UPLOAD TEMPLATE:'],
+    ['1. Klik "1. Unduh Template (.xlsx)" -> isi data santri & pegawai (Token Login hanya diatur di sheet Master_Pegawai).'],
+    ['2. Klik "2. Upload & Simpan Template (.xlsx)" -> seluruh data dan Token Login dari template langsung aktif di sistem.'],
   ];
 
   const sheets: WorkbookSheetSpec[] = [
     { name: '0_Panduan', label: 'Panduan & Peta Sheet', rows: guideRows },
     { name: '1A_Siswa_Putra', label: 'Santri Wilayah Putra', rows: santriPutraRows },
     { name: '1B_Siswa_Putri', label: 'Santri Wilayah Putri', rows: santriPutriRows },
-    { name: 'Master_Pegawai', label: 'Daftar Induk Pegawai', rows: masterPegawaiRows },
+    { name: 'Master_Pegawai', label: 'Pegawai & Token Login', rows: masterPegawaiRows },
     { name: '2A_Musyrif_Putra', label: 'Musyrif Asrama Putra', rows: musyrifPutraRows },
     { name: '2B_Musyrifah_Putri', label: 'Musyrifah Asrama Putri', rows: musyrifahPutriRows },
     { name: '3A_Wali_Kelas_Putra', label: 'Wali Kelas Putra', rows: waliPutraRows },
@@ -2034,7 +2029,7 @@ export function resolveTeacherToken(teacher: Pick<TeacherPublic, 'nama' | 'pin' 
   if (teacher.peran === 'Admin Super') {
     return teacher.pin || '121320';
   }
-  if (teacher.pin && teacher.pin.trim() && teacher.pin.trim() !== '1234') {
+  if (teacher.pin && teacher.pin.trim()) {
     return teacher.pin.trim();
   }
   return generateClientTeacherToken(teacher.nama);

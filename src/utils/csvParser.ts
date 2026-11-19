@@ -509,7 +509,9 @@ export function parseTeacherRows(
       })()
     : -1;
   const userIdx = hasHeader ? findCol('username', 'email') : -1;
-  const pinIdx = hasHeader ? findCol('pin', 'password') : -1;
+  const pinIdx = hasHeader
+    ? findCol('token login', 'token akses', 'token', 'pin', 'password', 'kode login', 'kode akses')
+    : -1;
 
   const parsed: ParsedTeacherRow[] = [];
   for (const cols of dataRows) {
@@ -605,15 +607,17 @@ export function parseTeacherRows(
       (waIdx >= 0 ? cols[waIdx] : !hasHeader ? cols[5] : '').trim() || undefined;
 
     let username: string | undefined;
-    let pin = '1234';
+    let pin: string | undefined;
     if (hasHeader) {
       username = userIdx >= 0 ? (cols[userIdx] || '').trim().toLowerCase() || undefined : undefined;
-      pin = (pinIdx >= 0 ? cols[pinIdx] : '').trim() || '1234';
+      const rawPin = pinIdx >= 0 ? (cols[pinIdx] || '').trim() : '';
+      pin = rawPin && rawPin !== '-' && rawPin.toUpperCase() !== 'KOSONG' ? rawPin : undefined;
     } else {
       const col6 = (cols[6] || '').trim();
       const col7 = (cols[7] || '').trim();
       username = col7 ? col6.toLowerCase() : undefined;
-      pin = (col7 || col6 || '1234').trim();
+      const rawPin = (col7 || col6 || '').trim();
+      pin = rawPin && rawPin !== '-' ? rawPin : undefined;
     }
 
     parsed.push({
