@@ -829,6 +829,90 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     reader.readAsArrayBuffer(file);
   };
 
+  const handleDirectUploadFullDatabaseFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const buf = ev.target?.result as ArrayBuffer;
+      if (!buf) return;
+      try {
+        const parsed = parseDatabaseExcelBuffer(buf, file.name);
+        const cleanSantri = parsed.santriRows.filter(
+          (r) => !r.warning || r.warning !== 'Nama identik dengan Nama Kelas',
+        );
+        const combinedTeachers = [
+          ...parsed.pegawaiRows,
+          ...parsed.musyrifRows,
+          ...parsed.waliKelasRows,
+          ...parsed.guruRows,
+        ];
+        const totalRows =
+          cleanSantri.length +
+          combinedTeachers.length +
+          parsed.scheduleRows.length +
+          parsed.ruanganUjian.length +
+          parsed.pembinaanRows.length;
+
+        if (totalRows === 0) {
+          notify(
+            `File ${file.name} terbaca (${parsed.detectedSheets.length} sheet) tetapi belum ada baris data yang cocok dengan kolom SIM.`,
+            'error',
+          );
+          return;
+        }
+
+        setImporting(true);
+        const res = await fetch('/api/import/all-in-one', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            santriRows: cleanSantri,
+            teacherRows: combinedTeachers,
+            scheduleRows: parsed.scheduleRows,
+            ruanganUjian: parsed.ruanganUjian,
+            pembinaanRows: parsed.pembinaanRows,
+            replaceExisting,
+            autoCreateAccounts,
+            autoCreateQuranSchedules,
+            defaultPin,
+          }),
+        });
+        const data = await parseJsonSafe<{
+          santri: { inserted: number; updated: number };
+          teachers: { added: number; updated: number };
+          schedules: { added: number; updated?: number };
+          ruanganUjianAdded: number;
+        }>(res);
+
+        if (auth.currentUser) {
+          fetch('/api/firebase/snapshot')
+            .then((r) => (r.ok ? r.json() : null))
+            .then((snap) => (snap ? pushSnapshotToFirestore(snap) : null))
+            .then(() => fetch('/api/firebase/mark-synced', { method: 'POST' }))
+            .catch(() => {});
+        }
+
+        onDataUpdated();
+        loadWorkbookSpec();
+        loadAdminEntities();
+        notify(
+          `Seluruh Database dari "${file.name}" berhasil diupload & disimpan! Santri: ${data.santri.inserted} baru / ${data.santri.updated} update · Pegawai/Guru: ${data.teachers.added + data.teachers.updated} · Jadwal: ${data.schedules.added + (data.schedules.updated || 0)} · Ruang Ujian: ${data.ruanganUjianAdded}.`,
+          'success',
+        );
+      } catch (err) {
+        notify(
+          (err as Error).message || 'Gagal membaca atau menyimpan file Excel seluruh database.',
+          'error',
+        );
+      } finally {
+        setImporting(false);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
   const handleTidyPutraPutri = async () => {
     setTidyingData(true);
     try {
@@ -1615,7 +1699,165 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
         )}
       </div>
 
-      {/* PER-COMPONENT INDIVIDUAL TEMPLATES (8 SEPARATE EXCEL FILES) */}
+      {/* 1. UTAMA: TEMPLATE & UPLOAD SELURUH DATABASE SEKOLAH SEKALIGUS (11 SHEET DALAM 1 FILE EXCEL) */}
+      <div className="rounded-xl border-2 border-emerald-400 bg-gradient-to-r from-emerald-50/95 via-teal-50/85 to-sky-50/90 p-5 space-y-4 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-start gap-3 min-w-0 flex-1">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white shadow-sm shrink-0">
+              <Layers className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base font-bold text-slate-900 leading-snug">
+                  1. Template &amp; Upload Seluruh Database Sekolah Sekaligus (1 File Excel · 11 Sheet Terpadu)
+                </h2>
+                <span className="rounded-md bg-emerald-600 px-2.5 py-0.5 text-[11px] font-bold text-white shadow-2xs">
+                  Seluruh Database (All-in-One)
+                </span>
+              </div>
+              <p className="text-xs text-slate-700 mt-1 leading-relaxed">
+                Tempat unduh dan upload <b>1 file Excel (<span className="font-mono-num">.xlsx</span>) yang berisi seluruh database sekolah sekaligus</b>: Santri Putra, Santri Putri, Master Pegawai, Wali Asrama (Musyrif &amp; Musyrifah), Wali Kelas, Guru &amp; Pengampu Al-Qur&apos;an, Jadwal KBM/Halaqah, Ruang Ujian, dan Pembinaan ({workbookSpec?.sourceLabel || 'memuat...'}).
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setTemplateMinimized((v) => !v)}
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0 self-start"
+          >
+            {templateMinimized ? (
+              <>
+                <ChevronDown className="h-3.5 w-3.5" />
+                Tampilkan 11 Sheet
+              </>
+            ) : (
+              <>
+                <ChevronUp className="h-3.5 w-3.5" />
+                Sembunyikan Sheet
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Tombol Utama Unduh & Upload Seluruh Database Sekaligus */}
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4 border-t border-emerald-200/80 pt-3.5">
+          <button
+            type="button"
+            disabled={loadingSpec}
+            onClick={handleDownloadExcelTemplate}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 px-4 py-3 text-xs font-bold text-white shadow-sm hover:from-emerald-700 hover:to-teal-800 whitespace-nowrap disabled:opacity-50"
+          >
+            <Download className="h-4 w-4 shrink-0" />
+            <span>1. Unduh Template Seluruh Database (.xlsx)</span>
+          </button>
+
+          <label className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#0B1324] px-4 py-3 text-xs font-bold text-white shadow-sm hover:bg-slate-800 cursor-pointer whitespace-nowrap transition-colors">
+            <Upload className="h-4 w-4 text-teal-300 shrink-0" />
+            <span>
+              {importing ? 'Mengupload & Menyimpan...' : '2. Upload & Simpan Seluruh Database (.xlsx)'}
+            </span>
+            <input
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              disabled={importing}
+              onChange={handleDirectUploadFullDatabaseFile}
+              className="hidden"
+            />
+          </label>
+
+          <label className="inline-flex items-center justify-center gap-2 rounded-xl border-2 border-emerald-600 bg-white px-4 py-3 text-xs font-bold text-emerald-900 hover:bg-emerald-50 cursor-pointer whitespace-nowrap transition-colors">
+            <FileSpreadsheet className="h-4 w-4 text-emerald-700 shrink-0" />
+            <span>Upload &amp; Pratinjau Dulu (.xlsx)</span>
+            <input
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={handleExcelFileChange}
+              className="hidden"
+            />
+          </label>
+
+          <div className="grid grid-cols-2 gap-1.5">
+            <button
+              type="button"
+              onClick={handleDownloadJsonBackup}
+              title="Unduh cadangan penuh seluruh data SIM & log dalam format JSON"
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-sky-300 bg-white px-3 py-3 text-xs font-semibold text-sky-900 hover:bg-sky-50 whitespace-nowrap"
+            >
+              <Download className="h-3.5 w-3.5 text-sky-700 shrink-0" />
+              Backup JSON
+            </button>
+            <label
+              title="Pulihkan semua data santri, jadwal, presensi & pembinaan dari file Backup JSON"
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-amber-300 bg-white px-3 py-3 text-xs font-semibold text-amber-900 hover:bg-amber-50 cursor-pointer whitespace-nowrap"
+            >
+              <Upload className="h-3.5 w-3.5 text-amber-700 shrink-0" />
+              Restore JSON
+              <input
+                type="file"
+                accept=".json,application/json"
+                onChange={handleRestoreJsonBackup}
+                className="hidden"
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white/80 border border-emerald-200/80 px-3.5 py-2 text-[11px] text-slate-700">
+          <span>
+            <b>Cara Pakai:</b> Klik <b>1. Unduh Template Seluruh Database (.xlsx)</b> → isi/edit sheet di Excel → klik <b>2. Upload &amp; Simpan Seluruh Database (.xlsx)</b> untuk langsung memasukkan seluruh data ke sistem.
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={loadingSpec}
+              onClick={handleLoadServerTemplateToPreview}
+              className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-900 hover:bg-emerald-100"
+            >
+              <Sparkles className="h-3 w-3" />
+              Lihat Pratinjau Isi Template
+            </button>
+            <button
+              type="button"
+              disabled={loadingSpec || importing}
+              onClick={handleDirectCommitWorkbookSpec}
+              className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 font-semibold text-slate-800 hover:bg-slate-100"
+            >
+              <Save className="h-3 w-3 text-teal-700" />
+              Muat Data Default Template
+            </button>
+          </div>
+        </div>
+
+        {!templateMinimized && dataSheets.length > 0 && (
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5 pt-1">
+            {dataSheets.map((s) => {
+              const isPutri = s.name.toLowerCase().includes('putri');
+              const isPutra = s.name.toLowerCase().includes('putra');
+              const badgeCls = isPutri
+                ? 'border-rose-200/80 bg-rose-50/70'
+                : isPutra
+                ? 'border-sky-200/80 bg-sky-50/70'
+                : 'border-white/80 bg-white/85';
+              const titleCls = isPutri ? 'text-rose-800' : isPutra ? 'text-sky-800' : 'text-teal-800';
+              return (
+                <div
+                  key={s.name}
+                  className={`rounded-lg border px-3 py-2.5 text-xs shadow-xs ${badgeCls}`}
+                >
+                  <div className={`font-mono-num text-[11px] font-bold truncate ${titleCls}`}>{s.name}</div>
+                  <div className="text-[11px] text-slate-600 truncate mt-0.5">{s.label}</div>
+                  <div className="mt-1 font-mono-num text-xs font-bold text-slate-900">
+                    {Math.max(0, s.rows.length - 1)} baris
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* 2. OPSIONAL: PER-COMPONENT INDIVIDUAL TEMPLATES (8 SEPARATE EXCEL FILES) */}
       <div className="rounded-xl border border-teal-300 bg-white p-5 space-y-4 shadow-xs">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-4">
           <div className="flex items-start gap-3">
@@ -1625,14 +1867,14 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-base font-bold text-slate-900">
-                  Pusat Template Per Komponen (8 File Excel Terpisah — Mudah &amp; Tidak Membingungkan)
+                  2. Opsi Template Terpisah Per Komponen (8 File Excel Satuan)
                 </h2>
                 <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[11px] font-semibold text-teal-900">
-                  Rekomendasi Admin
+                  Jika Ingin Upload Per Bagian Saja
                 </span>
               </div>
               <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                Pilih <b>salah satu komponen saja</b> sesuai kebutuhan Anda. Bisa unduh <b>Template Kosong</b> (hanya judul kolom + 2 contoh) atau <b>Template + Data Saat Ini</b>, lalu langsung klik <b>Upload Komponen Ini</b> pada kartu yang sama.
+                Gunakan bagian ini jika Anda hanya ingin mengunduh atau mengupload <b>salah satu komponen saja</b> secara terpisah (misalnya hanya Siswa Putri atau hanya Master Pegawai).
               </p>
             </div>
           </div>
@@ -1776,122 +2018,6 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                       <Edit3 className="h-3 w-3 text-teal-700 shrink-0" />
                       <span>Isi / Edit Langsung di Sistem →</span>
                     </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* SINGLE UNIFIED DATABASE EXCEL TEMPLATE CARD */}
-      <div className="rounded-xl border border-emerald-300 bg-gradient-to-r from-emerald-50/90 via-teal-50/70 to-sky-50/80 p-5 space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="flex items-start gap-3 min-w-0 flex-1">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white shadow-sm shrink-0">
-              <Layers className="h-5 w-5" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <h2 className="text-base font-bold text-slate-900 leading-snug">
-                Opsi Gabungan: Template Tunggal Seluruh Database Sekolah (11 Sheet Sekaligus)
-              </h2>
-              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                Gunakan ini jika Anda ingin mengunduh atau mengupload seluruh 11 sheet ({workbookSpec?.sourceLabel || 'memuat...'}) dalam 1 file <span className="font-mono-num font-semibold text-slate-700">.xlsx</span> terpadu.
-              </p>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setTemplateMinimized((v) => !v)}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0 self-start"
-          >
-            {templateMinimized ? (
-              <>
-                <ChevronDown className="h-3.5 w-3.5" />
-                Detail Sheet
-              </>
-            ) : (
-              <>
-                <ChevronUp className="h-3.5 w-3.5" />
-                Minimize
-              </>
-            )}
-          </button>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 border-t border-emerald-200/70 pt-3">
-          <button
-            type="button"
-            disabled={loadingSpec}
-            onClick={handleDownloadExcelTemplate}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-700 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:from-emerald-700 hover:to-teal-800 whitespace-nowrap disabled:opacity-50"
-          >
-            <Download className="h-3.5 w-3.5 shrink-0" />
-            Unduh Semua Sheet (.xlsx)
-          </button>
-          <button
-            type="button"
-            disabled={loadingSpec}
-            onClick={handleLoadServerTemplateToPreview}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3.5 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 whitespace-nowrap disabled:opacity-50"
-          >
-            <Sparkles className="h-3.5 w-3.5 shrink-0" />
-            Muat ke Pratinjau
-          </button>
-          <button
-            type="button"
-            disabled={loadingSpec || importing}
-            onClick={handleDirectCommitWorkbookSpec}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#0B1324] px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 whitespace-nowrap disabled:opacity-50"
-          >
-            <Save className="h-3.5 w-3.5 text-teal-300 shrink-0" />
-            {importing ? 'Menyimpan...' : 'Ambil & Simpan Semua Data Excel'}
-          </button>
-          <button
-            type="button"
-            onClick={handleDownloadJsonBackup}
-            title="Unduh cadangan penuh seluruh data SIM & log dalam format JSON"
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-sky-300 bg-white px-3 py-2 text-xs font-semibold text-sky-900 hover:bg-sky-50 whitespace-nowrap"
-          >
-            <Download className="h-3.5 w-3.5 text-sky-700 shrink-0" />
-            Backup JSON
-          </button>
-          <label
-            title="Pulihkan semua data santri, jadwal, presensi & pembinaan dari file Backup JSON"
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-50 cursor-pointer whitespace-nowrap"
-          >
-            <Upload className="h-3.5 w-3.5 text-amber-700 shrink-0" />
-            Pulihkan JSON
-            <input
-              type="file"
-              accept=".json,application/json"
-              onChange={handleRestoreJsonBackup}
-              className="hidden"
-            />
-          </label>
-        </div>
-
-        {!templateMinimized && dataSheets.length > 0 && (
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5 pt-1">
-            {dataSheets.map((s) => {
-              const isPutri = s.name.toLowerCase().includes('putri');
-              const isPutra = s.name.toLowerCase().includes('putra');
-              const badgeCls = isPutri
-                ? 'border-rose-200/80 bg-rose-50/70'
-                : isPutra
-                ? 'border-sky-200/80 bg-sky-50/70'
-                : 'border-white/80 bg-white/85';
-              const titleCls = isPutri ? 'text-rose-800' : isPutra ? 'text-sky-800' : 'text-teal-800';
-              return (
-                <div
-                  key={s.name}
-                  className={`rounded-lg border px-3 py-2.5 text-xs shadow-xs ${badgeCls}`}
-                >
-                  <div className={`font-mono-num text-[11px] font-bold truncate ${titleCls}`}>{s.name}</div>
-                  <div className="text-[11px] text-slate-600 truncate mt-0.5">{s.label}</div>
-                  <div className="mt-1 font-mono-num text-xs font-bold text-slate-900">
-                    {Math.max(0, s.rows.length - 1)} baris
                   </div>
                 </div>
               );
