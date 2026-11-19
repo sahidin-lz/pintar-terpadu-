@@ -1178,7 +1178,13 @@ export const LabkomRuangModule: React.FC<Props> = ({
 
       const processSheet = (sheetName: string, priority: number) => {
         const lowerName = sheetName.trim().toLowerCase();
-        if (lowerName === '0_panduan' || lowerName === 'panduan') return;
+        if (
+          lowerName === '0_panduan' ||
+          lowerName === 'panduan' ||
+          lowerName.startsWith('data_pinjam')
+        ) {
+          return;
+        }
         const ws = wb.Sheets[sheetName];
         if (!ws) return;
         const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: '' });

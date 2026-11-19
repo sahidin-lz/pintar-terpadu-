@@ -1729,6 +1729,47 @@ export function downloadLabkomMasterTemplateClient(params: {
   const byCat = (kat: LabkomMasterKategori) => allRows.filter((r) => r.kategori === kat);
   const countKat = (kat: LabkomMasterKategori) => String(byCat(kat).length);
 
+  const bookingHeader = [
+    'ID',
+    'Timestamp',
+    'Kampus',
+    'Email',
+    'Nama Peminjam',
+    'Guru',
+    'Kelas',
+    'Mapel',
+    'Lab',
+    'Tanggal',
+    'Jam_Ke',
+    'Keterangan',
+    'Status',
+  ];
+  const sortNewest = (arr: LabkomBooking[]) =>
+    [...arr].sort(
+      (a, b) => b.tanggal.localeCompare(a.tanggal) || b.timestamp.localeCompare(a.timestamp),
+    );
+  const toBookingRow = (b: LabkomBooking): string[] => [
+    b.id,
+    b.timestamp,
+    b.kampus,
+    b.email,
+    b.namaPeminjam,
+    b.guru,
+    b.kelas,
+    b.mapel,
+    b.lab,
+    b.tanggal,
+    b.jamKe,
+    b.keterangan,
+    b.status,
+  ];
+  const putraBookingRows = sortNewest(
+    params.bookings.filter((b) => b.kampus === 'PUTRA'),
+  ).map(toBookingRow);
+  const putriBookingRows = sortNewest(
+    params.bookings.filter((b) => b.kampus === 'PUTRI'),
+  ).map(toBookingRow);
+
   const wb = XLSX.utils.book_new();
   const sheets: Array<{ name: string; rows: string[][] }> = [
     {
@@ -1816,6 +1857,14 @@ export function downloadLabkomMasterTemplateClient(params: {
           String(r.dipakaiCount),
         ]),
       ],
+    },
+    {
+      name: 'Data_Pinjam_Putra',
+      rows: [bookingHeader, ...putraBookingRows],
+    },
+    {
+      name: 'Data_Pinjam_Putri',
+      rows: [bookingHeader, ...putriBookingRows],
     },
   ];
 
