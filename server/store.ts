@@ -5093,7 +5093,9 @@ class PintarStore {
               ? 'PUTRI'
               : rowKampusRaw === 'PUTRA'
               ? 'PUTRA'
-              : forcedKampus || 'PUTRA';
+              : forcedKampus === 'PUTRI'
+              ? 'PUTRI'
+              : 'PUTRA';
           return {
             id: String(r.id || '').trim() || `TRX-IMP-${Date.now()}-${i}`,
             timestamp: String(r.timestamp || '').trim() || ts,
@@ -5106,8 +5108,8 @@ class PintarStore {
             lab,
             tanggal: tgl,
             jamKe: jam,
-            keterangan: String(r.keterangan || '').trim(),
-            status: String(r.status || 'Disetujui').trim(),
+            keterangan: String(r.keterangan || '').replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim(),
+            status: String(r.status || '').trim() || 'Aktif',
           };
         })
         .filter((x): x is LabkomBooking => Boolean(x));
@@ -6025,13 +6027,20 @@ class PintarStore {
       const guru = cleanWs(b.guru) || '-';
       const kelas = cleanWs(b.kelas) || '-';
       const mapel = cleanWs(b.mapel) || '-';
-      const inferredG = inferPutraPutri(
-        [lab, kelas, guru, namaPeminjam, b.keterangan],
-        b.kampus === 'PUTRI' ? 'Putri' : 'Putra',
-      );
-      const kampus: LabkomKampus =
-        b.kampus === 'PUTRI' || inferredG === 'Putri' ? 'PUTRI' : 'PUTRA';
-      if (kampus !== b.kampus) genderReclassified++;
+      const rawKampus = String(b.kampus || '').trim().toUpperCase();
+      let kampus: LabkomKampus;
+      if (rawKampus === 'PUTRI') {
+        kampus = 'PUTRI';
+      } else if (rawKampus === 'PUTRA') {
+        kampus = 'PUTRA';
+      } else {
+        const inferredG = inferPutraPutri(
+          [lab, kelas, guru, namaPeminjam, b.keterangan],
+          'Putra',
+        );
+        kampus = inferredG === 'Putri' ? 'PUTRI' : 'PUTRA';
+        if (kampus !== b.kampus) genderReclassified++;
+      }
       const slotKey = `${kampus}|${lab}|${tanggal}|${jamKe}`;
       if (!bookingMap.has(slotKey)) {
         bookingMap.set(slotKey, {
@@ -6045,7 +6054,7 @@ class PintarStore {
           tanggal,
           jamKe,
           keterangan: cleanWs(b.keterangan),
-          status: cleanWs(b.status) || 'Disetujui',
+          status: cleanWs(b.status) || 'Aktif',
         });
       } else {
         duplicatesRemoved++;

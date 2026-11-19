@@ -142,26 +142,84 @@ function getDayNumber1To7(dateStr: string): number {
 
 function normalizeExcelDateCell(val: unknown): string {
   if (val === null || val === undefined || val === '') return '';
-  if (typeof val === 'number' && Number.isFinite(val)) {
-    const parsed = XLSX.SSF.parse_date_code(val);
+  const formatSerialToIso = (serial: number): string => {
+    const ssf = (XLSX as unknown as { SSF?: { parse_date_code?: (n: number) => { y?: number; m?: number; d?: number; H?: number; M?: number; S?: number } | null } }).SSF;
+    const parsed = ssf?.parse_date_code?.(serial);
     if (parsed && parsed.y && parsed.m && parsed.d) {
       return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
     }
+    const utc = new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000);
+    if (!Number.isNaN(utc.getTime())) {
+      return utc.toISOString().slice(0, 10);
+    }
+    return '';
+  };
+
+  if (typeof val === 'number' && Number.isFinite(val) && val > 1000 && val < 100000) {
+    const iso = formatSerialToIso(val);
+    if (iso) return iso;
   }
   if (val instanceof Date && !Number.isNaN(val.getTime())) {
     return `${val.getFullYear()}-${String(val.getMonth() + 1).padStart(2, '0')}-${String(val.getDate()).padStart(2, '0')}`;
   }
   const raw = String(val).trim();
-  if (/^\d{5}$/.test(raw)) {
+  if (/^\d{5}(\.\d+)?$/.test(raw)) {
     const serial = Number(raw);
     if (serial > 20000 && serial < 90000) {
-      const parsed = XLSX.SSF.parse_date_code(serial);
-      if (parsed && parsed.y && parsed.m && parsed.d) {
-        return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
-      }
+      const iso = formatSerialToIso(serial);
+      if (iso) return iso;
     }
   }
-  return parseFlexibleDateToIso(raw) || raw;
+  const parsedIso = parseFlexibleDateToIso(raw);
+  if (parsedIso) {
+    const [, mStr, dStr] = parsedIso.split('-');
+    const mNum = Number(mStr);
+    const dNum = Number(dStr);
+    if (mNum >= 1 && mNum <= 12 && dNum >= 1 && dNum <= 31) {
+      return parsedIso;
+    }
+    // Handle US-locale MM/DD/YYYY where month > 12 after DD/MM parsing
+    if (mNum > 12 && dNum >= 1 && dNum <= 12 && mNum <= 31) {
+      return `${parsedIso.slice(0, 4)}-${dStr}-${mStr}`;
+    }
+  }
+  return parsedIso || raw;
+}
+
+function normalizeExcelTimestampCell(val: unknown): string {
+  if (val === null || val === undefined || val === '') return '';
+  const pad2 = (n: number) => String(Math.max(0, Math.floor(n))).padStart(2, '0');
+  const formatSerialTs = (serial: number): string => {
+    const ssf = (XLSX as unknown as { SSF?: { parse_date_code?: (n: number) => { y?: number; m?: number; d?: number; H?: number; M?: number; S?: number } | null } }).SSF;
+    const parsed = ssf?.parse_date_code?.(serial);
+    if (parsed && parsed.y && parsed.m && parsed.d) {
+      return `${pad2(parsed.d)}/${pad2(parsed.m)}/${parsed.y} ${pad2(parsed.H ?? 0)}:${pad2(parsed.M ?? 0)}:${pad2(parsed.S ?? 0)}`;
+    }
+    const dayInt = Math.floor(serial);
+    const secInDay = Math.round((serial - dayInt) * 86400);
+    const utc = new Date(Date.UTC(1899, 11, 30) + dayInt * 86400000 + secInDay * 1000);
+    if (!Number.isNaN(utc.getTime())) {
+      return `${pad2(utc.getUTCDate())}/${pad2(utc.getUTCMonth() + 1)}/${utc.getUTCFullYear()} ${pad2(utc.getUTCHours())}:${pad2(utc.getUTCMinutes())}:${pad2(utc.getUTCSeconds())}`;
+    }
+    return '';
+  };
+
+  if (typeof val === 'number' && Number.isFinite(val) && val > 1000 && val < 100000) {
+    const formatted = formatSerialTs(val);
+    if (formatted) return formatted;
+  }
+  if (val instanceof Date && !Number.isNaN(val.getTime())) {
+    return `${pad2(val.getDate())}/${pad2(val.getMonth() + 1)}/${val.getFullYear()} ${pad2(val.getHours())}:${pad2(val.getMinutes())}:${pad2(val.getSeconds())}`;
+  }
+  const raw = String(val).trim();
+  if (/^\d{5}(\.\d+)?$/.test(raw)) {
+    const serial = Number(raw);
+    if (serial > 20000 && serial < 90000) {
+      const formatted = formatSerialTs(serial);
+      if (formatted) return formatted;
+    }
+  }
+  return raw;
 }
 
 function detectClientCsvDelimiter(text: string): string {
@@ -236,11 +294,19 @@ function normHdr(raw: unknown): string {
     .replace(/[^a-z0-9]/g, '');
 }
 
+interface LabkomImportSkippedRow {
+  sheet: string;
+  rowNumber: number;
+  reason: string;
+  preview: string;
+}
+
 function extractLabkomRowsFromMatrix(
   matrix: unknown[][],
   hintKampus?: LabkomKampus,
-): Array<Partial<LabkomBooking>> {
-  if (!matrix || matrix.length === 0) return [];
+  sheetName = 'Sheet',
+): { rows: Array<Partial<LabkomBooking>>; skipped: LabkomImportSkippedRow[] } {
+  if (!matrix || matrix.length === 0) return { rows: [], skipped: [] };
 
   let headerIdx = -1;
   for (let i = 0; i < Math.min(matrix.length, 25); i++) {
@@ -255,7 +321,7 @@ function extractLabkomRowsFromMatrix(
     );
     const hasTgl = tokens.some((t) => t.includes('tanggal') || t === 'tgl' || t === 'date');
     const hasJam = tokens.some(
-      (t) => t.includes('jam') || t.includes('sesi') || t.includes('waktu'),
+      (t) => t.includes('jam') || t.includes('sesi') || t === 'waktu' || t.includes('waktupinjam'),
     );
     if ((hasLoc && hasTgl) || (hasTgl && hasJam) || (hasLoc && hasJam)) {
       headerIdx = i;
@@ -282,11 +348,14 @@ function extractLabkomRowsFromMatrix(
     startRow = headerIdx + 1;
     const hdr = (matrix[headerIdx] || []).map(normHdr);
     const findCol = (preds: Array<(h: string) => boolean>, fallback: number): number => {
-      const idx = hdr.findIndex((h) => h && preds.some((fn) => fn(h)));
-      return idx >= 0 ? idx : fallback;
+      for (const pred of preds) {
+        const idx = hdr.findIndex((h) => h && pred(h));
+        if (idx >= 0) return idx;
+      }
+      return fallback;
     };
     iId = findCol([(h) => h === 'id' || h === 'idtransaksi' || h === 'kode'], -1);
-    iTs = findCol([(h) => h.includes('timestamp') || h === 'dibuat'], -1);
+    iTs = findCol([(h) => h.includes('timestamp') || h === 'waktukirim' || h === 'dibuat'], -1);
     iKampus = findCol([(h) => h.includes('kampus') || h.includes('wilayah') || h === 'area' || h === 'unit'], -1);
     iEmail = findCol([(h) => h.includes('email')], -1);
     iNama = findCol([(h) => h.includes('namapeminjam') || h === 'peminjam' || h === 'pemohon' || h === 'nama'], -1);
@@ -294,52 +363,96 @@ function extractLabkomRowsFromMatrix(
     iKelas = findCol([(h) => h.includes('kelas') || h.includes('rombel')], -1);
     iMapel = findCol([(h) => h.includes('mapel') || h.includes('matapelajaran') || h.includes('kegiatan') || h.includes('keperluan')], -1);
     iLab = findCol([(h) => h === 'lab' || h.includes('labkom') || h.includes('ruang') || h.includes('lokasi') || h === 'tempat'], -1);
-    iTgl = findCol([(h) => h.includes('tanggal') || h === 'tgl' || h === 'date'], -1);
-    iJam = findCol([(h) => h.includes('jamke') || h === 'jam' || h.includes('sesi') || h.includes('waktu')], -1);
+    iTgl = findCol([(h) => h === 'tanggal' || h === 'tgl' || h === 'date', (h) => h.includes('tanggal') || h.includes('tgl')], -1);
+    iJam = findCol(
+      [
+        (h) => h === 'jamke' || h.includes('jamke'),
+        (h) => h === 'jam',
+        (h) => h.includes('jam'),
+        (h) => h.includes('sesi'),
+        (h) => h === 'waktu' || h.includes('waktupinjam'),
+      ],
+      -1,
+    );
     iKet = findCol([(h) => h.includes('keterangan') || h === 'ket' || h.includes('catatan')], -1);
     iStatus = findCol([(h) => h.includes('status')], -1);
   }
 
   const out: Array<Partial<LabkomBooking>> = [];
+  const skipped: LabkomImportSkippedRow[] = [];
+
   for (let r = startRow; r < matrix.length; r++) {
     const row = matrix[r] || [];
+    const hasAnyContent = row.some((cell) => String(cell ?? '').trim() !== '');
+    if (!hasAnyContent) continue;
+
     const readStr = (idx: number) => (idx >= 0 ? String(row[idx] ?? '').trim() : '');
     const lab = readStr(iLab).toUpperCase();
     const rawTgl = iTgl >= 0 ? row[iTgl] : undefined;
     const tanggal = normalizeExcelDateCell(rawTgl);
-    const jamKe = readStr(iJam).toUpperCase();
-    if (!lab || !tanggal || !/^\d{4}-\d{2}-\d{2}$/.test(tanggal) || !jamKe) continue;
+    const rawJam = iJam >= 0 ? row[iJam] : undefined;
+    const jamKe =
+      typeof rawJam === 'number' && Number.isFinite(rawJam)
+        ? String(rawJam).trim().toUpperCase()
+        : String(rawJam ?? '').trim().toUpperCase();
 
-    const kampusCell = readStr(iKampus).toUpperCase();
     const guru = readStr(iGuru) || '-';
     const kelas = readStr(iKelas) || '-';
     const namaPeminjam = readStr(iNama) || guru;
     const mapel = readStr(iMapel) || '-';
-    const ket = readStr(iKet);
+    const ket = readStr(iKet).replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
+    const isTanggalValid = /^\d{4}-\d{2}-\d{2}$/.test(tanggal);
+    if (!lab || !isTanggalValid || !jamKe) {
+      const reasons: string[] = [];
+      if (!lab) reasons.push('Kolom Lab/Ruangan kosong');
+      if (!isTanggalValid) {
+        const rawTglPreview = String(rawTgl ?? '').trim();
+        reasons.push(
+          rawTglPreview
+            ? `Format Tanggal tidak valid ("${rawTglPreview}")`
+            : 'Kolom Tanggal kosong',
+        );
+      }
+      if (!jamKe) reasons.push('Kolom Jam_Ke/Sesi kosong');
+      skipped.push({
+        sheet: sheetName,
+        rowNumber: r + 1,
+        reason: reasons.join('; '),
+        preview: `${namaPeminjam !== '-' ? namaPeminjam : lab || '(Tanpa Nama)'} · ${kelas}`,
+      });
+      continue;
+    }
+
+    const kampusCell = readStr(iKampus).toUpperCase();
     const combinedHints = `${lab} ${kelas} ${guru} ${namaPeminjam} ${ket}`.toUpperCase();
+    const isPutriCell =
+      kampusCell.includes('PUTRI') || kampusCell === 'PI' || kampusCell === 'AKHWAT';
     const isPutriKeyword =
-      kampusCell.includes('PUTRI') ||
-      kampusCell === 'PI' ||
-      kampusCell === 'AKHWAT' ||
+      isPutriCell ||
       /\b(PUTRI|AKHWAT|USTZ|KHADIJAH|AISYAH|FATIMAH|HAFSHAH|ZAINAB|MARIYAM)\b/i.test(combinedHints);
     const isPutraKeyword =
-      kampusCell.includes('PUTRA') ||
-      kampusCell === 'PA' ||
-      kampusCell === 'IKHWAN';
+      kampusCell.includes('PUTRA') || kampusCell === 'PA' || kampusCell === 'IKHWAN';
 
     const resolvedKampus: LabkomKampus =
       hintKampus === 'PUTRI'
         ? 'PUTRI'
-        : isPutriKeyword
+        : isPutriCell
         ? 'PUTRI'
         : isPutraKeyword
         ? 'PUTRA'
-        : hintKampus || 'PUTRA';
+        : hintKampus === 'PUTRA'
+        ? 'PUTRA'
+        : isPutriKeyword
+        ? 'PUTRI'
+        : 'PUTRA';
+
+    const rawTs = iTs >= 0 ? row[iTs] : undefined;
+    const timestamp = normalizeExcelTimestampCell(rawTs);
 
     out.push({
       id: readStr(iId),
-      timestamp: readStr(iTs),
+      timestamp,
       kampus: resolvedKampus,
       email: readStr(iEmail),
       namaPeminjam: namaPeminjam || '-',
@@ -350,10 +463,10 @@ function extractLabkomRowsFromMatrix(
       tanggal,
       jamKe,
       keterangan: ket,
-      status: readStr(iStatus) || 'Disetujui',
+      status: readStr(iStatus) || 'Aktif',
     });
   }
-  return out;
+  return { rows: out, skipped };
 }
 
 interface Props {
@@ -479,6 +592,7 @@ export const LabkomRuangModule: React.FC<Props> = ({
     isCsv: boolean;
     csvText?: string;
     rows: Array<Partial<LabkomBooking>>;
+    skippedRows?: LabkomImportSkippedRow[];
     defaultKampus: 'AUTO' | 'PUTRA' | 'PUTRI';
     mode: 'append' | 'upsert' | 'replace';
     autoSyncMasters: boolean;
@@ -1594,11 +1708,12 @@ export const LabkomRuangModule: React.FC<Props> = ({
           return;
         }
         const matrix = parseClientCsvMatrix(csvText);
-        const validRows = extractLabkomRowsFromMatrix(
+        const { rows: validRows, skipped: csvSkipped } = extractLabkomRowsFromMatrix(
           matrix,
           fileHintKampus === 'AUTO' ? undefined : fileHintKampus,
+          file.name,
         );
-        if (validRows.length === 0) {
+        if (validRows.length === 0 && csvSkipped.length === 0) {
           notify(
             `Tidak ditemukan baris log valid pada ${file.name}. Pastikan ada kolom Lokasi/Lab, Tanggal, dan Jam_Ke.`,
             'error',
@@ -1610,6 +1725,7 @@ export const LabkomRuangModule: React.FC<Props> = ({
           isCsv: true,
           csvText,
           rows: validRows,
+          skippedRows: csvSkipped,
           defaultKampus: fileHintKampus,
           mode: 'upsert',
           autoSyncMasters: true,
@@ -1617,14 +1733,17 @@ export const LabkomRuangModule: React.FC<Props> = ({
         const cPutra = validRows.filter((r) => r.kampus !== 'PUTRI').length;
         const cPutri = validRows.length - cPutra;
         notify(
-          `CSV terbaca (${validRows.length} baris: Putra ${cPutra}, Putri ${cPutri}). Klik "Terapkan Import" di kotak kuning untuk menyimpan!`,
-          'info',
+          csvSkipped.length > 0
+            ? `CSV terbaca (${validRows.length} valid: Putra ${cPutra}, Putri ${cPutri}; ${csvSkipped.length} baris dilewati). Periksa rincian di kotak kuning!`
+            : `CSV terbaca (${validRows.length} baris: Putra ${cPutra}, Putri ${cPutri}). Klik "Terapkan Import" di kotak kuning untuk menyimpan!`,
+          validRows.length > 0 ? 'info' : 'error',
         );
         setTimeout(() => logPreviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120);
       } else {
         const buf = await file.arrayBuffer();
         const wb = XLSX.read(buf, { type: 'array' });
         const allRows: Array<Partial<LabkomBooking>> = [];
+        const allSkipped: LabkomImportSkippedRow[] = [];
         for (const sName of wb.SheetNames) {
           const upper = sName.toUpperCase();
           if (
@@ -1646,25 +1765,23 @@ export const LabkomRuangModule: React.FC<Props> = ({
           const hasSheetPutra = upper.includes('PUTRA') || upper.includes('IKHWAN');
           const hasSheetPutri =
             upper.includes('PUTRI') || upper.includes('AKHWAT') || upper.includes('SISWI');
-          const sheetHintKampus: LabkomKampus | undefined =
-            hasSheetPutra && hasSheetPutri
-              ? undefined
-              : hasSheetPutri
-              ? 'PUTRI'
-              : hasSheetPutra
-              ? 'PUTRA'
-              : fileHintKampus === 'PUTRI'
-              ? 'PUTRI'
-              : fileHintKampus === 'PUTRA'
-              ? 'PUTRA'
-              : undefined;
+          const sheetHintKampus: LabkomKampus | undefined = hasSheetPutri
+            ? 'PUTRI'
+            : hasSheetPutra
+            ? 'PUTRA'
+            : fileHintKampus === 'PUTRI'
+            ? 'PUTRI'
+            : fileHintKampus === 'PUTRA'
+            ? 'PUTRA'
+            : undefined;
 
-          const parsedSheetRows = extractLabkomRowsFromMatrix(matrix, sheetHintKampus);
-          allRows.push(...parsedSheetRows);
+          const parsedSheet = extractLabkomRowsFromMatrix(matrix, sheetHintKampus, sName);
+          allRows.push(...parsedSheet.rows);
+          allSkipped.push(...parsedSheet.skipped);
         }
-        if (allRows.length === 0) {
+        if (allRows.length === 0 && allSkipped.length === 0) {
           notify(
-            `Tidak ditemukan baris log peminjaman valid di ${file.name} (${wb.SheetNames.length} sheet). Pastikan sheet Data_Pinjam / Data_Pinjam_Putri terisi kolom Lab, Tanggal, dan Jam_Ke.`,
+            `Tidak ditemukan baris log peminjaman valid di ${file.name} (${wb.SheetNames.length} sheet). Pastikan sheet Data_Pinjam / Data_Pinjam_Putra / Data_Pinjam_Putri terisi kolom Lab, Tanggal, dan Jam_Ke.`,
             'error',
           );
           return;
@@ -1673,6 +1790,7 @@ export const LabkomRuangModule: React.FC<Props> = ({
           fileName: file.name,
           isCsv: false,
           rows: allRows,
+          skippedRows: allSkipped,
           defaultKampus: fileHintKampus,
           mode: 'upsert',
           autoSyncMasters: true,
@@ -1680,8 +1798,10 @@ export const LabkomRuangModule: React.FC<Props> = ({
         const cPutra = allRows.filter((r) => r.kampus !== 'PUTRI').length;
         const cPutri = allRows.length - cPutra;
         notify(
-          `Excel terbaca (${allRows.length} baris: Putra ${cPutra}, Putri ${cPutri}). Klik "Terapkan Import" di kotak kuning untuk menyimpan!`,
-          'info',
+          allSkipped.length > 0
+            ? `Excel terbaca (${allRows.length} valid: Putra ${cPutra}, Putri ${cPutri}; ${allSkipped.length} baris dilewati). Periksa rincian di kotak kuning!`
+            : `Excel terbaca (${allRows.length} baris: Putra ${cPutra}, Putri ${cPutri}). Klik "Terapkan Import" di kotak kuning untuk menyimpan!`,
+          allRows.length > 0 ? 'info' : 'error',
         );
         setTimeout(() => logPreviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120);
       }
@@ -4443,7 +4563,16 @@ export const LabkomRuangModule: React.FC<Props> = ({
                     <p className="text-[11px] text-amber-800 mt-0.5">
                       Terbaca <span className="font-bold">{logImportPreview.rows.length}</span> baris valid (
                       <span className="font-bold text-blue-800">Putra: {pPutra}</span> ·{' '}
-                      <span className="font-bold text-fuchsia-800">Putri: {pPutri}</span>).
+                      <span className="font-bold text-fuchsia-800">Putri: {pPutri}</span>)
+                      {logImportPreview.skippedRows && logImportPreview.skippedRows.length > 0 && (
+                        <>
+                          {' '}·{' '}
+                          <span className="font-bold text-rose-700">
+                            Dilewati: {logImportPreview.skippedRows.length} baris
+                          </span>
+                        </>
+                      )}
+                      .
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -4498,52 +4627,78 @@ export const LabkomRuangModule: React.FC<Props> = ({
                   </div>
                 </div>
 
-                <div className="overflow-x-auto bg-white rounded-lg border border-amber-200">
-                  <table className="w-full text-left text-[11px]">
-                    <thead className="bg-amber-100/70 text-amber-950 font-bold">
-                      <tr>
-                        <th className="p-2">Kampus</th>
-                        <th className="p-2">Nama Peminjam / Guru</th>
-                        <th className="p-2">Kelas &amp; Mapel</th>
-                        <th className="p-2">Lokasi &amp; Jam</th>
-                        <th className="p-2">Tanggal</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {logImportPreview.rows.slice(0, 6).map((r, idx) => {
-                        const effectiveK =
-                          logImportPreview.defaultKampus !== 'AUTO'
-                            ? logImportPreview.defaultKampus
-                            : r.kampus || 'PUTRA';
-                        return (
-                          <tr key={idx}>
-                            <td className="p-2">
-                              <span
-                                className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${
-                                  effectiveK === 'PUTRA'
-                                    ? 'bg-blue-100 text-blue-800'
-                                    : 'bg-fuchsia-100 text-fuchsia-800'
-                                }`}
-                              >
-                                {effectiveK}
-                              </span>
-                            </td>
-                            <td className="p-2 font-semibold text-slate-800">
-                              {r.namaPeminjam || '-'} ({r.guru || '-'})
-                            </td>
-                            <td className="p-2 text-slate-600">
-                              {r.kelas || '-'} · {r.mapel || '-'}
-                            </td>
-                            <td className="p-2 font-semibold text-slate-800">
-                              {r.lab} · Jam {r.jamKe}
-                            </td>
-                            <td className="p-2 font-mono-num text-slate-700">{r.tanggal}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                {logImportPreview.skippedRows && logImportPreview.skippedRows.length > 0 && (
+                  <div className="bg-rose-50 border border-rose-300 rounded-lg p-3 space-y-1.5">
+                    <div className="text-xs font-bold text-rose-900">
+                      Ringkasan Baris Dilewati ({logImportPreview.skippedRows.length} baris gagal validasi):
+                    </div>
+                    <ul className="space-y-1 text-[11px] text-rose-800 max-h-36 overflow-y-auto">
+                      {logImportPreview.skippedRows.slice(0, 15).map((sk, idx) => (
+                        <li key={`${sk.sheet}-${sk.rowNumber}-${idx}`} className="flex flex-wrap gap-x-1.5">
+                          <span className="font-bold">
+                            [{sk.sheet} · Baris {sk.rowNumber}]
+                          </span>
+                          <span>{sk.reason}</span>
+                          <span className="text-rose-600">({sk.preview})</span>
+                        </li>
+                      ))}
+                      {logImportPreview.skippedRows.length > 15 && (
+                        <li className="font-semibold text-rose-700">
+                          ... dan {logImportPreview.skippedRows.length - 15} baris lainnya dilewati.
+                        </li>
+                      )}
+                    </ul>
+                  </div>
+                )}
+
+                {logImportPreview.rows.length > 0 && (
+                  <div className="overflow-x-auto bg-white rounded-lg border border-amber-200">
+                    <table className="w-full text-left text-[11px]">
+                      <thead className="bg-amber-100/70 text-amber-950 font-bold">
+                        <tr>
+                          <th className="p-2">Kampus</th>
+                          <th className="p-2">Nama Peminjam / Guru</th>
+                          <th className="p-2">Kelas &amp; Mapel</th>
+                          <th className="p-2">Lokasi &amp; Jam</th>
+                          <th className="p-2">Tanggal</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {logImportPreview.rows.slice(0, 6).map((r, idx) => {
+                          const effectiveK =
+                            logImportPreview.defaultKampus !== 'AUTO'
+                              ? logImportPreview.defaultKampus
+                              : r.kampus || 'PUTRA';
+                          return (
+                            <tr key={idx}>
+                              <td className="p-2">
+                                <span
+                                  className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${
+                                    effectiveK === 'PUTRA'
+                                      ? 'bg-blue-100 text-blue-800'
+                                      : 'bg-fuchsia-100 text-fuchsia-800'
+                                  }`}
+                                >
+                                  {effectiveK}
+                                </span>
+                              </td>
+                              <td className="p-2 font-semibold text-slate-800">
+                                {r.namaPeminjam || '-'} ({r.guru || '-'})
+                              </td>
+                              <td className="p-2 text-slate-600">
+                                {r.kelas || '-'} · {r.mapel || '-'}
+                              </td>
+                              <td className="p-2 font-semibold text-slate-800">
+                                {r.lab} · Jam {r.jamKe}
+                              </td>
+                              <td className="p-2 font-mono-num text-slate-700">{r.tanggal}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
 
                 <div className="flex flex-wrap justify-end gap-2">
                   <button
@@ -4555,9 +4710,9 @@ export const LabkomRuangModule: React.FC<Props> = ({
                   </button>
                   <button
                     type="button"
-                    disabled={submitting}
+                    disabled={submitting || logImportPreview.rows.length === 0}
                     onClick={handleCommitLogImport}
-                    className="px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-xs font-bold text-white"
+                    className="px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-xs font-bold text-white"
                   >
                     {submitting ? 'Memproses...' : `Terapkan Import (${logImportPreview.rows.length} Baris)`}
                   </button>
