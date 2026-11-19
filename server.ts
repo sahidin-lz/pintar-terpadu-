@@ -892,6 +892,13 @@ function registerApiRoutes() {
     res.json({ ok: true, ...result, state: store.getLabkomState(), counts: store.getSystemCounts() });
   });
 
+  app.post('/api/labkom/bookings/clear', (req, res) => {
+    const rawKampus = String(req.body?.kampus || 'ALL').toUpperCase();
+    const kampus = rawKampus === 'PUTRA' || rawKampus === 'PUTRI' ? rawKampus : 'ALL';
+    const result = store.clearAllLabkomBookings(kampus);
+    res.json({ ok: true, ...result, state: store.getLabkomState(), counts: store.getSystemCounts() });
+  });
+
   app.put('/api/labkom/bookings/:id', (req, res) => {
     const result = store.updateLabkomBooking(req.params.id, req.body || {});
     if (!result.ok) {

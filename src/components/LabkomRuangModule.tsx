@@ -568,6 +568,7 @@ export const LabkomRuangModule: React.FC<Props> = ({
   const [historyPageSize, setHistoryPageSize] = useState<number | 'ALL'>(50);
   const [historySelectedIds, setHistorySelectedIds] = useState<Set<string>>(new Set());
   const [confirmBulkDelete, setConfirmBulkDelete] = useState<boolean>(false);
+  const [confirmClearAllBookings, setConfirmClearAllBookings] = useState<boolean>(false);
   const [dashBorrowerFilter, setDashBorrowerFilter] = useState<'ALL' | LabkomKampus>('ALL');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
@@ -1670,6 +1671,36 @@ export const LabkomRuangModule: React.FC<Props> = ({
       }
     } catch {
       notify('Gagal menghapus data terpilih.', 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleClearAllBookings = async () => {
+    if (!isAdmin) {
+      notify('Hanya Admin Super / Admin SIM yang dapat mengosongkan seluruh data peminjaman.', 'error');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch('/api/labkom/bookings/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kampus: 'ALL' }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        setState(data.state);
+        emitDataMutated();
+        setHistorySelectedIds(new Set());
+        setConfirmBulkDelete(false);
+        setConfirmClearAllBookings(false);
+        notify(`Seluruh data peminjaman Labkom (${data.deleted} baris) berhasil dikosongkan.`, 'success');
+      } else {
+        notify(data.error || 'Gagal mengosongkan data peminjaman.', 'error');
+      }
+    } catch {
+      notify('Gagal terhubung ke server saat mengosongkan data peminjaman.', 'error');
     } finally {
       setSubmitting(false);
     }
@@ -4537,6 +4568,42 @@ export const LabkomRuangModule: React.FC<Props> = ({
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     <span>Hapus Terpilih ({historySelectedIds.size})</span>
+                  </button>
+                ))}
+
+              {isAdmin &&
+                (state?.bookings.length ?? 0) > 0 &&
+                (confirmClearAllBookings ? (
+                  <div className="flex items-center gap-1.5 bg-rose-950/80 border border-rose-300/60 rounded-lg px-2.5 py-1">
+                    <span className="text-xs font-semibold">
+                      Kosongkan semua ({state?.bookings.length}) data?
+                    </span>
+                    <button
+                      type="button"
+                      disabled={submitting}
+                      onClick={handleClearAllBookings}
+                      className="bg-rose-600 hover:bg-rose-700 px-2.5 py-1 rounded text-xs font-bold disabled:opacity-50"
+                    >
+                      Ya, Kosongkan
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClearAllBookings(false)}
+                      className="bg-white/20 px-2.5 py-1 rounded text-xs"
+                    >
+                      Batal
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    onClick={() => setConfirmClearAllBookings(true)}
+                    className="bg-rose-950/70 hover:bg-rose-950 border border-rose-300/40 text-white px-3.5 py-2 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
+                    title="Hapus dan kosongkan seluruh log peminjaman Labkom (Putra & Putri)"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Kosongkan Semua Data</span>
                   </button>
                 ))}
             </div>

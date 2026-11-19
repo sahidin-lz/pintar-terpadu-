@@ -79,6 +79,7 @@ export interface DatabaseSchema {
     lastSyncedAt: string | null;
     lastModifiedAt?: string | null;
     explicitEmpty?: boolean;
+    labkomBookingsCleared?: boolean;
     whatsappConfig?: WhatsAppGatewayConfig;
     labkomBroadcastTemplate?: string;
     labkomTelegramToken?: string;
@@ -281,13 +282,14 @@ class PintarStore {
     }));
     const base = createInitialDatabase();
     const isExplicitEmpty = Boolean(parsed.settings?.explicitEmpty);
+    const isLabkomCleared = Boolean(parsed.settings?.labkomBookingsCleared);
     const hasLabkomBookings = Array.isArray(parsed.labkomBookings) && parsed.labkomBookings.length > 0;
     const hasLabkomMasters = Array.isArray(parsed.labkomMasters) && parsed.labkomMasters.length > 0;
 
     let labkomBookings = Array.isArray(parsed.labkomBookings) ? parsed.labkomBookings : [];
     let labkomMasters = Array.isArray(parsed.labkomMasters) ? parsed.labkomMasters : [];
 
-    if (!isExplicitEmpty && (!hasLabkomBookings || !hasLabkomMasters)) {
+    if (!isExplicitEmpty && ((!hasLabkomBookings && !isLabkomCleared) || !hasLabkomMasters)) {
       const extraGurus = normalizedTeachers
         .filter((t) => t.peran !== 'Admin Super')
         .map((t) => t.nama);
@@ -295,7 +297,7 @@ class PintarStore {
         new Set((parsed.students || []).map((s) => s.kelas).filter((k) => k && k !== '-')),
       );
       const seed = loadLabkomSeedData(extraGurus, extraKelas);
-      if (!hasLabkomBookings) labkomBookings = seed.bookings;
+      if (!hasLabkomBookings && !isLabkomCleared) labkomBookings = seed.bookings;
       if (!hasLabkomMasters) labkomMasters = seed.masters;
     }
     labkomBookings = ensureUniqueLabkomBookingIds(labkomBookings);
@@ -4850,6 +4852,9 @@ class PintarStore {
     }));
 
     this.db.labkomBookings!.unshift(...created);
+    if (this.db.labkomBookings!.length > 0 && this.db.settings) {
+      this.db.settings.labkomBookingsCleared = false;
+    }
     this.batchedWrites++;
     this.persist();
     return { ok: true, created };
@@ -4926,6 +4931,9 @@ class PintarStore {
     }
 
     this.db.labkomBookings!.unshift(...created);
+    if (this.db.labkomBookings!.length > 0 && this.db.settings) {
+      this.db.settings.labkomBookingsCleared = false;
+    }
     this.batchedWrites++;
     this.persist();
     return { ok: true, createdCount: created.length };
@@ -5044,6 +5052,9 @@ class PintarStore {
     const before = this.db.labkomBookings!.length;
     this.db.labkomBookings = this.db.labkomBookings!.filter((b) => b.id !== id);
     if (this.db.labkomBookings.length !== before) {
+      if (this.db.labkomBookings.length === 0 && this.db.settings) {
+        this.db.settings.labkomBookingsCleared = true;
+      }
       this.batchedWrites++;
       this.persist();
       return true;
@@ -5058,9 +5069,32 @@ class PintarStore {
     this.db.labkomBookings = this.db.labkomBookings!.filter((b) => !idSet.has(b.id));
     const deleted = before - this.db.labkomBookings.length;
     if (deleted > 0) {
+      if (this.db.labkomBookings.length === 0 && this.db.settings) {
+        this.db.settings.labkomBookingsCleared = true;
+      }
       this.batchedWrites++;
       this.persist();
     }
+    return { deleted };
+  }
+
+  public clearAllLabkomBookings(kampus: LabkomKampus | 'ALL' = 'ALL'): { deleted: number } {
+    this.ensureLabkomInitialized();
+    const before = this.db.labkomBookings!.length;
+    if (kampus === 'PUTRA' || kampus === 'PUTRI') {
+      this.db.labkomBookings = this.db.labkomBookings!.filter((b) => b.kampus !== kampus);
+    } else {
+      this.db.labkomBookings = [];
+    }
+    const deleted = before - this.db.labkomBookings.length;
+    if (!this.db.settings) {
+      this.db.settings = { gasBridgeUrl: '', lastSyncedAt: null };
+    }
+    if (this.db.labkomBookings.length === 0) {
+      this.db.settings.labkomBookingsCleared = true;
+    }
+    this.batchedWrites++;
+    this.persist();
     return { deleted };
   }
 
@@ -5177,6 +5211,9 @@ class PintarStore {
       added++;
     }
 
+    if (this.db.labkomBookings!.length > 0 && this.db.settings) {
+      this.db.settings.labkomBookingsCleared = false;
+    }
     if (payload.autoSyncMasters) {
       this.syncLabkomMastersFromBookings();
     }
