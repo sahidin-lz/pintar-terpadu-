@@ -9,6 +9,7 @@ import {
   Edit3,
   ExternalLink,
   FileSpreadsheet,
+  FileText,
   Home,
   KeyRound,
   LogOut,
@@ -21,8 +22,24 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import type { Gender, ScheduleItem, TeacherAbsenceLog, TeacherPublic } from '../types';
-import { downloadCsv, formatTanggalIndo, getTodayDateStr } from '../utils/exportHelpers';
+import type {
+  Gender,
+  PimpinanExecutiveReport,
+  ScheduleItem,
+  TeacherAbsenceLog,
+  TeacherPublic,
+  UserRole,
+  WilayahFilter,
+} from '../types';
+import {
+  downloadCsv,
+  downloadLoginAccessCardsPdf,
+  downloadPimpinanMasterPdf,
+  downloadTableReportPdf,
+  formatTanggalIndo,
+  getTodayDateStr,
+  resolveTeacherToken,
+} from '../utils/exportHelpers';
 import {
   downloadComponentExcelTemplate,
   parseDatabaseExcelBuffer,
@@ -32,7 +49,16 @@ import {
 } from '../utils/excelParser';
 import { emitDataMutated, loadSubTab, saveSubTab } from '../utils/sessionPersistence';
 
-const AKUN_TABS = ['mengajar', 'walikelas', 'musyrif', 'guruwali', 'quran', 'whatsapp', 'upload'] as const;
+const AKUN_TABS = [
+  'pimpinan',
+  'mengajar',
+  'walikelas',
+  'musyrif',
+  'guruwali',
+  'quran',
+  'whatsapp',
+  'upload',
+] as const;
 type AkunProgressTab = (typeof AKUN_TABS)[number];
 
 interface TeacherRecapResponse {
@@ -299,10 +325,15 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
   notify,
 }) => {
   const [selectedName, setSelectedName] = useState<string>(unlockedTeacher?.nama || teachers[0]?.nama || '');
+  const [customNameInput, setCustomNameInput] = useState<string>('');
   const [pin, setPin] = useState<string>('');
   const [verifying, setVerifying] = useState(false);
   const [recap, setRecap] = useState<TeacherRecapResponse | null>(null);
   const [loadingRecap, setLoadingRecap] = useState(false);
+  const [showAllRoleTabs, setShowAllRoleTabs] = useState<boolean>(false);
+  const [pimpinanWilayah, setPimpinanWilayah] = useState<WilayahFilter>('Semua');
+  const [pimpinanReport, setPimpinanReport] = useState<PimpinanExecutiveReport | null>(null);
+  const [loadingPimpinan, setLoadingPimpinan] = useState<boolean>(false);
   const [progressTab, setProgressTab] = useState<AkunProgressTab>(() =>
     loadSubTab(
       `pintar_akunguru_tab_${unlockedTeacher?.id || 'default'}`,
@@ -412,6 +443,16 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
       setSelectedAsramaRoom('SEMUA');
       setSelectedWaliKelasFilter('BINAAN_SAYA');
 
+      const allRoles = new Set<UserRole>([
+        unlockedTeacher.peran,
+        ...(unlockedTeacher.peranTambahan || []),
+      ]);
+      if (unlockedTeacher.genderScope === 'Putra' || unlockedTeacher.genderScope === 'Putri') {
+        setPimpinanWilayah(unlockedTeacher.genderScope);
+      } else {
+        setPimpinanWilayah('Semua');
+      }
+
       const tabKey = `pintar_akunguru_tab_${unlockedTeacher.id || 'default'}`;
       let savedTab: string | null = null;
       try {
@@ -419,7 +460,9 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
       } catch {
         savedTab = null;
       }
-      if (savedTab && (AKUN_TABS as readonly string[]).includes(savedTab)) {
+      if (allRoles.has('Pimpinan')) {
+        setProgressTab('pimpinan');
+      } else if (savedTab && (AKUN_TABS as readonly string[]).includes(savedTab)) {
         setProgressTab(savedTab as AkunProgressTab);
       } else if (
         unlockedTeacher.peran === 'Musyrif' ||
@@ -493,35 +536,71 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
       .catch(() => {});
   };
 
+  const fetchPimpinanExecutiveReport = (wilayah: WilayahFilter) => {
+    setLoadingPimpinan(true);
+    fetch(`/api/pimpinan/laporan-lengkap?wilayah=${encodeURIComponent(wilayah)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: PimpinanExecutiveReport | null) => {
+        if (data && data.summaryCounts) {
+          setPimpinanReport(data);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoadingPimpinan(false));
+  };
+
   useEffect(() => {
     if (unlockedTeacher) {
       fetchRecap(unlockedTeacher.nama);
       fetchHalaqahRecap(unlockedTeacher.nama);
       fetchWaDashboard();
+      fetchPimpinanExecutiveReport(pimpinanWilayah);
     } else {
       setRecap(null);
+      setPimpinanReport(null);
     }
   }, [unlockedTeacher]);
 
+  useEffect(() => {
+    if (unlockedTeacher) {
+      fetchPimpinanExecutiveReport(pimpinanWilayah);
+    }
+  }, [pimpinanWilayah, unlockedTeacher]);
+
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedName) return;
+    const cleanCustom = customNameInput.trim();
+    const cleanPin = pin.trim();
+    const targetIdentifier = cleanCustom || selectedName || cleanPin;
+    if (!targetIdentifier) {
+      notify('Pilih nama pegawai atau masukkan Token Akses / PIN.', 'error');
+      return;
+    }
     setVerifying(true);
     try {
       const res = await fetch('/api/guru/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ namaGuru: selectedName, pin }),
+        body: JSON.stringify({
+          namaGuru: targetIdentifier,
+          pin: cleanPin || targetIdentifier,
+        }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
-        notify(data.error || 'PIN tidak cocok.', 'error');
+        notify(data.error || 'Token / PIN tidak cocok dengan Database Pegawai.', 'error');
         return;
       }
       onUnlock(data.teacher);
-      notify(`Selamat datang, ${data.teacher.nama}. Rekapan & progres siap dilihat.`, 'success');
+      const rolesStr = Array.from(
+        new Set([data.teacher.peran, ...(data.teacher.peranTambahan || [])]),
+      ).join(', ');
+      notify(
+        `Selamat datang, ${data.teacher.nama}. Akses fitur dibuka sesuai peran: ${rolesStr}.`,
+        'success',
+      );
     } catch {
-      notify('Gagal memverifikasi PIN akun.', 'error');
+      notify('Gagal memverifikasi Token / PIN akun pegawai.', 'error');
     } finally {
       setVerifying(false);
     }
@@ -1195,109 +1274,199 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
   };
 
   if (!unlockedTeacher) {
+    const selectedTeacherObj = teachers.find((t) => t.nama === selectedName) || null;
     return (
       <div className="mx-auto max-w-xl py-4">
-        <div className="rounded-xl border border-slate-200 bg-white p-6 space-y-5">
+        <div className="rounded-xl border border-slate-200 bg-white p-6 space-y-5 shadow-xs">
           <div>
+            <div className="inline-flex items-center gap-1.5 rounded-md bg-teal-50 border border-teal-200 px-2.5 py-1 text-[11px] font-bold text-teal-900 mb-2">
+              <KeyRound className="h-3.5 w-3.5 text-teal-700" />
+              Akses Terpusat Database Pegawai &amp; Token Peran
+            </div>
             <h2 className="text-lg font-semibold text-slate-900">
-              Login Rekapan Data &amp; Progres Guru, Wali Kelas, dan Musyrif/ah
+              Login Dasbor Peran: Guru, Wali Kelas, Wali Asrama, Guru Wali &amp; Pimpinan
             </h2>
             <p className="mt-1 text-xs text-slate-600 leading-relaxed">
-              Pengisian presensi dan pembinaan di halaman depan tidak membutuhkan login. Masuk dengan akun Anda di sini untuk memantau rekapan mengajar, progres kelas binaan wali kelas, dan progres kamar asrama musyrif/musyrifah.
+              Setiap guru dari modul manapun otomatis tercatat di <b>Database Pegawai</b>. Masuk menggunakan <b>Token Akses (`PN-XXXX`)</b> dari Kartu Login yang diberikan Admin (atau PIN <code>1234</code>). Fitur dan laporan yang tampil otomatis menyesuaikan peran Anda.
             </p>
           </div>
 
-          {teachers.length === 0 ? (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900 space-y-2.5">
-              <div className="font-semibold">Belum Ada Akun Terdaftar (Database Kosong)</div>
-              <p className="text-amber-800 leading-relaxed">
-                Daftarkan akun pertama terlebih dahulu atau unggah CSV Guru/Santri melalui menu <b>Upload &amp; Format SIM</b>.
+          <form onSubmit={handleVerify} className="space-y-4">
+            {teachers.length > 0 && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  1. Pilih Nama dari Database Pegawai ({teachers.length} Pegawai Terdaftar)
+                </label>
+                <select
+                  value={selectedName}
+                  onChange={(e) => {
+                    setSelectedName(e.target.value);
+                    setCustomNameInput('');
+                  }}
+                  className="h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none"
+                >
+                  {teachers.map((t) => {
+                    const rolesList = Array.from(
+                      new Set([t.peran, ...(t.peranTambahan || [])]),
+                    ).join(', ');
+                    return (
+                      <option key={t.id} value={t.nama}>
+                        {t.nama} — [{rolesList}] · Wilayah {t.genderScope}
+                        {t.waliKelasOf ? ` (Wali ${t.waliKelasOf})` : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+                {selectedTeacherObj && (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
+                    <span>Peran di Database Pegawai:</span>
+                    {Array.from(
+                      new Set([
+                        selectedTeacherObj.peran,
+                        ...(selectedTeacherObj.peranTambahan || []),
+                      ]),
+                    ).map((r) => (
+                      <span
+                        key={r}
+                        className={`rounded px-1.5 py-0.5 font-semibold ${
+                          r === 'Pimpinan'
+                            ? 'bg-amber-100 text-amber-900'
+                            : 'bg-teal-50 text-teal-800 border border-teal-200'
+                        }`}
+                      >
+                        {r}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                Atau Ketik Nama Guru / Langsung Masukkan Token Unik Pegawai
+              </label>
+              <input
+                type="text"
+                value={customNameInput}
+                onChange={(e) => setCustomNameInput(e.target.value)}
+                placeholder="Ketik nama guru baru/lama atau biarkan kosong jika sudah memilih di atas"
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-900 focus:border-teal-600 focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-slate-500">
+                Jika nama guru belum ada di daftar atas, ketik nama lengkap Anda di sini + PIN <code>1234</code> untuk otomatis masuk ke Database Pegawai.
               </p>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-slate-700">
+                  2. Token Akses / PIN Pegawai *
+                </label>
+                <span className="font-mono-num text-[11px] font-semibold text-teal-700">
+                  Token Kartu (PN-XXXX) atau PIN: 1234
+                </span>
+              </div>
+              <input
+                type="text"
+                maxLength={20}
+                value={pin}
+                onChange={(e) => setPin(e.target.value)}
+                placeholder="Masukkan Token Kartu Login (misal: PN-4821) atau PIN 1234..."
+                className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-mono-num uppercase tracking-wider focus:border-teal-600 focus:outline-none"
+              />
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="submit"
+                disabled={verifying || (!selectedName && !customNameInput.trim() && !pin.trim())}
+                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-2.5 text-xs font-semibold text-white hover:bg-teal-800 disabled:bg-slate-300"
+              >
+                <KeyRound className="h-4 w-4" />
+                {verifying ? 'Memverifikasi Token Pegawai...' : 'Masuk Sesuai Peran Database Pegawai'}
+              </button>
               {onOpenRegisterPortal && (
                 <button
                   type="button"
                   onClick={onOpenRegisterPortal}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                 >
-                  <UserPlus className="h-3.5 w-3.5" />
-                  Daftar Akun Baru Sekarang
+                  <UserPlus className="h-4 w-4" />
+                  Daftar Akun Baru
                 </button>
               )}
             </div>
-          ) : (
-            <form onSubmit={handleVerify} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Pilih Akun Guru / Wali Kelas / Musyrif / Musyrifah
-                </label>
-                <select
-                  value={selectedName}
-                  onChange={(e) => setSelectedName(e.target.value)}
-                  className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none"
-                >
-                  {teachers.map((t) => (
-                    <option key={t.id} value={t.nama}>
-                      {t.nama} — {t.peran} {t.waliKelasOf ? `(${t.waliKelasOf})` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-semibold text-slate-700">PIN / Password Akun</label>
-                  <span className="font-mono-num text-[11px] text-slate-500">Default impor CSV: 1234</span>
-                </div>
-                <input
-                  type="password"
-                  maxLength={12}
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  placeholder="Masukkan PIN atau password..."
-                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-mono-num tracking-widest focus:border-teal-600 focus:outline-none"
-                />
-              </div>
-
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <button
-                  type="submit"
-                  disabled={verifying || !selectedName}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-2.5 text-xs font-semibold text-white hover:bg-teal-800 disabled:bg-slate-300"
-                >
-                  <KeyRound className="h-4 w-4" />
-                  {verifying ? 'Memverifikasi...' : 'Masuk & Lihat Rekapan Progres'}
-                </button>
-                {onOpenRegisterPortal && (
-                  <button
-                    type="button"
-                    onClick={onOpenRegisterPortal}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                  >
-                    <UserPlus className="h-4 w-4" />
-                    Daftar Akun Baru
-                  </button>
-                )}
-              </div>
-            </form>
-          )}
+          </form>
         </div>
       </div>
     );
   }
+
+  const allMyRoles = Array.from(
+    new Set<UserRole>([unlockedTeacher.peran, ...(unlockedTeacher.peranTambahan || [])]),
+  );
+  const isPimpinanOrAdmin =
+    allMyRoles.includes('Pimpinan') ||
+    allMyRoles.includes('Admin Super') ||
+    allMyRoles.includes('Admin SIM');
+  const hasRoleGuru =
+    isPimpinanOrAdmin ||
+    allMyRoles.includes('Guru') ||
+    (recap?.allMySchedules?.length ?? 0) > 0 ||
+    (recap?.sessions?.length ?? 0) > 0;
+  const hasRoleWaliKelas =
+    isPimpinanOrAdmin ||
+    allMyRoles.includes('Wali Kelas') ||
+    Boolean(unlockedTeacher.waliKelasOf);
+  const hasRoleWaliAsrama =
+    isPimpinanOrAdmin ||
+    allMyRoles.includes('Wali Asrama') ||
+    allMyRoles.includes('Musyrif') ||
+    allMyRoles.includes('Musyrifah') ||
+    (unlockedTeacher.kamarBinaan?.length ?? 0) > 0 ||
+    (recap?.musyrifProgress?.totalKamar ?? 0) > 0;
+  const hasRoleGuruWali =
+    isPimpinanOrAdmin ||
+    allMyRoles.includes('Guru Wali') ||
+    (recap?.guruWaliProgress?.totalSantri ?? 0) > 0;
+  const hasRoleQuran =
+    isPimpinanOrAdmin ||
+    allMyRoles.includes('Pengampu Al-Quran') ||
+    (recap?.allMySchedules?.some(
+      (s) => s.kategori === 'Al-Quran' || s.mapel.toUpperCase().includes('QUR'),
+    ) ??
+      false);
+  const activeTokenStr = resolveTeacherToken(unlockedTeacher);
 
   return (
     <div className="space-y-6">
       {/* Account Header */}
       <div className="rounded-xl border border-slate-200 bg-white p-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <UserCheck className="h-5 w-5 text-teal-700" />
             <h2 className="text-lg font-semibold text-slate-900">{unlockedTeacher.nama}</h2>
+            <span className="rounded-md bg-amber-100 border border-amber-300 px-2 py-0.5 font-mono-num text-xs font-bold text-amber-950">
+              Token Login: {activeTokenStr}
+            </span>
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-            <span className="font-semibold text-slate-800">{unlockedTeacher.jabatan}</span>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
+            <span className="font-semibold text-slate-700">Hak Akses Peran:</span>
+            {allMyRoles.map((r) => (
+              <span
+                key={r}
+                className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${
+                  r === 'Pimpinan'
+                    ? 'border-amber-300 bg-amber-50 text-amber-900'
+                    : 'border-teal-200 bg-teal-50 text-teal-900'
+                }`}
+              >
+                {r}
+              </span>
+            ))}
             <span aria-hidden="true">·</span>
-            <span>Unit {unlockedTeacher.genderScope}</span>
+            <span>Wilayah {unlockedTeacher.genderScope}</span>
             {unlockedTeacher.waliKelasOf && (
               <>
                 <span aria-hidden="true">·</span>
@@ -1314,6 +1483,20 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              downloadLoginAccessCardsPdf([unlockedTeacher], {
+                title: `KARTU AKSES LOGIN — ${unlockedTeacher.nama}`,
+                subtitle: `Token Login: ${activeTokenStr} · Peran: ${allMyRoles.join(', ')}`,
+              });
+              notify(`Kartu Akses Login PDF untuk ${unlockedTeacher.nama} berhasil diunduh.`, 'success');
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-950 hover:bg-amber-100"
+          >
+            <KeyRound className="h-3.5 w-3.5 text-amber-700" />
+            Unduh Kartu Login Saya (PDF)
+          </button>
           <button
             type="button"
             onClick={() => handleCopyPersonalLink(unlockedTeacher.nama)}
@@ -1338,15 +1521,14 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
             <ShieldCheck className="h-3.5 w-3.5" />
             Pembinaan &amp; Portofolio
           </button>
-          {onOpenJadwal && (
-            <button
-              type="button"
-              onClick={onOpenJadwal}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              Atur Jadwal
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setShowAllRoleTabs((v) => !v)}
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+            title="Tampilkan atau sembunyikan tab peran di luar amanah utama Anda"
+          >
+            {showAllRoleTabs ? 'Sesuaikan Peran Saya' : 'Tampilkan Semua Tab'}
+          </button>
           <button
             type="button"
             onClick={() => onUnlock(null)}
@@ -1358,80 +1540,104 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
         </div>
       </div>
 
-      {/* Role Progress Tabs */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-1.5 rounded-xl bg-slate-100 p-1.5 border border-slate-200/80 w-full">
-        <button
-          type="button"
-          onClick={() => setProgressTab('mengajar')}
-          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
-            progressTab === 'mengajar'
-              ? 'bg-teal-600 text-white shadow-sm'
-              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-          }`}
-        >
-          <BookOpen className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'mengajar' ? 'text-white' : 'text-teal-600'}`} />
-          <span className="truncate">Guru Akademik</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setProgressTab('walikelas')}
-          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
-            progressTab === 'walikelas'
-              ? 'bg-sky-600 text-white shadow-sm'
-              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-          }`}
-        >
-          <ShieldCheck className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'walikelas' ? 'text-white' : 'text-sky-600'}`} />
-          <span className="truncate font-mono-num">
-            Wali Kelas ({recap?.waliProgress.totalSantri ?? 0})
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setProgressTab('musyrif')}
-          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
-            progressTab === 'musyrif'
-              ? 'bg-emerald-600 text-white shadow-sm'
-              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-          }`}
-        >
-          <Home className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'musyrif' ? 'text-white' : 'text-emerald-600'}`} />
-          <span className="truncate font-mono-num">
-            Wali Asrama ({recap?.musyrifProgress.totalKamar ?? 0})
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setProgressTab('guruwali')}
-          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
-            progressTab === 'guruwali'
-              ? 'bg-indigo-600 text-white shadow-sm'
-              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-          }`}
-        >
-          <Users className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'guruwali' ? 'text-white' : 'text-indigo-600'}`} />
-          <span className="truncate font-mono-num">
-            Guru Wali ({recap?.guruWaliProgress?.totalSantri ?? 0})
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setProgressTab('quran')}
-          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
-            progressTab === 'quran'
-              ? 'bg-amber-600 text-white shadow-sm'
-              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-          }`}
-        >
-          <BookOpen className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'quran' ? 'text-white' : 'text-amber-600'}`} />
-          <span className="truncate font-mono-num">
-            Al-Qur&apos;an ({halaqahRows.length})
-          </span>
-        </button>
+      {/* Role Progress Tabs — Automatically filtered by employee roles in Database Pegawai */}
+      <div className="flex flex-wrap gap-1.5 rounded-xl bg-slate-100 p-1.5 border border-slate-200/80 w-full">
+        {(isPimpinanOrAdmin || showAllRoleTabs) && (
+          <button
+            type="button"
+            onClick={() => setProgressTab('pimpinan')}
+            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[11px] sm:text-xs font-bold transition-colors whitespace-nowrap min-w-[160px] ${
+              progressTab === 'pimpinan'
+                ? 'bg-[#0B1324] text-amber-300 shadow-sm'
+                : 'text-slate-700 hover:bg-white/80 hover:text-slate-950'
+            }`}
+          >
+            <FileText className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'pimpinan' ? 'text-amber-300' : 'text-amber-600'}`} />
+            <span className="truncate">Laporan Pimpinan (Semua PDF)</span>
+          </button>
+        )}
+        {(hasRoleGuru || showAllRoleTabs) && (
+          <button
+            type="button"
+            onClick={() => setProgressTab('mengajar')}
+            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
+              progressTab === 'mengajar'
+                ? 'bg-teal-600 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+            }`}
+          >
+            <BookOpen className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'mengajar' ? 'text-white' : 'text-teal-600'}`} />
+            <span className="truncate">Guru Akademik</span>
+          </button>
+        )}
+        {(hasRoleWaliKelas || showAllRoleTabs) && (
+          <button
+            type="button"
+            onClick={() => setProgressTab('walikelas')}
+            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
+              progressTab === 'walikelas'
+                ? 'bg-sky-600 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+            }`}
+          >
+            <ShieldCheck className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'walikelas' ? 'text-white' : 'text-sky-600'}`} />
+            <span className="truncate font-mono-num">
+              Wali Kelas ({recap?.waliProgress.totalSantri ?? 0})
+            </span>
+          </button>
+        )}
+        {(hasRoleWaliAsrama || showAllRoleTabs) && (
+          <button
+            type="button"
+            onClick={() => setProgressTab('musyrif')}
+            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
+              progressTab === 'musyrif'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+            }`}
+          >
+            <Home className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'musyrif' ? 'text-white' : 'text-emerald-600'}`} />
+            <span className="truncate font-mono-num">
+              Wali Asrama ({recap?.musyrifProgress.totalKamar ?? 0})
+            </span>
+          </button>
+        )}
+        {(hasRoleGuruWali || showAllRoleTabs) && (
+          <button
+            type="button"
+            onClick={() => setProgressTab('guruwali')}
+            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
+              progressTab === 'guruwali'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+            }`}
+          >
+            <Users className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'guruwali' ? 'text-white' : 'text-indigo-600'}`} />
+            <span className="truncate font-mono-num">
+              Guru Wali ({recap?.guruWaliProgress?.totalSantri ?? 0})
+            </span>
+          </button>
+        )}
+        {(hasRoleQuran || showAllRoleTabs) && (
+          <button
+            type="button"
+            onClick={() => setProgressTab('quran')}
+            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
+              progressTab === 'quran'
+                ? 'bg-amber-600 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+            }`}
+          >
+            <BookOpen className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'quran' ? 'text-white' : 'text-amber-600'}`} />
+            <span className="truncate font-mono-num">
+              Al-Qur&apos;an ({halaqahRows.length})
+            </span>
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setProgressTab('whatsapp')}
-          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
+          className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[120px] ${
             progressTab === 'whatsapp'
               ? 'bg-green-600 text-white shadow-sm'
               : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
@@ -1443,7 +1649,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
         <button
           type="button"
           onClick={() => setProgressTab('upload')}
-          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
+          className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[120px] ${
             progressTab === 'upload'
               ? 'bg-violet-600 text-white shadow-sm'
               : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
@@ -1775,6 +1981,710 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
             </form>
           </div>
         </div>
+      ) : progressTab === 'pimpinan' ? (
+        <div className="space-y-6">
+          {/* Header Eksekutif Pimpinan: Lihat Semua Laporan & Download PDF */}
+          <div className="rounded-xl bg-gradient-to-r from-[#0B1324] via-[#102A43] to-teal-900 p-5 text-white space-y-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <div className="inline-flex items-center gap-1.5 rounded-md bg-amber-400/20 border border-amber-300/40 px-2.5 py-0.5 text-[11px] font-bold text-amber-300">
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  Akses Khusus Peran Pimpinan · Semua Laporan Komponen Sekolah
+                </div>
+                <h3 className="mt-1.5 text-lg font-bold text-white">
+                  Pusat Laporan Eksekutif Pimpinan &amp; Unduh PDF Seluruh Komponen
+                </h3>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  Menampilkan hasil rekapitulasi terhubung dari seluruh 8 komponen SIM PINTAR (Asrama, Akademik &amp; Laju Materi, Halaqah Al-Qur&apos;an, Wali Kelas, Guru Wali, Wali Asrama/Room Visit, Labkom, serta Ujian &amp; Piket).
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <div className="inline-flex items-center rounded-lg bg-white/10 p-1 border border-white/15 text-xs">
+                  {(['Semua', 'Putra', 'Putri'] as const).map((w) => (
+                    <button
+                      key={w}
+                      type="button"
+                      onClick={() => setPimpinanWilayah(w)}
+                      className={`rounded-md px-2.5 py-1 font-semibold transition-colors ${
+                        pimpinanWilayah === w
+                          ? 'bg-amber-400 text-slate-950 font-bold'
+                          : 'text-slate-200 hover:bg-white/10'
+                      }`}
+                    >
+                      {w === 'Semua' ? 'Semua Wilayah' : `Wilayah ${w}`}
+                    </button>
+                  ))}
+                </div>
+                {pimpinanReport && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadPimpinanMasterPdf(pimpinanReport, unlockedTeacher.nama);
+                      notify('Master Laporan Eksekutif Pimpinan (Semua 8 Komponen PDF) berhasil diunduh.', 'success');
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-amber-400 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-300 shadow-sm whitespace-nowrap shrink-0"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Unduh PDF Semua Laporan (Master Pimpinan)
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {pimpinanReport && (
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-8 pt-2 border-t border-white/10 text-xs">
+                <div className="rounded-lg bg-white/10 p-3">
+                  <div className="text-[11px] text-slate-300">Total Santri</div>
+                  <div className="mt-1 font-mono-num text-lg font-bold text-white">
+                    {pimpinanReport.summaryCounts.totalStudents}
+                  </div>
+                  <div className="text-[10px] text-teal-300 font-mono-num">
+                    Pa:{pimpinanReport.summaryCounts.studentsPutra} · Pi:{pimpinanReport.summaryCounts.studentsPutri}
+                  </div>
+                </div>
+                <div className="rounded-lg bg-white/10 p-3">
+                  <div className="text-[11px] text-slate-300">Pegawai/Guru</div>
+                  <div className="mt-1 font-mono-num text-lg font-bold text-white">
+                    {pimpinanReport.summaryCounts.totalTeachers}
+                  </div>
+                  <div className="text-[10px] text-slate-300 font-mono-num">
+                    {pimpinanReport.summaryCounts.totalSchedules} jadwal
+                  </div>
+                </div>
+                <div className="rounded-lg bg-white/10 p-3">
+                  <div className="text-[11px] text-slate-300">1. Asrama</div>
+                  <div className="mt-1 font-mono-num text-lg font-bold text-emerald-300">
+                    {pimpinanReport.asramaReport.length} Kamar
+                  </div>
+                  <div className="text-[10px] text-slate-300 font-mono-num">
+                    {pimpinanReport.summaryCounts.totalRooms} kamar DB
+                  </div>
+                </div>
+                <div className="rounded-lg bg-white/10 p-3">
+                  <div className="text-[11px] text-slate-300">2. Akademik</div>
+                  <div className="mt-1 font-mono-num text-lg font-bold text-sky-300">
+                    {pimpinanReport.akademikPacingReport.length} Mapel
+                  </div>
+                  <div className="text-[10px] text-slate-300 font-mono-num">
+                    Laju &amp; KBM
+                  </div>
+                </div>
+                <div className="rounded-lg bg-white/10 p-3">
+                  <div className="text-[11px] text-slate-300">3. Al-Qur&apos;an</div>
+                  <div className="mt-1 font-mono-num text-lg font-bold text-amber-300">
+                    {pimpinanReport.quranReport.length}
+                  </div>
+                  <div className="text-[10px] text-slate-300 font-mono-num">
+                    Kelompok Halaqah
+                  </div>
+                </div>
+                <div className="rounded-lg bg-white/10 p-3">
+                  <div className="text-[11px] text-slate-300">4-6. Pembinaan</div>
+                  <div className="mt-1 font-mono-num text-lg font-bold text-violet-300">
+                    {pimpinanReport.summaryCounts.totalPembinaanRecords}
+                  </div>
+                  <div className="text-[10px] text-slate-300 font-mono-num">
+                    Wali/GW/Asrama
+                  </div>
+                </div>
+                <div className="rounded-lg bg-white/10 p-3">
+                  <div className="text-[11px] text-slate-300">7. Labkom</div>
+                  <div className="mt-1 font-mono-num text-lg font-bold text-teal-300">
+                    {pimpinanReport.labkomReport.length}
+                  </div>
+                  <div className="text-[10px] text-slate-300 font-mono-num">
+                    Peminjaman
+                  </div>
+                </div>
+                <div className="rounded-lg bg-white/10 p-3">
+                  <div className="text-[11px] text-slate-300">8. Ujian &amp; Piket</div>
+                  <div className="mt-1 font-mono-num text-lg font-bold text-rose-300">
+                    {pimpinanReport.ujianPiketReport.examSummary.length} / {pimpinanReport.ujianPiketReport.teacherAbsences.length}
+                  </div>
+                  <div className="text-[10px] text-slate-300 font-mono-num">
+                    Ujian / Piket
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {loadingPimpinan || !pimpinanReport ? (
+            <div className="h-48 animate-pulse rounded-xl bg-slate-200" />
+          ) : (
+            <div className="space-y-5">
+              {/* KOMPONEN 1: PRESENSI ASRAMA */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <div className="border-b border-slate-200 bg-emerald-50/50 px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">
+                      1. Laporan Presensi Asrama &amp; Kepatuhan Kamar ({pimpinanReport.asramaReport.length} Kamar)
+                    </h4>
+                    <p className="text-xs text-slate-600">
+                      Rekapitulasi kehadiran harian santri di setiap kamar asrama (Putra &amp; Putri).
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadTableReportPdf({
+                        title: '1. LAPORAN PRESENSI ASRAMA & KEPATUHAN KAMAR',
+                        subtitle: `Wilayah: ${pimpinanReport.wilayah} | Total Kamar: ${pimpinanReport.asramaReport.length}`,
+                        filename: `Laporan_1_Presensi_Asrama_${pimpinanReport.wilayah}.pdf`,
+                        headers: ['Kamar', 'Wilayah', 'Wali Asrama', 'Santri', 'Hadir', 'Telat', 'Sakit/Izin/Alfa', '% Hadir'],
+                        rows: pimpinanReport.asramaReport.map((r) => [
+                          r.kamar,
+                          r.gender,
+                          r.musyrif,
+                          String(r.totalSantri),
+                          String(r.H),
+                          String(r.T),
+                          `${r.S}/${r.I}/${r.A}`,
+                          `${r.persenHadir}%`,
+                        ]),
+                      });
+                      notify('PDF Laporan 1 (Presensi Asrama) berhasil diunduh.', 'success');
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    Unduh PDF Asrama
+                  </button>
+                </div>
+                <div className="max-h-60 overflow-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-2.5 font-semibold">Kamar</th>
+                        <th className="px-3 py-2.5 font-semibold">Wilayah</th>
+                        <th className="px-3 py-2.5 font-semibold">Wali Asrama</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Santri</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Log Sesi</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">S/I/A</th>
+                        <th className="px-4 py-2.5 text-right font-semibold">% Hadir</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {pimpinanReport.asramaReport.map((r) => (
+                        <tr key={r.kamar} className="hover:bg-slate-50">
+                          <td className="px-4 py-2 font-semibold text-slate-900">{r.kamar}</td>
+                          <td className="px-3 py-2">{r.gender}</td>
+                          <td className="px-3 py-2">{r.musyrif}</td>
+                          <td className="px-3 py-2 text-right font-mono-num">{r.totalSantri}</td>
+                          <td className="px-3 py-2 text-right font-mono-num">{r.totalLog}</td>
+                          <td className="px-3 py-2 text-right font-mono-num">{r.S}/{r.I}/{r.A}</td>
+                          <td className="px-4 py-2 text-right font-mono-num font-bold text-emerald-700">{r.persenHadir}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* KOMPONEN 2: AKADEMIK & LAJU MATERI */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <div className="border-b border-slate-200 bg-sky-50/50 px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">
+                      2. Laporan Akademik &amp; Laju Materi Pembelajaran Guru ({pimpinanReport.akademikPacingReport.length} Kelas/Mapel)
+                    </h4>
+                    <p className="text-xs text-slate-600">
+                      Rekap pembelajaran, ketercapaian pertemuan silabus, dan jurnal materi terakhir setiap guru.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadTableReportPdf({
+                        title: '2. LAPORAN AKADEMIK & LAJU MATERI PEMBELAJARAN GURU',
+                        subtitle: `Wilayah: ${pimpinanReport.wilayah} | Total Mapel/Kelas: ${pimpinanReport.akademikPacingReport.length}`,
+                        filename: `Laporan_2_Akademik_Laju_Materi_${pimpinanReport.wilayah}.pdf`,
+                        orientation: 'landscape',
+                        headers: ['Guru', 'Mapel', 'Kelas', 'Wilayah', 'Pertemuan', 'Laju %', 'Status', 'Hadir %', 'Materi Terakhir'],
+                        rows: pimpinanReport.akademikPacingReport.map((r) => [
+                          r.guru,
+                          r.mapel,
+                          r.kelas,
+                          r.gender,
+                          `${r.pertemuanTerlaksana}/${r.targetPertemuan}`,
+                          `${r.lajuPersen}%`,
+                          r.statusLaju,
+                          `${r.avgKehadiranPct}%`,
+                          r.materiTerakhir,
+                        ]),
+                      });
+                      notify('PDF Laporan 2 (Akademik & Laju Materi) berhasil diunduh.', 'success');
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-800"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    Unduh PDF Akademik
+                  </button>
+                </div>
+                <div className="max-h-60 overflow-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-2.5 font-semibold">Guru</th>
+                        <th className="px-3 py-2.5 font-semibold">Mata Pelajaran</th>
+                        <th className="px-3 py-2.5 font-semibold">Kelas</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Pertemuan</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Laju %</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Hadir %</th>
+                        <th className="px-4 py-2.5 font-semibold">Materi Terakhir</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {pimpinanReport.akademikPacingReport.map((r, i) => (
+                        <tr key={i} className="hover:bg-slate-50">
+                          <td className="px-4 py-2 font-semibold text-slate-900">{r.guru}</td>
+                          <td className="px-3 py-2 text-teal-800 font-medium">{r.mapel}</td>
+                          <td className="px-3 py-2">{r.kelas} ({r.gender})</td>
+                          <td className="px-3 py-2 text-right font-mono-num">{r.pertemuanTerlaksana}/{r.targetPertemuan}</td>
+                          <td className="px-3 py-2 text-right font-mono-num font-bold text-sky-700">{r.lajuPersen}%</td>
+                          <td className="px-3 py-2 text-right font-mono-num font-bold text-emerald-700">{r.avgKehadiranPct}%</td>
+                          <td className="px-4 py-2 truncate max-w-xs">{r.materiTerakhir}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* KOMPONEN 3: HALAQAH AL-QUR'AN */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <div className="border-b border-slate-200 bg-amber-50/50 px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">
+                      3. Laporan Halaqah Al-Qur&apos;an &amp; Setoran Ziyadah ({pimpinanReport.quranReport.length} Kelompok)
+                    </h4>
+                    <p className="text-xs text-slate-600">
+                      Rekapitulasi kehadiran halaqah dan catatan setoran ziyadah/murajaah per kelompok.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadTableReportPdf({
+                        title: "3. LAPORAN HALAQAH AL-QUR'AN & SETORAN ZIYADAH",
+                        subtitle: `Wilayah: ${pimpinanReport.wilayah} | Total Kelompok: ${pimpinanReport.quranReport.length}`,
+                        filename: `Laporan_3_Halaqah_AlQuran_${pimpinanReport.wilayah}.pdf`,
+                        headers: ['Kelompok Halaqah', 'Pengampu', 'Wilayah', 'Santri', 'Total Log', '% Hadir', 'Jml Setoran', 'Setoran Terakhir'],
+                        rows: pimpinanReport.quranReport.map((r) => [
+                          r.kelompok,
+                          r.pengampu,
+                          r.gender,
+                          String(r.totalSantri),
+                          String(r.totalLog),
+                          `${r.persenHadir}%`,
+                          String(r.totalSetoranRecorded),
+                          r.catatanTerakhir,
+                        ]),
+                      });
+                      notify("PDF Laporan 3 (Halaqah Al-Qur'an) berhasil diunduh.", 'success');
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    Unduh PDF Al-Qur&apos;an
+                  </button>
+                </div>
+                <div className="max-h-60 overflow-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-2.5 font-semibold">Kelompok Halaqah</th>
+                        <th className="px-3 py-2.5 font-semibold">Pengampu</th>
+                        <th className="px-3 py-2.5 font-semibold">Wilayah</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Santri</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Log</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">% Hadir</th>
+                        <th className="px-4 py-2.5 text-right font-semibold">Setoran</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {pimpinanReport.quranReport.map((r, i) => (
+                        <tr key={i} className="hover:bg-slate-50">
+                          <td className="px-4 py-2 font-semibold text-slate-900">{r.kelompok}</td>
+                          <td className="px-3 py-2">{r.pengampu}</td>
+                          <td className="px-3 py-2">{r.gender}</td>
+                          <td className="px-3 py-2 text-right font-mono-num">{r.totalSantri}</td>
+                          <td className="px-3 py-2 text-right font-mono-num">{r.totalLog}</td>
+                          <td className="px-3 py-2 text-right font-mono-num font-bold text-amber-700">{r.persenHadir}%</td>
+                          <td className="px-4 py-2 text-right font-mono-num">{r.totalSetoranRecorded}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* KOMPONEN 4: PEMBINAAN WALI KELAS */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <div className="border-b border-slate-200 bg-violet-50/50 px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">
+                      4. Laporan Pembinaan Wali Kelas — Momen Klasikal Pekanan &amp; Khusus ({pimpinanReport.waliKelasReport.length} Kelas)
+                    </h4>
+                    <p className="text-xs text-slate-600">
+                      Rekapitulasi per kelas meliputi kehadiran lintas divisi, momen klasikal pekanan, pembinaan khusus, dan ibadah.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadTableReportPdf({
+                        title: '4. LAPORAN PEMBINAAN WALI KELAS (KLASIKAL PEKANAN & KHUSUS)',
+                        subtitle: `Wilayah: ${pimpinanReport.wilayah} | Total Kelas: ${pimpinanReport.waliKelasReport.length}`,
+                        filename: `Laporan_4_Pembinaan_Wali_Kelas_${pimpinanReport.wilayah}.pdf`,
+                        headers: ['Kelas', 'Wali Kelas', 'Wilayah', 'Siswa', 'Klasikal', 'Khusus', 'Asr/Akd/Qur %', 'Wajib %'],
+                        rows: pimpinanReport.waliKelasReport.map((r) => [
+                          r.kelas,
+                          r.waliKelas,
+                          r.gender,
+                          String(r.totalSantri),
+                          String(r.klasikalCount),
+                          String(r.khususCount),
+                          `${r.persenHadirAsrama}/${r.persenHadirAkademik}/${r.persenHadirQuran}%`,
+                          `${r.wajibPct}%`,
+                        ]),
+                      });
+                      notify('PDF Laporan 4 (Pembinaan Wali Kelas) berhasil diunduh.', 'success');
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-violet-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-800"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    Unduh PDF Wali Kelas
+                  </button>
+                </div>
+                <div className="max-h-60 overflow-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-2.5 font-semibold">Kelas</th>
+                        <th className="px-3 py-2.5 font-semibold">Wali Kelas</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Jml Siswa</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Klasikal / Khusus</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Asr / Akd / Qur %</th>
+                        <th className="px-4 py-2.5 text-right font-semibold">Wajib %</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {pimpinanReport.waliKelasReport.map((r, i) => (
+                        <tr key={i} className="hover:bg-slate-50">
+                          <td className="px-4 py-2 font-semibold text-slate-900">{r.kelas} ({r.gender})</td>
+                          <td className="px-3 py-2">{r.waliKelas}</td>
+                          <td className="px-3 py-2 text-right font-mono-num">{r.totalSantri}</td>
+                          <td className="px-3 py-2 text-right font-mono-num font-semibold text-violet-700">
+                            {r.klasikalCount}K · {r.khususCount}I
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono-num">
+                            {r.persenHadirAsrama}% / {r.persenHadirAkademik}% / {r.persenHadirQuran}%
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono-num font-bold text-teal-700">{r.wajibPct}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* KOMPONEN 5: PEMBINAAN GURU WALI */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <div className="border-b border-slate-200 bg-indigo-50/50 px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">
+                      5. Laporan Pembinaan Guru Wali ({pimpinanReport.guruWaliReport.length} Guru Wali)
+                    </h4>
+                    <p className="text-xs text-slate-600">
+                      Pendampingan personal &amp; momen klasikal pekanan sesuai jumlah siswa yang berada di dalam binaan Guru Wali.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadTableReportPdf({
+                        title: '5. LAPORAN PEMBINAAN GURU WALI (SESUAI SISWA BINAAN)',
+                        subtitle: `Wilayah: ${pimpinanReport.wilayah} | Total Guru Wali: ${pimpinanReport.guruWaliReport.length}`,
+                        filename: `Laporan_5_Pembinaan_Guru_Wali_${pimpinanReport.wilayah}.pdf`,
+                        headers: ['Guru Wali', 'Wilayah', 'Siswa Binaan', 'Asr/Akd/Qur %', 'Klasikal', 'Khusus', 'Kasus Aktif'],
+                        rows: pimpinanReport.guruWaliReport.map((r) => [
+                          r.guruWali,
+                          r.genderScope,
+                          String(r.totalSantriBinaan),
+                          `${r.avgHadirAsrama}/${r.avgHadirAkademik}/${r.avgHadirQuran}%`,
+                          String(r.klasikalCount),
+                          String(r.khususCount),
+                          String(r.kasusAktif),
+                        ]),
+                      });
+                      notify('PDF Laporan 5 (Pembinaan Guru Wali) berhasil diunduh.', 'success');
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-800"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    Unduh PDF Guru Wali
+                  </button>
+                </div>
+                <div className="max-h-60 overflow-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-2.5 font-semibold">Nama Guru Wali</th>
+                        <th className="px-3 py-2.5 font-semibold">Wilayah</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Siswa Binaan</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Klasikal / Khusus</th>
+                        <th className="px-4 py-2.5 text-right font-semibold">Asr / Akd / Qur %</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {pimpinanReport.guruWaliReport.map((r, i) => (
+                        <tr key={i} className="hover:bg-slate-50">
+                          <td className="px-4 py-2 font-semibold text-slate-900">{r.guruWali}</td>
+                          <td className="px-3 py-2">{r.genderScope}</td>
+                          <td className="px-3 py-2 text-right font-mono-num">{r.totalSantriBinaan}</td>
+                          <td className="px-3 py-2 text-right font-mono-num font-semibold text-indigo-700">
+                            {r.klasikalCount}K · {r.khususCount}I
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono-num font-bold text-teal-700">
+                            {r.avgHadirAsrama}% / {r.avgHadirAkademik}% / {r.avgHadirQuran}%
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* KOMPONEN 6: PEMBINAAN WALI ASRAMA / ROOM VISIT */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <div className="border-b border-slate-200 bg-teal-50/50 px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">
+                      6. Laporan Pembinaan Wali Asrama &amp; Room Visit ({pimpinanReport.waliAsramaPembinaanReport.length} Kamar)
+                    </h4>
+                    <p className="text-xs text-slate-600">
+                      Momen klasikal pekanan asrama &amp; kunjungan kamar (Room Visit) per Wali Asrama.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadTableReportPdf({
+                        title: '6. LAPORAN PEMBINAAN WALI ASRAMA & ROOM VISIT',
+                        subtitle: `Wilayah: ${pimpinanReport.wilayah} | Total Kamar: ${pimpinanReport.waliAsramaPembinaanReport.length}`,
+                        filename: `Laporan_6_Pembinaan_Asrama_${pimpinanReport.wilayah}.pdf`,
+                        headers: ['Kamar', 'Wali Asrama', 'Wilayah', 'Santri', 'Hadir Asrama %', 'Klasikal', 'Khusus', 'Wajib %'],
+                        rows: pimpinanReport.waliAsramaPembinaanReport.map((r) => [
+                          r.kamar,
+                          r.waliAsrama,
+                          r.gender,
+                          String(r.totalSantri),
+                          `${r.persenHadirAsrama}%`,
+                          String(r.klasikalCount),
+                          String(r.khususCount),
+                          `${r.wajibPct}%`,
+                        ]),
+                      });
+                      notify('PDF Laporan 6 (Pembinaan Wali Asrama) berhasil diunduh.', 'success');
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    Unduh PDF Pembinaan Asrama
+                  </button>
+                </div>
+                <div className="max-h-60 overflow-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-2.5 font-semibold">Kamar</th>
+                        <th className="px-3 py-2.5 font-semibold">Wali Asrama</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Jml Santri</th>
+                        <th className="px-3 py-2.5 text-right font-semibold">Klasikal / Khusus</th>
+                        <th className="px-4 py-2.5 text-right font-semibold">Wajib %</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {pimpinanReport.waliAsramaPembinaanReport.map((r, i) => (
+                        <tr key={i} className="hover:bg-slate-50">
+                          <td className="px-4 py-2 font-semibold text-slate-900">{r.kamar} ({r.gender})</td>
+                          <td className="px-3 py-2">{r.waliAsrama}</td>
+                          <td className="px-3 py-2 text-right font-mono-num">{r.totalSantri}</td>
+                          <td className="px-3 py-2 text-right font-mono-num font-semibold text-teal-700">
+                            {r.klasikalCount}K · {r.khususCount}I
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono-num font-bold text-teal-700">{r.wajibPct}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* KOMPONEN 7 & 8: PEMINJAMAN LABKOM + UJIAN & PIKET */}
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+                <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                  <div className="border-b border-slate-200 bg-slate-50 px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900">
+                        7. Laporan Peminjaman Labkom &amp; Ruangan ({pimpinanReport.labkomReport.length})
+                      </h4>
+                      <p className="text-xs text-slate-600">
+                        Rekap penggunaan laboratorium komputer &amp; ruangan SMA Putra/Putri.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        downloadTableReportPdf({
+                          title: '7. LAPORAN PEMINJAMAN LABKOM & RUANGAN',
+                          subtitle: `Wilayah: ${pimpinanReport.wilayah} | Total Peminjaman: ${pimpinanReport.labkomReport.length}`,
+                          filename: `Laporan_7_Peminjaman_Labkom_${pimpinanReport.wilayah}.pdf`,
+                          headers: ['Tanggal', 'Kampus', 'Lab / Ruang', 'Jam Ke', 'Guru Peminjam', 'Kelas', 'Mapel'],
+                          rows:
+                            pimpinanReport.labkomReport.length > 0
+                              ? pimpinanReport.labkomReport.map((r) => [
+                                  r.tanggal,
+                                  r.kampus,
+                                  r.lab,
+                                  r.jamKe,
+                                  r.guru,
+                                  r.kelas,
+                                  r.mapel,
+                                ])
+                              : [['-', '-', '-', '-', 'Belum ada peminjaman tercatat', '-', '-']],
+                        });
+                        notify('PDF Laporan 7 (Peminjaman Labkom) berhasil diunduh.', 'success');
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-[#0B1324] px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Unduh PDF Labkom
+                    </button>
+                  </div>
+                  <div className="max-h-56 overflow-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 sticky top-0">
+                        <tr>
+                          <th className="px-3 py-2 font-semibold">Tanggal</th>
+                          <th className="px-3 py-2 font-semibold">Guru &amp; Kelas</th>
+                          <th className="px-3 py-2 font-semibold">Lab &amp; Jam</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {pimpinanReport.labkomReport.length === 0 ? (
+                          <tr>
+                            <td colSpan={3} className="px-4 py-6 text-center text-slate-500">
+                              Belum ada jadwal peminjaman Labkom tercatat.
+                            </td>
+                          </tr>
+                        ) : (
+                          pimpinanReport.labkomReport.map((r, i) => (
+                            <tr key={i} className="hover:bg-slate-50">
+                              <td className="px-3 py-2 font-mono-num">{r.tanggal} ({r.kampus})</td>
+                              <td className="px-3 py-2 font-semibold text-slate-900">{r.guru} · {r.kelas}</td>
+                              <td className="px-3 py-2 text-slate-600">{r.lab} (JP {r.jamKe})</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                  <div className="border-b border-slate-200 bg-slate-50 px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900">
+                        8. Laporan Ujian &amp; Piket / Inval Guru
+                      </h4>
+                      <p className="text-xs text-slate-600">
+                        Sesi Ujian: {pimpinanReport.ujianPiketReport.examSummary.length} · Piket Guru: {pimpinanReport.ujianPiketReport.teacherAbsences.length}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        downloadTableReportPdf({
+                          title: '8. LAPORAN PENGAWASAN UJIAN & PIKET / INVAL GURU',
+                          subtitle: `Ujian: ${pimpinanReport.ujianPiketReport.examSummary.length} Sesi | Piket/Inval: ${pimpinanReport.ujianPiketReport.teacherAbsences.length} Log`,
+                          filename: `Laporan_8_Ujian_Piket_${pimpinanReport.wilayah}.pdf`,
+                          headers: ['Tanggal', 'Kategori', 'Guru / Pengawas', 'Kelas / Ruang', 'Mapel / Status', 'Keterangan'],
+                          rows: [
+                            ...pimpinanReport.ujianPiketReport.examSummary.map((r) => [
+                              r.tanggal,
+                              `Ujian ${r.jenisUjian}`,
+                              r.pengawas,
+                              `${r.ruangan} (${r.kelas})`,
+                              r.mapel,
+                              `Hadir ${r.hadir}/${r.totalSiswa}`,
+                            ]),
+                            ...pimpinanReport.ujianPiketReport.teacherAbsences.map((r) => [
+                              r.tanggal,
+                              'Piket / Absen Guru',
+                              r.namaGuru,
+                              '-',
+                              r.status,
+                              r.keterangan || '-',
+                            ]),
+                          ],
+                        });
+                        notify('PDF Laporan 8 (Ujian & Piket/Inval) berhasil diunduh.', 'success');
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-rose-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-800"
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Unduh PDF Ujian &amp; Piket
+                    </button>
+                  </div>
+                  <div className="max-h-56 overflow-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 sticky top-0">
+                        <tr>
+                          <th className="px-3 py-2 font-semibold">Tanggal</th>
+                          <th className="px-3 py-2 font-semibold">Pengawas / Guru</th>
+                          <th className="px-3 py-2 font-semibold">Detail Ujian / Piket</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {pimpinanReport.ujianPiketReport.examSummary.length === 0 &&
+                        pimpinanReport.ujianPiketReport.teacherAbsences.length === 0 ? (
+                          <tr>
+                            <td colSpan={3} className="px-4 py-6 text-center text-slate-500">
+                              Belum ada berita acara ujian atau log piket/inval tercatat.
+                            </td>
+                          </tr>
+                        ) : (
+                          <>
+                            {pimpinanReport.ujianPiketReport.examSummary.map((r, i) => (
+                              <tr key={`u-${i}`} className="hover:bg-slate-50">
+                                <td className="px-3 py-2 font-mono-num">{r.tanggal}</td>
+                                <td className="px-3 py-2 font-semibold text-slate-900">{r.pengawas}</td>
+                                <td className="px-3 py-2 text-slate-600">
+                                  [{r.jenisUjian}] {r.mapel} · {r.ruangan} ({r.hadir}/{r.totalSiswa})
+                                </td>
+                              </tr>
+                            ))}
+                            {pimpinanReport.ujianPiketReport.teacherAbsences.map((r, i) => (
+                              <tr key={`p-${i}`} className="hover:bg-slate-50">
+                                <td className="px-3 py-2 font-mono-num">{r.tanggal}</td>
+                                <td className="px-3 py-2 font-semibold text-slate-900">{r.namaGuru}</td>
+                                <td className="px-3 py-2 text-slate-600">
+                                  [{r.status}] {r.keterangan || '-'}
+                                </td>
+                              </tr>
+                            ))}
+                          </>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       ) : loadingRecap || !recap ? (
         <div className="h-48 animate-pulse rounded-xl bg-slate-200" />
       ) : progressTab === 'mengajar' ? (
@@ -1857,9 +2767,38 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                   Setiap input presensi KBM &amp; topik materi otomatis terhubung menjadi peta ketercapaian silabus (target 16 pekan efektif/semester), rata-rata kehadiran kelas, dan log bab yang sudah diajarkan.
                 </p>
               </div>
-              <span className="inline-flex items-center rounded-lg bg-teal-700 px-3 py-1 text-xs font-semibold text-white shrink-0 font-mono-num">
-                {(recap.learningPacing || []).length} Kelas / Mapel Diampu
-              </span>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const rows = (recap.learningPacing || []).map((lp) => [
+                      `${lp.kelas} (${lp.gender})`,
+                      lp.mapel,
+                      lp.jadwalMingguan,
+                      `${lp.totalPertemuan}/${lp.targetPertemuan} (${lp.lajuPct}%)`,
+                      lp.statusLaju,
+                      `${lp.rataKehadiranPct}%`,
+                      lp.materiTerakhir,
+                    ]);
+                    downloadTableReportPdf({
+                      title: `LAPORAN PEMBELAJARAN & LAJU MATERI GURU — ${recap.teacher.nama}`,
+                      subtitle: `Total Jadwal: ${recap.allMySchedules.length} | Total Sesi Diisi: ${recap.totalSessions}`,
+                      filename: `Laporan_Pembelajaran_Laju_Materi_${recap.teacher.nama.replace(/\s+/g, '_')}.pdf`,
+                      orientation: 'landscape',
+                      headers: ['Kelas & Wilayah', 'Mata Pelajaran', 'Jadwal', 'Pertemuan & Laju', 'Status', '% Hadir', 'Materi Terakhir'],
+                      rows: rows.length > 0 ? rows : [['-', '-', '-', '0/16 (0%)', 'Belum Mulai', '100%', '-']],
+                    });
+                    notify('PDF Laporan Pembelajaran & Laju Materi berhasil diunduh.', 'success');
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#0B1324] px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                >
+                  <FileText className="h-3.5 w-3.5 text-teal-300" />
+                  Unduh PDF Laju Materi
+                </button>
+                <span className="inline-flex items-center rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white shrink-0 font-mono-num">
+                  {(recap.learningPacing || []).length} Kelas / Mapel Diampu
+                </span>
+              </div>
             </div>
 
             {(!recap.learningPacing || recap.learningPacing.length === 0) ? (
@@ -2024,21 +2963,51 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
 
           {/* Personal Session History */}
           <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-5 py-4">
               <div>
                 <h3 className="text-sm font-semibold text-slate-900">Riwayat Rekapan Mengajar &amp; Presensi</h3>
                 <p className="text-xs text-slate-500">
                   Seluruh sesi yang diisi atas nama {recap.teacher.nama}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={handleExportRecapCsv}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                <Download className="h-3.5 w-3.5" />
-                Unduh CSV Pribadi
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    downloadTableReportPdf({
+                      title: `LAPORAN RIWAYAT SESI MENGAJAR & PRESENSI — ${recap.teacher.nama}`,
+                      subtitle: `Total Sesi: ${recap.sessions.length} | Tanggal Cetak: ${formatTanggalIndo(today)}`,
+                      filename: `Laporan_Sesi_Mengajar_${recap.teacher.nama.replace(/\s+/g, '_')}.pdf`,
+                      headers: ['Tanggal', 'Divisi', 'Kelas / Kamar', 'Mapel / Agenda', 'Materi / Catatan', 'Hadir', 'S/I/A'],
+                      rows:
+                        recap.sessions.length > 0
+                          ? recap.sessions.map((s) => [
+                              formatTanggalIndo(s.tanggal),
+                              s.jenisPresensi,
+                              s.kelas,
+                              s.mapel,
+                              s.materi,
+                              `${s.hadir}/${s.totalSiswa}`,
+                              String(s.tidakHadir),
+                            ])
+                          : [['-', '-', '-', '-', 'Belum ada sesi tercatat', '-', '-']],
+                    });
+                    notify('PDF Laporan Riwayat Mengajar berhasil diunduh.', 'success');
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  Unduh PDF Riwayat Mengajar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportRecapCsv}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Unduh CSV Pribadi
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -2189,13 +3158,48 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                       Menghubungkan data kehadiran Akademik, Asrama, Al-Qur&apos;an dengan Pembinaan Klasikal Pekanan &amp; Khusus Individu.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={onOpenWaliKelas}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800"
-                  >
-                    Input Pembinaan Klasikal / Khusus
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        downloadTableReportPdf({
+                          title: `LAPORAN WALI KELAS — ${activeClassLabel.toUpperCase()} (${recap.teacher.nama})`,
+                          subtitle: `Total Siswa: ${activeWaliRows.length} | Kehadiran Akademik, Asrama, Al-Qur'an & Pembinaan Klasikal/Khusus`,
+                          filename: `Laporan_Wali_Kelas_${activeClassLabel.replace(/\s+/g, '_')}.pdf`,
+                          orientation: 'landscape',
+                          headers: ['Nama Santri', 'Kelas & Kamar', 'Wali Asrama & GW', 'Akd %', 'Asr %', 'Qur %', 'S/I/A', 'Klasikal/Khusus', 'Wajib %', 'Net Poin', 'Status'],
+                          rows:
+                            activeWaliRows.length > 0
+                              ? activeWaliRows.map((st) => [
+                                  st.nama,
+                                  `${st.kelas} (${st.kamar})`,
+                                  `Asr: ${st.musyrif || '-'} | GW: ${st.guruWali || '-'}`,
+                                  `${st.akademikPct ?? 100}%`,
+                                  `${st.asramaPct ?? 100}%`,
+                                  `${st.alquranPct ?? 100}%`,
+                                  `${st.absenSakit}/${st.absenIzin}/${st.absenAlfa}`,
+                                  `${st.klasikalCount ?? 0}K / ${st.khususCount ?? st.totalPembinaan}I`,
+                                  `${st.wajibPct}%`,
+                                  String(st.netPoin),
+                                  st.statusTerakhir,
+                                ])
+                              : [['-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-']],
+                        });
+                        notify(`PDF Laporan Wali Kelas (${activeClassLabel}) berhasil diunduh.`, 'success');
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-sky-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-sky-800"
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Unduh PDF Laporan Wali Kelas
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onOpenWaliKelas}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                    >
+                      Input Pembinaan Klasikal / Khusus
+                    </button>
+                  </div>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
@@ -2485,6 +3489,38 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                       Setiap siswa binaan terpantau kehadirannya di Asrama, Kelas Akademik, dan Halaqah Al-Qur&apos;an beserta catatan Momen Klasikal Pekanan &amp; Khusus Individu.
                     </p>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadTableReportPdf({
+                        title: `LAPORAN PEMBINAAN GURU WALI — ${unlockedTeacher.nama}`,
+                        subtitle: `Jumlah Siswa Binaan: ${gw.totalSantri} | Klasikal: ${gw.klasikalCount} | Khusus: ${gw.khususCount}`,
+                        filename: `Laporan_Guru_Wali_${unlockedTeacher.nama.replace(/\s+/g, '_')}.pdf`,
+                        orientation: 'landscape',
+                        headers: ['Nama Siswa Binaan', 'Kelas & Kamar', 'Asr %', 'Akd %', 'Qur %', 'S/I/A', 'Klasikal/Khusus', 'Wajib %', 'Net Poin', 'Status & Catatan'],
+                        rows:
+                          gw.santriProgress.length > 0
+                            ? gw.santriProgress.map((st) => [
+                                st.nama,
+                                `${st.kelas} (${st.kamar})`,
+                                `${st.asramaPct}%`,
+                                `${st.akademikPct}%`,
+                                `${st.alquranPct}%`,
+                                `${st.absenSakit}/${st.absenIzin}/${st.absenAlfa}`,
+                                `${st.klasikalCount}K / ${st.khususCount}I`,
+                                `${st.wajibPct}%`,
+                                String(st.netPoin),
+                                `${st.statusTerakhir}: ${st.catatanTerakhir}`,
+                              ])
+                            : [['-', '-', '-', '-', '-', '-', '-', '-', '-', 'Belum ada siswa binaan']],
+                      });
+                      notify('PDF Laporan Guru Wali berhasil diunduh.', 'success');
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-800 shrink-0"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    Unduh PDF Laporan Guru Wali
+                  </button>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
@@ -2599,14 +3635,46 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                   Rekapitulasi kehadiran mengaji dan progres setoran hafalan santri per kelompok halaqah.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => onOpenQuickPresensi(unlockedTeacher.nama)}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap shrink-0"
-              >
-                <BookOpen className="h-3.5 w-3.5" />
-                Input Setoran &amp; Presensi Halaqah
-              </button>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    downloadTableReportPdf({
+                      title: `LAPORAN HALAQAH AL-QUR'AN & SETORAN ZIYADAH — ${unlockedTeacher.nama}`,
+                      subtitle: `Total Santri Halaqah: ${halaqahRows.length} | Tanggal Cetak: ${formatTanggalIndo(today)}`,
+                      filename: `Laporan_Halaqah_AlQuran_${unlockedTeacher.nama.replace(/\s+/g, '_')}.pdf`,
+                      orientation: 'landscape',
+                      headers: ['Nama Santri', 'Kelas', 'Kelompok Halaqah', 'Pengampu', 'Kehadiran', 'Setoran Ziyadah', 'Tilawah', 'Murajaah'],
+                      rows:
+                        halaqahRows.length > 0
+                          ? halaqahRows.map((row) => [
+                              row.nama,
+                              row.kelas,
+                              row.kelompokQuran,
+                              row.pengampuQuran,
+                              `${row.persenHadir}% (${row.totalHadir}H)`,
+                              row.lastSetoran,
+                              row.lastTilawah,
+                              row.lastMurajaah,
+                            ])
+                          : [['-', '-', '-', '-', '-', 'Belum ada data halaqah', '-', '-']],
+                    });
+                    notify("PDF Laporan Halaqah Al-Qur'an berhasil diunduh.", 'success');
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-amber-700 whitespace-nowrap shrink-0"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  Unduh PDF Laporan Al-Qur&apos;an
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenQuickPresensi(unlockedTeacher.nama)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap shrink-0"
+                >
+                  <BookOpen className="h-3.5 w-3.5" />
+                  Input Setoran &amp; Presensi Halaqah
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -2986,6 +4054,38 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                       Menampilkan kehadiran Asrama, Halaqah Al-Qur&apos;an, dan KBM Akademik beserta Momen Klasikal Pekanan &amp; Pembinaan Khusus untuk setiap penghuni kamar.
                     </p>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadTableReportPdf({
+                        title: `LAPORAN WALI ASRAMA (${roomLabel.toUpperCase()}) — ${unlockedTeacher.nama}`,
+                        subtitle: `Total Siswa: ${filteredAsramaRows.length} | Kehadiran Asrama, Al-Qur'an, Akademik & Pembinaan Kamar`,
+                        filename: `Laporan_Wali_Asrama_${selectedAsramaRoom.replace(/\s+/g, '_')}.pdf`,
+                        orientation: 'landscape',
+                        headers: ['Nama Santri', 'Kamar & Kelas', 'Hari Ini', 'Asrama %', 'Al-Quran %', 'Akademik %', 'S/I/A', 'Klasikal/Khusus', 'Wajib %', 'Sunnah %'],
+                        rows:
+                          filteredAsramaRows.length > 0
+                            ? filteredAsramaRows.map((st) => [
+                                st.nama,
+                                `${st.kamar} (${st.kelas})`,
+                                st.statusAsramaHariIni,
+                                `${st.asramaPct ?? 100}%`,
+                                `${st.alquranPct ?? 100}%`,
+                                `${st.akademikPct ?? 100}%`,
+                                `${st.absenSakit ?? 0}/${st.absenIzin ?? 0}/${st.absenAlfa ?? 0}`,
+                                `${st.klasikalCount ?? 0}K / ${st.khususCount ?? st.totalPembinaan}I`,
+                                `${st.wajibPct}%`,
+                                `${st.sunnahPct}%`,
+                              ])
+                            : [['-', '-', '-', '-', '-', '-', '-', '-', '-', '-']],
+                      });
+                      notify(`PDF Laporan Wali Asrama (${roomLabel}) berhasil diunduh.`, 'success');
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-800 shrink-0"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    Unduh PDF Laporan Wali Asrama
+                  </button>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">

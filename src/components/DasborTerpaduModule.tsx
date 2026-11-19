@@ -8,6 +8,7 @@ import {
   CalendarClock,
   CheckCircle2,
   ClipboardCheck,
+  FileDown,
   Home,
   Monitor,
   RefreshCw,
@@ -34,7 +35,11 @@ import type {
   TeacherPublic,
   WilayahFilter,
 } from '../types';
-import { formatTanggalIndo, getTodayDateStr } from '../utils/exportHelpers';
+import {
+  downloadAnalyticsDashboardPdf,
+  formatTanggalIndo,
+  getTodayDateStr,
+} from '../utils/exportHelpers';
 import { loadSubTab, saveSubTab } from '../utils/sessionPersistence';
 
 export type DashboardTargetModule =
@@ -228,6 +233,20 @@ export const DasborTerpaduModule: React.FC<DasborTerpaduModuleProps> = ({
             >
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
               Segarkan
+            </button>
+
+            <button
+              type="button"
+              disabled={!analisis || loading}
+              onClick={() => {
+                if (!analisis) return;
+                downloadAnalyticsDashboardPdf(analisis, null, wilayah);
+                notify('Laporan PDF Dasbor Terpadu berhasil diunduh.', 'success');
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+            >
+              <FileDown className="h-3.5 w-3.5" />
+              Unduh PDF Dasbor
             </button>
           </div>
         </div>

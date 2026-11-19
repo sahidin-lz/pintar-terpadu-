@@ -11,6 +11,7 @@ import type {
   LabkomMasterKategori,
   LabkomPloting,
   MonthlyWaliKelasReport,
+  PimpinanExecutiveReport,
   RoomMapping,
   ScheduleItem,
   Student,
@@ -605,20 +606,23 @@ export function downloadAnalyticsDashboardPdf(
 }
 
 /**
- * 3. Direct PDF Export for any Tabular Report in Pusat Unduh (Tab 3)
+ * 3. Direct PDF Export for any Tabular Report in Pusat Unduh (Tab 3) & Component Reports
  */
 export function downloadTableReportPdf(params: {
   title: string;
   subtitle: string;
-  metaRows?: Array<[string, string]>;
+  metaRows?: Array<[string, string] | { label: string; value: string }>;
   headers: string[];
   rows: string[][];
   materiRows?: Array<{ no: number; tanggal: string; mapel: string; materi: string }>;
+  signatures?: Array<{ role: string; name: string }>;
   filename: string;
   landscape?: boolean;
+  orientation?: 'portrait' | 'landscape';
 }) {
+  const isLandscape = params.landscape || params.orientation === 'landscape';
   const doc = new jsPDF({
-    orientation: params.landscape ? 'landscape' : 'portrait',
+    orientation: isLandscape ? 'landscape' : 'portrait',
     unit: 'mm',
     format: 'a4',
   });
@@ -626,13 +630,16 @@ export function downloadTableReportPdf(params: {
   let y = drawSchoolHeader(doc, params.title, params.subtitle);
 
   if (params.metaRows && params.metaRows.length > 0) {
+    const normalizedMeta: Array<[string, string]> = params.metaRows.map((m) =>
+      Array.isArray(m) ? m : [m.label, m.value],
+    );
     autoTable(doc, {
       startY: y,
-      body: params.metaRows,
+      body: normalizedMeta,
       theme: 'plain',
       styles: { fontSize: 8.5, cellPadding: 1.2, textColor: [15, 23, 42] },
       columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 42 },
+        0: { fontStyle: 'bold', cellWidth: 48 },
       },
     });
     y = getFinalY(doc, y + 12) + 3;
@@ -665,13 +672,16 @@ export function downloadTableReportPdf(params: {
     y = getFinalY(doc, y + 25) + 4;
   }
 
+  const leftSig = params.signatures?.[0];
+  const rightSig = params.signatures?.[1];
+
   drawSignatureBlock(
     doc,
     y,
-    'Mengetahui, Kepala Sekolah',
-    '( ........................................ )',
-    'Petugas / Wali Kelas',
-    '( ........................................ )',
+    leftSig?.role || 'Mengetahui, Kepala Sekolah',
+    leftSig?.name || '( ........................................ )',
+    rightSig?.role || 'Petugas / Wali Kelas',
+    rightSig?.name || '( ........................................ )',
   );
 
   doc.save(params.filename.endsWith('.pdf') ? params.filename : `${params.filename}.pdf`);
@@ -902,7 +912,7 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
         isPutri ? 'Putri' : 'Putra',
         sanitizeExcelText(t.whatsapp || '628'),
         sanitizeExcelText(t.username),
-        '1234',
+        sanitizeExcelText(t.pin || generateClientTeacherToken(t.nama)),
       ]);
       (t.kamarBinaan || []).forEach((km) => coveredRooms.add(km.toUpperCase()));
     }
@@ -996,7 +1006,7 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
         isPutri ? 'Putri' : 'Putra',
         sanitizeExcelText(existing.whatsapp || '628'),
         sanitizeExcelText(existing.username),
-        '1234',
+        sanitizeExcelText(existing.pin || generateClientTeacherToken(existing.nama)),
       ]);
       addedWaliNames.add(existing.nama.toUpperCase());
     } else {
@@ -1035,7 +1045,7 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
         sanitizeExcelText(t.genderScope || 'Semua'),
         sanitizeExcelText(t.whatsapp || '628'),
         sanitizeExcelText(t.username),
-        '1234',
+        sanitizeExcelText(t.pin || generateClientTeacherToken(t.nama)),
       ]);
       addedGuruNames.add(t.nama.toUpperCase());
     }
@@ -1085,7 +1095,7 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
       kamarBinaan: sanitizeExcelText((t.kamarBinaan || []).join('; ')),
       whatsapp: sanitizeExcelText(t.whatsapp || '628'),
       username: sanitizeExcelText(t.username),
-      pin: '1234',
+      pin: sanitizeExcelText(t.pin || generateClientTeacherToken(t.nama)),
     });
   }
 
@@ -2077,4 +2087,605 @@ export function downloadLabkomLogTemplateClient(params: {
     putriCount: existingPutri.length,
   };
 }
+
+// ==============================================================
+// 6. KARTU AKSES LOGIN PEGAWAI (PDF) & LAPORAN EKSEKUTIF PIMPINAN (PDF)
+// ==============================================================
+
+export function generateClientTeacherToken(nama: string): string {
+  const clean = String(nama || '')
+    .trim()
+    .toLowerCase()
+    .replace(/["']/g, '')
+    .replace(/\s+/g, ' ');
+  let hash = 2166136261;
+  for (let i = 0; i < clean.length; i++) {
+    hash ^= clean.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  let code = (Math.abs(hash) % 8900) + 1000;
+  if (code === 1234) code = 2468;
+  return `PN-${code}`;
+}
+
+export function resolveTeacherToken(teacher: Pick<TeacherPublic, 'nama' | 'pin' | 'peran'>): string {
+  if (teacher.peran === 'Admin Super') {
+    return teacher.pin || '121320';
+  }
+  if (teacher.pin && teacher.pin.trim() && teacher.pin.trim() !== '1234') {
+    return teacher.pin.trim();
+  }
+  return generateClientTeacherToken(teacher.nama);
+}
+
+/**
+ * Download Kartu Akses Login Pegawai / Guru dalam bentuk PDF (Grid 2x4 Kartu Siap Cetak per Halaman A4)
+ */
+export function downloadLoginAccessCardsPdf(
+  teachersOrParams:
+    | TeacherPublic[]
+    | {
+        teachers: TeacherPublic[];
+        wilayahLabel?: string;
+        singleTeacher?: boolean;
+      },
+  wilayahOrOptions?: string | { title?: string; subtitle?: string },
+) {
+  const resolvedLabel =
+    typeof wilayahOrOptions === 'string'
+      ? wilayahOrOptions
+      : wilayahOrOptions?.subtitle || wilayahOrOptions?.title;
+  const params = Array.isArray(teachersOrParams)
+    ? {
+        teachers: teachersOrParams,
+        wilayahLabel: resolvedLabel,
+        singleTeacher: teachersOrParams.length === 1,
+      }
+    : teachersOrParams;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const list = params.teachers;
+  if (list.length === 0) return '';
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const cardsPerPage = 8; // 2 columns x 4 rows
+  const cardW = 88;
+  const cardH = 56;
+  const marginX = 13;
+  const gapX = 8;
+  const startYFirst = 32;
+  const gapY = 6;
+
+  list.forEach((t, idx) => {
+    const slotInPage = idx % cardsPerPage;
+    if (idx > 0 && slotInPage === 0) {
+      doc.addPage();
+    }
+
+    if (slotInPage === 0) {
+      // Draw Page Header
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text(
+        'KARTU AKSES LOGIN PEGAWAI & GURU — SIM PINTAR BOARDING SCHOOL',
+        pageWidth / 2,
+        12,
+        { align: 'center' },
+      );
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(71, 85, 105);
+      doc.text(
+        `Database Pegawai Terpadu (${params.wilayahLabel || 'Semua Wilayah'}) · Dicetak: ${formatTanggalIndo(getTodayDateStr())} · Gunting mengikuti garis kartu`,
+        pageWidth / 2,
+        17,
+        { align: 'center' },
+      );
+      doc.setDrawColor(15, 23, 42);
+      doc.setLineWidth(0.4);
+      doc.line(13, 20, pageWidth - 13, 20);
+    }
+
+    const col = slotInPage % 2;
+    const row = Math.floor(slotInPage / 2);
+    const x = marginX + col * (cardW + gapX);
+    const y = startYFirst + row * (cardH + gapY);
+
+    const token = resolveTeacherToken(t);
+    const allRoles = Array.from(new Set([t.peran, ...(t.peranTambahan || [])]));
+    const rolesText = allRoles.join(' · ');
+
+    // Card outer border
+    doc.setDrawColor(148, 163, 184);
+    doc.setLineWidth(0.35);
+    doc.roundedRect(x, y, cardW, cardH, 2.5, 2.5, 'S');
+
+    // Card dark top banner
+    doc.setFillColor(11, 19, 36);
+    doc.roundedRect(x, y, cardW, 12, 2.5, 2.5, 'F');
+    doc.rect(x, y + 8, cardW, 4, 'F');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(94, 234, 212);
+    doc.text('SIM PINTAR · KARTU AKSES LOGIN', x + 3.5, y + 5.2);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.8);
+    doc.setTextColor(226, 232, 240);
+    doc.text(`Wilayah: ${t.genderScope || 'Semua'}`, x + 3.5, y + 9.5);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.8);
+    doc.setTextColor(255, 255, 255);
+    doc.text(`#${idx + 1}`, x + cardW - 3.5, y + 7.5, { align: 'right' });
+
+    // Teacher Name
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.2);
+    doc.setTextColor(15, 23, 42);
+    const truncName = t.nama.length > 32 ? `${t.nama.slice(0, 30)}...` : t.nama;
+    doc.text(truncName, x + 3.5, y + 18);
+
+    // Roles / Hak Akses Fitur
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.8);
+    doc.setTextColor(15, 118, 110);
+    const truncRoles = rolesText.length > 48 ? `${rolesText.slice(0, 46)}...` : rolesText;
+    doc.text(`Hak Akses: ${truncRoles}`, x + 3.5, y + 22.8);
+
+    // Assignment Details (Wali Kelas / Kamar)
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(71, 85, 105);
+    const details: string[] = [];
+    if (t.waliKelasOf) details.push(`Kelas: ${t.waliKelasOf}`);
+    if (t.kamarBinaan && t.kamarBinaan.length > 0) details.push(`Kamar: ${t.kamarBinaan.join(', ')}`);
+    if (t.kelompokQuranBinaan && t.kelompokQuranBinaan.length > 0) {
+      details.push(`Halaqah: ${t.kelompokQuranBinaan.join(', ')}`);
+    }
+    const detailLine = details.length > 0 ? details.join(' | ') : 'Akses Fitur Sesuai Peran di Database Pegawai';
+    const truncDetail = detailLine.length > 52 ? `${detailLine.slice(0, 50)}...` : detailLine;
+    doc.text(truncDetail, x + 3.5, y + 27);
+
+    // Credentials Box (Username + Token/PIN)
+    doc.setFillColor(241, 245, 249);
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.25);
+    doc.roundedRect(x + 3.5, y + 30, cardW - 7, 17, 1.8, 1.8, 'FD');
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text('USERNAME / NAMA LOGIN', x + 6, y + 34.5);
+    doc.text('TOKEN / PIN MASUK', x + cardW - 6, y + 34.5, { align: 'right' });
+
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(8.2);
+    doc.setTextColor(15, 23, 42);
+    const uName = (t.username || t.nama).slice(0, 22);
+    doc.text(uName, x + 6, y + 40.5);
+
+    // Highlighted Token Badge
+    doc.setFillColor(15, 118, 110);
+    doc.roundedRect(x + cardW - 31, y + 36.2, 26, 8.2, 1.5, 1.5, 'F');
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(255, 255, 255);
+    doc.text(token, x + cardW - 18, y + 41.7, { align: 'center' });
+
+    // Footer instruction on card
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      'Masuk di menu Login Guru / Dasbor Peran menggunakan Nama/Username & Token PIN di atas.',
+      x + 3.5,
+      y + 52.5,
+    );
+  });
+
+  const slug = params.singleTeacher && list.length === 1
+    ? list[0].nama.replace(/[^A-Za-z0-9]+/g, '_')
+    : (params.wilayahLabel || 'Semua_Pegawai').replace(/[^A-Za-z0-9]+/g, '_');
+  const filename = `Kartu_Akses_Login_SIM_PINTAR_${slug}_${getTodayDateStr()}.pdf`;
+  doc.save(filename);
+  return filename;
+}
+
+/**
+ * Download Tabel Rekapitulasi Akun & Token Login Pegawai untuk Arsip Admin (PDF)
+ */
+export function downloadPegawaiTokenTablePdf(
+  teachersOrParams:
+    | TeacherPublic[]
+    | {
+        teachers: TeacherPublic[];
+        wilayahLabel?: string;
+      },
+  wilayahLabelArg?: string,
+) {
+  const params = Array.isArray(teachersOrParams)
+    ? { teachers: teachersOrParams, wilayahLabel: wilayahLabelArg }
+    : teachersOrParams;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const y = drawSchoolHeader(
+    doc,
+    'DAFTAR MASTER DATABASE PEGAWAI, HAK AKSES PERAN & TOKEN LOGIN',
+    `Wilayah: ${params.wilayahLabel || 'Semua Wilayah (Putra & Putri)'} · Total Pegawai: ${params.teachers.length} Akun · Dicetak: ${formatTanggalIndo(getTodayDateStr())}`,
+  );
+
+  autoTable(doc, {
+    startY: y,
+    head: [
+      [
+        'No',
+        'Nama Lengkap Pegawai / Guru',
+        'Wilayah',
+        'Peran Utama',
+        'Peran Tambahan (Hak Fitur)',
+        'Kelas / Kamar Binaan',
+        'Username Login',
+        'Token / PIN Akses',
+      ],
+    ],
+    body: params.teachers.map((t, idx) => {
+      const token = resolveTeacherToken(t);
+      const extras = (t.peranTambahan || []).filter((r) => r !== t.peran).join(', ') || '-';
+      const binaan = [
+        t.waliKelasOf ? `Kelas: ${t.waliKelasOf}` : '',
+        t.kamarBinaan && t.kamarBinaan.length > 0 ? `Kamar: ${t.kamarBinaan.join(', ')}` : '',
+      ]
+        .filter(Boolean)
+        .join(' | ') || '-';
+      return [
+        String(idx + 1),
+        t.nama,
+        t.genderScope || 'Semua',
+        t.peran,
+        extras,
+        binaan,
+        t.username,
+        token,
+      ];
+    }),
+    theme: 'grid',
+    styles: { fontSize: 7.8, cellPadding: 2, textColor: [15, 23, 42], valign: 'middle' },
+    headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center' },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 10 },
+      1: { fontStyle: 'bold', cellWidth: 52 },
+      2: { halign: 'center', cellWidth: 18 },
+      3: { fontStyle: 'bold', cellWidth: 28 },
+      4: { cellWidth: 44 },
+      5: { cellWidth: 52 },
+      6: { font: 'courier', cellWidth: 36 },
+      7: { font: 'courier', fontStyle: 'bold', halign: 'center', cellWidth: 28, fillColor: [240, 253, 250] },
+    },
+  });
+
+  const finalY = getFinalY(doc, y + 30);
+  drawSignatureBlock(
+    doc,
+    finalY,
+    'Mengetahui, Pimpinan / Kepala Sekolah',
+    '( ........................................ )',
+    'Admin Super SIM PINTAR',
+    'SAHIDIN (ADMIN SUPER)',
+  );
+
+  const filename = `Daftar_Token_Login_Pegawai_${(params.wilayahLabel || 'Semua').replace(/[^A-Za-z0-9]+/g, '_')}_${getTodayDateStr()}.pdf`;
+  doc.save(filename);
+  return filename;
+}
+
+/**
+ * Download Laporan Lengkap Eksekutif Pimpinan (Semua Komponen Sekolah dalam 1 File PDF)
+ */
+export function downloadPimpinanMasterPdf(report: PimpinanExecutiveReport, pimpinanName?: string) {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const wilayahLabel =
+    report.wilayah === 'Semua' ? 'Semua Wilayah (Putra & Putri)' : `Wilayah ${report.wilayah}`;
+
+  let y = drawSchoolHeader(
+    doc,
+    'LAPORAN EKSEKUTIF PIMPINAN: REKAPITULASI TERPADU SELURUH KOMPONEN SEKOLAH',
+    `${wilayahLabel} · Tanggal Cetak: ${formatTanggalIndo(getTodayDateStr())} · Dicetak oleh: ${pimpinanName || 'Pimpinan Sekolah'}`,
+  );
+
+  const ensureSpace = (needed: number) => {
+    if (y + needed > pageHeight - 15) {
+      doc.addPage();
+      y = 18;
+    }
+  };
+
+  // Ringkasan Eksekutif
+  const sc = report.summaryCounts;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('RINGKASAN EKSEKUTIF INVENTARIS & AKTIVITAS SISTEM', 14, y);
+  autoTable(doc, {
+    startY: y + 2,
+    head: [
+      [
+        'Total Santri (Pa / Pi)',
+        'Database Pegawai',
+        'Kamar Asrama',
+        'Jadwal Aktif',
+        'Log Presensi',
+        'Catatan Pembinaan',
+        'Peminjaman Labkom',
+        'Log Ujian & Piket',
+      ],
+    ],
+    body: [
+      [
+        `${sc.totalStudents} (${sc.studentsPutra} Pa / ${sc.studentsPutri} Pi)`,
+        `${sc.totalTeachers} Pegawai`,
+        `${sc.totalRooms} Kamar`,
+        `${sc.totalSchedules} Jadwal`,
+        `${sc.totalAttendanceLogs} Log`,
+        `${sc.totalPembinaanRecords} Catatan`,
+        `${sc.totalLabkomBookings} Peminjaman`,
+        `${sc.totalExamLogs} Ujian / ${sc.totalTeacherAbsences} Piket`,
+      ],
+    ],
+    theme: 'grid',
+    styles: { fontSize: 7.8, cellPadding: 2, halign: 'center', fontStyle: 'bold' },
+    headStyles: { fillColor: [15, 118, 110], textColor: [255, 255, 255] },
+  });
+  y = getFinalY(doc, y + 18) + 6;
+
+  // 1. Komponen Presensi Asrama
+  ensureSpace(30);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(`1. LAPORAN KOMPONEN PRESENSI ASRAMA (${report.asramaReport.length} KAMAR)`, 14, y);
+  autoTable(doc, {
+    startY: y + 2,
+    head: [['No', 'Kamar Asrama', 'Wilayah', 'Wali Asrama / Musyrif', 'Santri', 'Hadir', 'Telat', 'Sakit', 'Izin', 'Alfa', '% Hadir']],
+    body:
+      report.asramaReport.length > 0
+        ? report.asramaReport.map((r, i) => [
+            String(i + 1),
+            r.kamar,
+            r.gender,
+            r.musyrif,
+            String(r.totalSantri),
+            String(r.H),
+            String(r.T),
+            String(r.S),
+            String(r.I),
+            String(r.A),
+            `${r.persenHadir}%`,
+          ])
+        : [['-', 'Belum ada data kamar asrama', '-', '-', '0', '0', '0', '0', '0', '0', '0%']],
+    theme: 'grid',
+    styles: { fontSize: 7.4, cellPadding: 1.6 },
+    headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255] },
+  });
+  y = getFinalY(doc, y + 25) + 6;
+
+  // 2. Komponen Presensi Akademik & Laju Materi Guru
+  ensureSpace(30);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(`2. LAPORAN KOMPONEN AKADEMIK & LAJU MATERI GURU (${report.akademikPacingReport.length} KELAS/MAPEL)`, 14, y);
+  autoTable(doc, {
+    startY: y + 2,
+    head: [['No', 'Guru Pengampu', 'Wilayah', 'Kelas', 'Mata Pelajaran', 'Pertemuan', '% Laju Materi', 'Status Laju', '% Kehadiran', 'Materi Terakhir']],
+    body:
+      report.akademikPacingReport.length > 0
+        ? report.akademikPacingReport.map((r, i) => [
+            String(i + 1),
+            r.guru,
+            r.gender,
+            r.kelas,
+            r.mapel,
+            `${r.pertemuanTerlaksana}/${r.targetPertemuan}`,
+            `${r.lajuPersen}%`,
+            r.statusLaju,
+            `${r.avgKehadiranPct}%`,
+            r.materiTerakhir,
+          ])
+        : [['-', 'Belum ada data pembelajaran akademik', '-', '-', '-', '0/16', '0%', '-', '0%', '-']],
+    theme: 'grid',
+    styles: { fontSize: 7.2, cellPadding: 1.6 },
+    headStyles: { fillColor: [15, 118, 110], textColor: [255, 255, 255] },
+  });
+  y = getFinalY(doc, y + 25) + 6;
+
+  // 3. Komponen Presensi & Halaqah Al-Qur'an
+  ensureSpace(30);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(`3. LAPORAN KOMPONEN HALAQAH AL-QUR'AN (${report.quranReport.length} KELOMPOK)`, 14, y);
+  autoTable(doc, {
+    startY: y + 2,
+    head: [['No', 'Kelompok Halaqah', 'Wilayah', 'Pengampu Al-Qur\'an', 'Jml Santri', 'Total Log', '% Kehadiran', 'Jml Setoran', 'Setoran / Tilawah Terakhir']],
+    body:
+      report.quranReport.length > 0
+        ? report.quranReport.map((r, i) => [
+            String(i + 1),
+            r.kelompok,
+            r.gender,
+            r.pengampu,
+            String(r.totalSantri),
+            String(r.totalLog),
+            `${r.persenHadir}%`,
+            String(r.totalSetoranRecorded),
+            r.catatanTerakhir,
+          ])
+        : [['-', 'Belum ada data kelompok Al-Qur\'an', '-', '-', '0', '0', '0%', '0', '-']],
+    theme: 'grid',
+    styles: { fontSize: 7.4, cellPadding: 1.6 },
+    headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255] },
+  });
+  y = getFinalY(doc, y + 25) + 6;
+
+  // 4. Komponen Pembinaan Wali Kelas
+  ensureSpace(30);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(`4. LAPORAN KOMPONEN PEMBINAAN WALI KELAS PER KELAS (${report.waliKelasReport.length} KELAS)`, 14, y);
+  autoTable(doc, {
+    startY: y + 2,
+    head: [['No', 'Kelas', 'Wilayah', 'Wali Kelas', 'Santri', 'Akademik %', 'Asrama %', 'Al-Qur\'an %', 'Klasikal / Khusus', 'Wajib %', 'Net Poin', 'Kasus Aktif']],
+    body:
+      report.waliKelasReport.length > 0
+        ? report.waliKelasReport.map((r, i) => [
+            String(i + 1),
+            r.kelas,
+            r.gender,
+            r.waliKelas,
+            String(r.totalSantri),
+            `${r.persenHadirAkademik}%`,
+            `${r.persenHadirAsrama}%`,
+            `${r.persenHadirQuran}%`,
+            `${r.klasikalCount}x / ${r.khususCount}x`,
+            `${r.wajibPct}%`,
+            r.netPoin > 0 ? `+${r.netPoin}` : String(r.netPoin),
+            String(r.kasusAktif),
+          ])
+        : [['-', 'Belum ada data kelas', '-', '-', '0', '0%', '0%', '0%', '0x / 0x', '0%', '0', '0']],
+    theme: 'grid',
+    styles: { fontSize: 7.4, cellPadding: 1.6 },
+    headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255] },
+  });
+  y = getFinalY(doc, y + 25) + 6;
+
+  // 5. Komponen Pembinaan Guru Wali
+  ensureSpace(30);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(`5. LAPORAN KOMPONEN PEMBINAAN GURU WALI (${report.guruWaliReport.length} GURU WALI)`, 14, y);
+  autoTable(doc, {
+    startY: y + 2,
+    head: [['No', 'Nama Guru Wali', 'Wilayah', 'Jml Siswa Binaan', 'Asrama %', 'Akademik %', 'Al-Qur\'an %', 'Momen Klasikal', 'Pembinaan Khusus', 'Kasus Aktif']],
+    body:
+      report.guruWaliReport.length > 0
+        ? report.guruWaliReport.map((r, i) => [
+            String(i + 1),
+            r.guruWali,
+            r.genderScope,
+            `${r.totalSantriBinaan} Siswa`,
+            `${r.avgHadirAsrama}%`,
+            `${r.avgHadirAkademik}%`,
+            `${r.avgHadirQuran}%`,
+            `${r.klasikalCount}x`,
+            `${r.khususCount}x`,
+            String(r.kasusAktif),
+          ])
+        : [['-', 'Belum ada data Guru Wali', '-', '0', '0%', '0%', '0%', '0x', '0x', '0']],
+    theme: 'grid',
+    styles: { fontSize: 7.4, cellPadding: 1.6 },
+    headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255] },
+  });
+  y = getFinalY(doc, y + 25) + 6;
+
+  // 6. Komponen Pembinaan Wali Asrama / Room Visit
+  ensureSpace(30);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(`6. LAPORAN KOMPONEN PEMBINAAN WALI ASRAMA & ROOM VISIT (${report.waliAsramaPembinaanReport.length} KAMAR)`, 14, y);
+  autoTable(doc, {
+    startY: y + 2,
+    head: [['No', 'Kamar Asrama', 'Wilayah', 'Wali Asrama', 'Jml Santri', '% Hadir Asrama', 'Momen Klasikal', 'Room Visit Khusus', 'Sholat Wajib %', 'Net Poin']],
+    body:
+      report.waliAsramaPembinaanReport.length > 0
+        ? report.waliAsramaPembinaanReport.map((r, i) => [
+            String(i + 1),
+            r.kamar,
+            r.gender,
+            r.waliAsrama,
+            String(r.totalSantri),
+            `${r.persenHadirAsrama}%`,
+            `${r.klasikalCount}x`,
+            `${r.khususCount}x`,
+            `${r.wajibPct}%`,
+            r.netPoin > 0 ? `+${r.netPoin}` : String(r.netPoin),
+          ])
+        : [['-', 'Belum ada data pembinaan kamar', '-', '-', '0', '0%', '0x', '0x', '0%', '0']],
+    theme: 'grid',
+    styles: { fontSize: 7.4, cellPadding: 1.6 },
+    headStyles: { fillColor: [15, 118, 110], textColor: [255, 255, 255] },
+  });
+  y = getFinalY(doc, y + 25) + 6;
+
+  // 7. Komponen Peminjaman Labkom
+  ensureSpace(30);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(`7. LAPORAN KOMPONEN PEMINJAMAN LABKOM & RUANGAN (${report.labkomReport.length} LOG)`, 14, y);
+  autoTable(doc, {
+    startY: y + 2,
+    head: [['No', 'Tanggal', 'Kampus', 'Lab / Ruang', 'Jam Ke', 'Guru Pengampu', 'Kelas', 'Mata Pelajaran', 'Status']],
+    body:
+      report.labkomReport.length > 0
+        ? report.labkomReport.slice(0, 60).map((b, i) => [
+            String(i + 1),
+            formatTanggalIndo(b.tanggal),
+            b.kampus,
+            b.lab,
+            b.jamKe,
+            b.guru,
+            b.kelas,
+            b.mapel,
+            b.status,
+          ])
+        : [['-', '-', '-', 'Belum ada log peminjaman Labkom', '-', '-', '-', '-', '-']],
+    theme: 'grid',
+    styles: { fontSize: 7.2, cellPadding: 1.5 },
+    headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255] },
+  });
+  y = getFinalY(doc, y + 25) + 6;
+
+  // 8. Komponen Ujian & Piket Guru
+  ensureSpace(30);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(
+    `8. LAPORAN KOMPONEN PRESENSI UJIAN (${report.ujianPiketReport.examSummary.length} SESI) & PIKET GURU (${report.ujianPiketReport.teacherAbsences.length} LOG)`,
+    14,
+    y,
+  );
+  autoTable(doc, {
+    startY: y + 2,
+    head: [['No', 'Tanggal', 'Jenis Ujian', 'Wilayah', 'Ruang', 'Kelas', 'Mapel', 'Pengawas', 'Hadir / Total']],
+    body:
+      report.ujianPiketReport.examSummary.length > 0
+        ? report.ujianPiketReport.examSummary.slice(0, 40).map((ex, i) => [
+            String(i + 1),
+            formatTanggalIndo(ex.tanggal),
+            ex.jenisUjian,
+            ex.gender,
+            ex.ruangan,
+            ex.kelas,
+            ex.mapel,
+            ex.pengawas,
+            `${ex.hadir}/${ex.totalSiswa} (Absen: ${ex.absen})`,
+          ])
+        : [['-', '-', '-', '-', '-', 'Belum ada berita acara ujian tercatat', '-', '-', '-']],
+    theme: 'grid',
+    styles: { fontSize: 7.2, cellPadding: 1.5 },
+    headStyles: { fillColor: [15, 118, 110], textColor: [255, 255, 255] },
+  });
+  y = getFinalY(doc, y + 25) + 4;
+
+  drawSignatureBlock(
+    doc,
+    y,
+    'Mengetahui, Pimpinan / Kepala Sekolah',
+    pimpinanName || '( ........................................ )',
+    'Koordinator Pusat Data SIM PINTAR',
+    '( ........................................ )',
+  );
+
+  const filename = `Laporan_Eksekutif_Pimpinan_Semua_Komponen_${report.wilayah}_${getTodayDateStr()}.pdf`;
+  doc.save(filename);
+  return filename;
+}
+
 

@@ -422,6 +422,16 @@ function normalizeUserRole(raw: string): UserRole | null {
   if (!low) return null;
   if (low.includes('super')) return 'Admin Super';
   if (low.includes('admin')) return 'Admin SIM';
+  if (
+    low.includes('pimpinan') ||
+    low.includes('kepala sekolah') ||
+    low.includes('kepsek') ||
+    low.includes('mudir') ||
+    low.includes('wakasek') ||
+    low.includes('direktur')
+  ) {
+    return 'Pimpinan';
+  }
   if (low.includes('guru wali') || low.includes('guruwali') || low.includes('pembimbing')) return 'Guru Wali';
   if (low.includes('wali asrama') || low.includes('waliasrama') || low.includes('kepala asrama')) return 'Wali Asrama';
   if (low.includes('wali kelas') || low.includes('walikelas') || low.includes('walas') || low.includes('wali')) return 'Wali Kelas';

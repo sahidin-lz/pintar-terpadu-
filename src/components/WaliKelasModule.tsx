@@ -37,6 +37,7 @@ import type {
 } from '../types';
 import {
   downloadCsv,
+  downloadTableReportPdf,
   formatTanggalIndo,
   getTodayDateStr,
   printHtmlDocument,
@@ -842,128 +843,128 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
   };
 
   const handlePrintDbPdf = () => {
-    const rowsHtml =
-      records.length === 0
-        ? '<tr><td colspan="7">Belum ada data pembinaan pada filter wilayah ini.</td></tr>'
-        : records
-            .map(
-              (r, idx) => `<tr>
-              <td>${idx + 1}</td>
-              <td>${formatTanggalIndo(r.tanggal)}<br><small>${r.bulan} · P${r.pekanKe}</small></td>
-              <td><b>Wilayah ${r.gender}</b></td>
-              <td class="left"><b>${r.namaSantri}</b><br><small>${r.kelas} · ${r.kamar}</small></td>
-              <td class="left">${r.pembinaNama}<br><small>${r.pembinaPeran} · ${r.lokasi}</small></td>
-              <td class="left"><b>${r.kategori}</b> (${r.statusTindakLanjut})<br>${r.catatan}</td>
-              <td>${r.poin > 0 ? `+${r.poin}` : r.poin}</td>
-            </tr>`
-            )
-            .join('');
     const wTitle = wilayahFilter === 'Semua' ? 'SEMUA WILAYAH (PUTRA & PUTRI)' : `WILAYAH ${wilayahFilter.toUpperCase()}`;
-    printHtmlDocument(
-      `Laporan_Pembinaan_${wilayahFilter}_${getTodayDateStr()}`,
-      `
-      <div class="doc-title">
-        <h2>LAPORAN REKAPITULASI PEMBINAAN SANTRI · ${wTitle}</h2>
-        <div>Total Catatan: ${records.length} · Kelas: ${filterKelas} · Kamar: ${filterKamar}</div>
-      </div>
-      <table>
-        <thead><tr><th>No</th><th>Tanggal</th><th>Wilayah</th><th>Santri</th><th>Pembina</th><th>Kategori &amp; Catatan</th><th>Poin</th></tr></thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-      `,
-      true
-    );
+    downloadTableReportPdf({
+      filename: `Laporan_Pembinaan_${wilayahFilter}_${getTodayDateStr()}`,
+      title: `LAPORAN REKAPITULASI PEMBINAAN SANTRI · ${wTitle}`,
+      subtitle: `Total Catatan: ${records.length} · Kelas: ${filterKelas} · Kamar: ${filterKamar} · Jalur: ${filterJalur}`,
+      orientation: 'landscape',
+      headers: ['No', 'Tanggal', 'Wilayah', 'Nama Santri', 'Kelas / Kamar', 'Pembina & Jalur', 'Kategori & Status', 'Catatan Pembinaan', 'Poin'],
+      rows:
+        records.length === 0
+          ? [['-', '-', '-', 'Belum ada data pembinaan pada filter ini', '-', '-', '-', '-', '0']]
+          : records.map((r, idx) => [
+              String(idx + 1),
+              `${formatTanggalIndo(r.tanggal)} (${r.bulan} P${r.pekanKe})`,
+              `Wil. ${r.gender}`,
+              r.namaSantri,
+              `${r.kelas} / ${r.kamar}`,
+              `${r.pembinaNama} (${r.jalurPembinaan || r.pembinaPeran})`,
+              `${r.kategori} [${r.statusTindakLanjut}]`,
+              r.catatan,
+              r.poin > 0 ? `+${r.poin}` : String(r.poin),
+            ]),
+    });
+    notify('File PDF Laporan Pembinaan Santri berhasil diunduh.', 'success');
   };
 
   const handlePrintAnalisisPembinaan = () => {
     if (!analisis) return;
     const pa = analisis.pembinaanAnalisis.Putra;
     const pi = analisis.pembinaanAnalisis.Putri;
-    const katRows = pa.kategoriCounts
-      .map((k, idx) => {
-        const piCount = pi.kategoriCounts[idx]?.count ?? 0;
-        return `<tr><td class="left"><b>${k.kategori}</b></td><td>${k.count}</td><td>${piCount}</td><td>${k.count + piCount}</td></tr>`;
-      })
-      .join('');
 
-    printHtmlDocument(
-      `Analisis_Pembinaan_Putra_Putri_${getTodayDateStr()}`,
-      `
-      <div class="doc-title">
-        <h2>HASIL ANALISIS SISTEM PEMBINAAN TERPADU (WILAYAH PUTRA VS PUTRI)</h2>
-        <div>Dicetak pada ${formatTanggalIndo(getTodayDateStr())}</div>
-      </div>
-      <table>
-        <thead><tr><th>Indikator Pembinaan</th><th>Wilayah Putra</th><th>Wilayah Putri</th></tr></thead>
-        <tbody>
-          <tr><td class="left">Jumlah Santri / Santri Terbina</td><td>${pa.totalSantri} / ${pa.santriDibina} santri</td><td>${pi.totalSantri} / ${pi.santriDibina} santri</td></tr>
-          <tr><td class="left">Total Catatan Pembinaan</td><td>${pa.totalCatatan} catatan</td><td>${pi.totalCatatan} catatan</td></tr>
-          <tr><td class="left">Capaian Sholat Wajib (5 Waktu)</td><td><b>${pa.persenSholatWajib}%</b></td><td><b>${pi.persenSholatWajib}%</b></td></tr>
-          <tr><td class="left">Capaian Ibadah Sunnah &amp; Tilawah</td><td><b>${pa.persenIbadahSunnah}%</b></td><td><b>${pi.persenIbadahSunnah}%</b></td></tr>
-          <tr><td class="left">Kasus Kedisiplinan / Prestasi</td><td>${pa.totalPelanggaran} pelanggaran · ${pa.totalPrestasi} prestasi</td><td>${pi.totalPelanggaran} pelanggaran · ${pi.totalPrestasi} prestasi</td></tr>
-          <tr><td class="left">Status Tindak Lanjut (Selesai / Proses / Eskalasi)</td><td>${pa.statusCounts.Selesai} / ${pa.statusCounts.Proses} / ${pa.statusCounts.Eskalasi}</td><td>${pi.statusCounts.Selesai} / ${pi.statusCounts.Proses} / ${pi.statusCounts.Eskalasi}</td></tr>
-        </tbody>
-      </table>
-      <h3 style="font-size:12px; margin:14px 0 6px 0;">Sebaran Kategori Pembinaan</h3>
-      <table>
-        <thead><tr><th>Kategori</th><th>Wilayah Putra</th><th>Wilayah Putri</th><th>Total</th></tr></thead>
-        <tbody>${katRows}</tbody>
-      </table>
-      `
-    );
+    downloadTableReportPdf({
+      filename: `Analisis_Pembinaan_Putra_Putri_${getTodayDateStr()}`,
+      title: 'HASIL ANALISIS SISTEM PEMBINAAN TERPADU (WILAYAH PUTRA VS PUTRI)',
+      subtitle: `Dicetak pada ${formatTanggalIndo(getTodayDateStr())}`,
+      headers: ['Indikator / Kategori Pembinaan', 'Wilayah Putra', 'Wilayah Putri', 'Total Gabungan'],
+      rows: [
+        [
+          'Jumlah Santri / Santri Terbina',
+          `${pa.totalSantri} / ${pa.santriDibina} santri`,
+          `${pi.totalSantri} / ${pi.santriDibina} santri`,
+          `${pa.totalSantri + pi.totalSantri} santri`,
+        ],
+        [
+          'Total Catatan Pembinaan',
+          `${pa.totalCatatan} catatan`,
+          `${pi.totalCatatan} catatan`,
+          `${pa.totalCatatan + pi.totalCatatan} catatan`,
+        ],
+        [
+          'Capaian Sholat Wajib (5 Waktu)',
+          `${pa.persenSholatWajib}%`,
+          `${pi.persenSholatWajib}%`,
+          `${Math.round((pa.persenSholatWajib + pi.persenSholatWajib) / 2)}%`,
+        ],
+        [
+          'Capaian Ibadah Sunnah & Tilawah',
+          `${pa.persenIbadahSunnah}%`,
+          `${pi.persenIbadahSunnah}%`,
+          `${Math.round((pa.persenIbadahSunnah + pi.persenIbadahSunnah) / 2)}%`,
+        ],
+        [
+          'Kasus Kedisiplinan / Prestasi',
+          `${pa.totalPelanggaran} pelanggaran · ${pa.totalPrestasi} prestasi`,
+          `${pi.totalPelanggaran} pelanggaran · ${pi.totalPrestasi} prestasi`,
+          `${pa.totalPelanggaran + pi.totalPelanggaran} pelanggaran`,
+        ],
+        [
+          'Status Tindak Lanjut (Selesai / Proses / Eskalasi)',
+          `${pa.statusCounts.Selesai} / ${pa.statusCounts.Proses} / ${pa.statusCounts.Eskalasi}`,
+          `${pi.statusCounts.Selesai} / ${pi.statusCounts.Proses} / ${pi.statusCounts.Eskalasi}`,
+          `${pa.statusCounts.Selesai + pi.statusCounts.Selesai} Selesai`,
+        ],
+        ...pa.kategoriCounts.map((k, idx) => {
+          const piCount = pi.kategoriCounts[idx]?.count ?? 0;
+          return [`Kategori: ${k.kategori}`, String(k.count), String(piCount), String(k.count + piCount)];
+        }),
+      ],
+    });
+    notify('File PDF Analisis Pembinaan berhasil diunduh.', 'success');
   };
 
   const handlePrintPortfolio = () => {
     if (!portfolio?.santri) return;
     const s = portfolio.santri;
-    const rowsHtml =
-      portfolio.riwayatPembinaan.length === 0
-        ? '<tr><td colspan="7">Belum ada riwayat pembinaan.</td></tr>'
-        : portfolio.riwayatPembinaan
-            .map((r, i) => {
+    downloadTableReportPdf({
+      filename: `Portofolio_Wilayah_${s.gender}_${s.nama}`,
+      title: `PORTOFOLIO PEMBINAAN & IBADAH SANTRI · WILAYAH ${s.gender.toUpperCase()}`,
+      subtitle: `${s.nama} (${s.kelas} · Kamar ${s.kamar})`,
+      orientation: 'landscape',
+      metaRows: [
+        { label: 'NIS / Nama Santri', value: `${s.nis || '-'} — ${s.nama} (Wilayah ${s.gender})` },
+        { label: 'Kelas / Kamar Asrama', value: `${s.kelas} · Kamar ${s.kamar}` },
+        { label: 'Wali Kelas / Wali Asrama / Guru Wali', value: `${s.waliKelas || '-'} / ${s.musyrif || '-'} / ${s.guruWali || '-'}` },
+        { label: 'Capaian Sholat Wajib & Sunnah', value: `Wajib: ${portfolio.persenSholatWajib}% · Sunnah: ${portfolio.persenSholatSunnah}% · Net Poin: ${portfolio.netPoin}` },
+      ],
+      headers: ['No', 'Tanggal', 'Pembina & Lokasi', 'Kategori & Status', 'Catatan & Tindak Lanjut', 'Ibadah', 'Poin'],
+      rows:
+        portfolio.riwayatPembinaan.length === 0
+          ? [['-', '-', '-', '-', 'Belum ada riwayat pembinaan.', '-', '0']]
+          : portfolio.riwayatPembinaan.map((r, i) => {
               const wajibCount = ['subuh', 'dzuhur', 'ashar', 'maghrib', 'isya'].filter(
                 (k) => r.ibadah[k as keyof IbadahChecklist]
               ).length;
               const sunnahCount = ['tahajud', 'dhuha', 'tilawah'].filter(
                 (k) => r.ibadah[k as keyof IbadahChecklist]
               ).length;
-              return `<tr>
-                <td>${i + 1}</td>
-                <td>${formatTanggalIndo(r.tanggal)}<br><small>${r.bulan} · P${r.pekanKe}</small></td>
-                <td>${r.pembinaNama}<br><small>${r.pembinaPeran} · ${r.lokasi}</small></td>
-                <td>${r.kategori}<br><small>${r.statusTindakLanjut}</small></td>
-                <td class="left">${r.catatan}<br><small>Tindak lanjut (${r.pihakKoordinasi}): ${r.tindakLanjut}</small></td>
-                <td>Wajib ${wajibCount}/5 · Sunnah ${sunnahCount}/3</td>
-                <td>${r.poin > 0 ? `+${r.poin}` : r.poin}</td>
-              </tr>`;
-            })
-            .join('');
-
-    printHtmlDocument(
-      `Portofolio_Wilayah_${s.gender}_${s.nama}`,
-      `
-      <div class="doc-title">
-        <h2>PORTOFOLIO PEMBINAAN & IBADAH SANTRI · WILAYAH ${s.gender.toUpperCase()}</h2>
-        <div>${s.nama} · Wilayah ${s.gender} · ${s.kelas} · Kamar ${s.kamar}</div>
-      </div>
-      <table class="meta-table">
-        <tr><td style="width:22%">NIS / Nama</td><td>: <b>${s.nis || '-'} — ${s.nama}</b> (Wilayah ${s.gender})</td><td style="width:22%">Musyrif / Wali Kelas</td><td>: ${s.musyrif || '-'} / ${s.waliKelas || '-'}</td></tr>
-        <tr><td>Kelas / Kamar</td><td>: ${s.kelas} · ${s.kamar}</td><td>Prioritas / Gaya Belajar</td><td>: ${s.prioritas || '-'} · ${s.gayaBelajar || '-'}</td></tr>
-        <tr><td>Capaian Sholat Wajib</td><td>: <b>${portfolio.persenSholatWajib}%</b></td><td>Capaian Ibadah Sunnah</td><td>: <b>${portfolio.persenSholatSunnah}%</b></td></tr>
-        <tr><td>Total Pelanggaran</td><td>: ${portfolio.totalPelanggaran} catatan</td><td>Net Poin Pembinaan</td><td>: <b>${portfolio.netPoin}</b></td></tr>
-      </table>
-      <table>
-        <thead>
-          <tr><th>No</th><th>Tanggal</th><th>Pembina & Lokasi</th><th>Kategori & Status</th><th>Catatan & Tindak Lanjut</th><th>Ibadah</th><th>Poin</th></tr>
-        </thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-      <div class="sign-grid">
-        <div class="sign-box">Mengetahui,<br/>Musyrif/ah &amp; Pengasuhan<div class="sign-space"></div><b>${s.musyrif || '_______________________'}</b></div>
-        <div class="sign-box">Wali Kelas,<div class="sign-space"></div><b>${s.waliKelas || '_______________________'}</b></div>
-      </div>
-      `
-    );
+              return [
+                String(i + 1),
+                `${formatTanggalIndo(r.tanggal)} (${r.bulan} P${r.pekanKe})`,
+                `${r.pembinaNama} (${r.pembinaPeran} · ${r.lokasi})`,
+                `${r.kategori} [${r.statusTindakLanjut}]`,
+                `${r.catatan} (TL: ${r.tindakLanjut})`,
+                `Wajib ${wajibCount}/5 · Sunnah ${sunnahCount}/3`,
+                r.poin > 0 ? `+${r.poin}` : String(r.poin),
+              ];
+            }),
+      signatures: [
+        { role: 'Mengetahui, Wali Asrama / Musyrif(ah)', name: s.musyrif || '_______________________' },
+        { role: 'Wali Kelas', name: s.waliKelas || '_______________________' },
+      ],
+    });
+    notify(`File PDF Portofolio ${s.nama} berhasil diunduh.`, 'success');
   };
 
   const setAllBatchIbadah = (mode: 'wajib' | 'all' | 'none') => {

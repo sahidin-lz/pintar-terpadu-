@@ -1,7 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { ClipboardCheck, Printer, RefreshCw, Save } from 'lucide-react';
+import { ClipboardCheck, FileDown, Printer, RefreshCw, Save } from 'lucide-react';
 import type { AttendanceStatus, Gender, StudentFormEntry, TeacherPublic } from '../types';
-import { formatTanggalIndo, getTodayDateStr, printHtmlDocument } from '../utils/exportHelpers';
+import {
+  downloadTableReportPdf,
+  formatTanggalIndo,
+  getTodayDateStr,
+} from '../utils/exportHelpers';
 import { emitDataMutated, loadSubTab, saveSubTab } from '../utils/sessionPersistence';
 
 interface UjianModuleProps {
@@ -161,46 +165,61 @@ export const UjianModule: React.FC<UjianModuleProps> = ({
     const hadir = siswaUjian.filter((s) => s.status === 'H' || s.status === 'T').length;
     const absenList = siswaUjian.filter((s) => s.status !== 'H' && s.status !== 'T');
 
-    const rowsHtml =
-      absenList.length === 0
-        ? '<tr><td colspan="5">NIHIL / SELURUH PESERTA HADIR</td></tr>'
-        : absenList
-            .map(
-              (s, i) => `<tr>
-                <td>${i + 1}</td>
-                <td class="left">${s.nama}</td>
-                <td>${s.kelasAsli}</td>
-                <td><b>${s.status}</b></td>
-                <td class="left">${s.keterangan || '-'}</td>
-              </tr>`
-            )
-            .join('');
+    downloadTableReportPdf({
+      filename: `Berita_Acara_Wilayah_${gender}_${ruangan}_${mapel}`,
+      title: `BERITA ACARA PELAKSANAAN UJIAN (${jenisUjian}) · WILAYAH ${gender.toUpperCase()}`,
+      subtitle: `${formatTanggalIndo(tanggal)} · ${ruangan} · ${kelas}`,
+      metaRows: [
+        { label: 'Wilayah / Hari, Tanggal', value: `Wilayah ${gender} · ${formatTanggalIndo(tanggal)}` },
+        { label: 'Mata Pelajaran', value: mapel.toUpperCase() },
+        { label: 'Kelas / Ruang', value: `${kelas.toUpperCase()} / ${ruangan.toUpperCase()}` },
+        { label: 'Jumlah Peserta', value: `${siswaUjian.length} Orang (Hadir: ${hadir} · Tidak Hadir: ${absenList.length})` },
+      ],
+      headers: ['No', 'Nama Peserta Tidak Hadir', 'Kelas', 'Status', 'Keterangan'],
+      rows:
+        absenList.length === 0
+          ? [['-', 'NIHIL / SELURUH PESERTA HADIR', kelas, 'H', '-']]
+          : absenList.map((s, i) => [
+              String(i + 1),
+              s.nama,
+              s.kelasAsli,
+              s.status,
+              s.keterangan || '-',
+            ]),
+      signatures: [
+        { role: 'Pengawas 1', name: pengawas1.toUpperCase() },
+        { role: 'Pengawas 2', name: (pengawas2 || '-').toUpperCase() },
+      ],
+    });
+    notify('File PDF Berita Acara Ujian berhasil diunduh.', 'success');
+  };
 
-    printHtmlDocument(
-      `Berita_Acara_Wilayah_${gender}_${ruangan}_${mapel}`,
-      `
-      <div class="doc-title">
-        <h2>BERITA ACARA PELAKSANAAN UJIAN (${jenisUjian}) · WILAYAH ${gender.toUpperCase()}</h2>
-      </div>
-      <table class="meta-table">
-        <tr><td style="width:24%">Wilayah / Hari, Tanggal</td><td>: <b>Wilayah ${gender}</b> · <b>${formatTanggalIndo(tanggal)}</b></td></tr>
-        <tr><td>Mata Pelajaran</td><td>: <b>${mapel.toUpperCase()}</b></td></tr>
-        <tr><td>Kelas / Ruang</td><td>: ${kelas.toUpperCase()} / ${ruangan.toUpperCase()}</td></tr>
-        <tr><td>Jumlah Peserta</td><td>: ${siswaUjian.length} Orang (Hadir: ${hadir} · Tidak Hadir: ${absenList.length})</td></tr>
-      </table>
-      <div style="font-weight:bold; margin: 12px 0 6px 0;">Catatan Peserta Tidak Hadir (Daftar Susulan):</div>
-      <table>
-        <thead>
-          <tr><th style="width:6%">No</th><th style="width:34%">Nama Peserta</th><th style="width:16%">Kelas</th><th style="width:10%">Status</th><th style="width:34%">Keterangan</th></tr>
-        </thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-      <div class="sign-grid">
-        <div class="sign-box">Pengawas 1,<div class="sign-space"></div><b>${pengawas1.toUpperCase()}</b></div>
-        <div class="sign-box">Pengawas 2,<div class="sign-space"></div><b>${(pengawas2 || '-').toUpperCase()}</b></div>
-      </div>
-      `
-    );
+  const handleDownloadRekapUjianPdf = () => {
+    downloadTableReportPdf({
+      filename: `Laporan_Ujian_Susulan_${gender}_${tanggal}`,
+      title: `LAPORAN PELAKSANAAN & SUSULAN UJIAN · WILAYAH ${gender.toUpperCase()}`,
+      subtitle: `Tanggal: ${formatTanggalIndo(tanggal)} · Ruang Tersimpan: ${riwayat.length} · Peserta Susulan: ${susulan.length}`,
+      headers: ['No', 'Kategori', 'Ruang / Santri', 'Kelas & Mapel', 'Pengawas / Status', 'Kehadiran / Keterangan'],
+      rows: [
+        ...riwayat.map((item, i) => [
+          String(i + 1),
+          'Pelaksanaan Ruang',
+          item.ruang,
+          `${item.kelas} · ${item.mapel}`,
+          item.pengawas,
+          `${item.hadir}/${item.totalSiswa} Hadir`,
+        ]),
+        ...susulan.map((s, i) => [
+          String(riwayat.length + i + 1),
+          `Susulan (${s.jenis})`,
+          s.nama,
+          `${s.kelas} · ${s.mapel}`,
+          s.status,
+          s.keterangan || '-',
+        ]),
+      ],
+    });
+    notify('File PDF Laporan Ujian & Susulan berhasil diunduh.', 'success');
   };
 
   const openFromHistory = async (item: (typeof riwayat)[number]) => {
@@ -501,14 +520,24 @@ export const UjianModule: React.FC<UjianModuleProps> = ({
                 </h3>
                 <p className="text-xs text-slate-500">Klik Buka BA untuk mencetak Berita Acara</p>
               </div>
-              <button
-                type="button"
-                onClick={loadRiwayatDanSusulan}
-                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${loadingRiwayat ? 'animate-spin' : ''}`} />
-                Muat Ulang
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleDownloadRekapUjianPdf}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                >
+                  <FileDown className="h-3.5 w-3.5" />
+                  Unduh PDF Ujian
+                </button>
+                <button
+                  type="button"
+                  onClick={loadRiwayatDanSusulan}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${loadingRiwayat ? 'animate-spin' : ''}`} />
+                  Muat Ulang
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">

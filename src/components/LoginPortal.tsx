@@ -28,7 +28,16 @@ interface LoginPortalProps {
   notify: (msg: string, type?: 'success' | 'error' | 'info') => void;
 }
 
-const ROLES: UserRole[] = ['Guru', 'Wali Kelas', 'Musyrif', 'Musyrifah'];
+const ROLES: UserRole[] = [
+  'Guru',
+  'Guru Wali',
+  'Wali Kelas',
+  'Wali Asrama',
+  'Musyrif',
+  'Musyrifah',
+  'Pengampu Al-Quran',
+  'Pimpinan',
+];
 
 export const LoginPortal: React.FC<LoginPortalProps> = ({
   initialTab = 'guru',
@@ -74,9 +83,10 @@ export const LoginPortal: React.FC<LoginPortalProps> = ({
 
   const handleGuruLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const idTarget = identifier.trim() || regularTeachers[0]?.username || regularTeachers[0]?.nama || '';
-    if (!idTarget || !pinLogin.trim()) {
-      notify('Pilih atau masukkan nama akun serta PIN/Password.', 'error');
+    const cleanPin = pinLogin.trim();
+    const idTarget = identifier.trim() || cleanPin || regularTeachers[0]?.username || regularTeachers[0]?.nama || '';
+    if (!cleanPin && !identifier.trim()) {
+      notify('Pilih akun atau masukkan Token / PIN dari Kartu Akses Login Pegawai.', 'error');
       return;
     }
     setLoggingIn(true);
@@ -84,15 +94,16 @@ export const LoginPortal: React.FC<LoginPortalProps> = ({
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: idTarget, pin: pinLogin }),
+        body: JSON.stringify({ identifier: idTarget, pin: cleanPin || idTarget }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
-        notify(data.error || 'Gagal login. Periksa nama akun dan PIN.', 'error');
+        notify(data.error || 'Gagal login. Periksa Nama Pegawai dan Token / PIN.', 'error');
         return;
       }
       onLoginSuccess(data.teacher);
-      notify(`Berhasil masuk sebagai ${data.teacher.nama} (${data.teacher.peran}).`, 'success');
+      const allRoles = Array.from(new Set([data.teacher.peran, ...(data.teacher.peranTambahan || [])])).join(', ');
+      notify(`Berhasil masuk sebagai ${data.teacher.nama} (Akses Peran: ${allRoles}).`, 'success');
     } catch {
       notify('Terjadi kesalahan jaringan saat login.', 'error');
     } finally {
@@ -494,61 +505,69 @@ export const LoginPortal: React.FC<LoginPortalProps> = ({
                 <form onSubmit={handleGuruLogin} className="space-y-4">
                   <div>
                     <h2 className="text-base font-semibold text-slate-900">
-                      Masuk Akun Guru, Wali Kelas &amp; Musyrif/ah
+                      Masuk Akun Database Pegawai (Guru, Wali Kelas, Wali Asrama, Guru Wali &amp; Pimpinan)
                     </h2>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Lihat rekapan mengajar pribadi, progres binaan santri, portofolio individu, dan rekap kamar asrama.
+                      Setiap guru terdaftar di Database Pegawai dan mendapatkan fitur sesuai peran yang dimiliki. Masuk menggunakan <b>Token / PIN Kartu Akses Login</b> dari Admin.
                     </p>
                   </div>
 
                   {regularTeachers.length > 0 ? (
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Pilih Akun Pembina ({regularTeachers.length} terdaftar)
+                        Pilih Nama dari Database Pegawai ({regularTeachers.length} terdaftar)
                       </label>
                       <select
                         value={identifier}
                         onChange={(e) => setIdentifier(e.target.value)}
                         className="h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none"
                       >
-                        <option value="">-- Pilih Akun Guru / Wali / Musyrif --</option>
-                        {regularTeachers.map((t) => (
-                          <option key={t.id} value={t.username || t.nama}>
-                            {t.nama} ({t.username}) — {t.peran} · Wilayah {t.genderScope}
-                            {t.waliKelasOf ? ` (${t.waliKelasOf})` : ''}
-                          </option>
-                        ))}
+                        <option value="">-- Pilih Nama Pegawai / Guru / Pimpinan (atau langsung isi Token di bawah) --</option>
+                        {regularTeachers.map((t) => {
+                          const rolesStr = Array.from(new Set([t.peran, ...(t.peranTambahan || [])])).join(', ');
+                          return (
+                            <option key={t.id} value={t.nama}>
+                              {t.nama} — [{rolesStr}] · Wilayah {t.genderScope}
+                              {t.waliKelasOf ? ` (${t.waliKelasOf})` : ''}
+                            </option>
+                          );
+                        })}
                       </select>
                     </div>
                   ) : (
                     <div className="rounded-lg border border-slate-200 bg-slate-50 p-3.5 text-xs text-slate-600">
-                      Belum ada akun guru/wali/musyrif yang terdaftar. Silakan unggah melalui <b>Admin Super</b> atau buat akun di tab <b>Daftar Akun</b>.
+                      Belum ada akun guru/wali/musyrif yang terdaftar. Silakan unggah melalui <b>Admin Super</b> atau ketik nama Anda di bawah untuk otomatis masuk ke Database Pegawai.
                     </div>
                   )}
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Username / Nama Lengkap
+                      Nama Pegawai / Username (Opsional jika menggunakan Token Unik PN-XXXX)
                     </label>
                     <input
                       type="text"
                       value={identifier}
                       onChange={(e) => setIdentifier(e.target.value)}
-                      placeholder="Contoh: ahmad_fauzi atau nama lengkap pembina"
+                      placeholder="Ketik nama guru / username atau pilih di atas"
                       className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-xs text-slate-900 focus:border-teal-600 focus:outline-none"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      PIN / Password Akun
-                    </label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        Token Akses / PIN Pegawai
+                      </label>
+                      <span className="font-mono-num text-[11px] text-teal-700 font-semibold">
+                        Token Kartu (PN-XXXX) atau PIN: 1234
+                      </span>
+                    </div>
                     <input
-                      type="password"
+                      type="text"
                       value={pinLogin}
                       onChange={(e) => setPinLogin(e.target.value)}
-                      placeholder="Masukkan PIN akun (default impor SIM: 1234)"
-                      className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-mono-num focus:border-teal-600 focus:outline-none"
+                      placeholder="Masukkan Token Kartu Login (misal: PN-4821) atau PIN 1234"
+                      className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-mono-num uppercase tracking-wider focus:border-teal-600 focus:outline-none"
                     />
                   </div>
 
@@ -558,7 +577,7 @@ export const LoginPortal: React.FC<LoginPortalProps> = ({
                     className="flex w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-2.5 text-xs font-semibold text-white hover:bg-teal-800 disabled:bg-slate-300 transition-colors"
                   >
                     <LogIn className="h-4 w-4" />
-                    {loggingIn ? 'Memverifikasi...' : 'Masuk Dashboard Guru & Pembina'}
+                    {loggingIn ? 'Memverifikasi Token Pegawai...' : 'Masuk Sesuai Peran Database Pegawai'}
                   </button>
 
                   <button

@@ -10,6 +10,7 @@ export type UserRole =
   | 'Musyrif'
   | 'Musyrifah'
   | 'Pengampu Al-Quran'
+  | 'Pimpinan'
   | 'Admin SIM'
   | 'Admin Super';
 
@@ -64,6 +65,7 @@ export interface TeacherPublic {
   kamarBinaan?: string[];
   kelompokQuranBinaan?: string[];
   whatsapp?: string;
+  pin?: string;
 }
 
 export interface TeacherRecord extends TeacherPublic {
@@ -574,4 +576,122 @@ export interface LabkomStatePayload {
   siswaPutra: LabkomStudentOption[];
   siswaPutri: LabkomStudentOption[];
 }
+
+export interface PimpinanExecutiveReport {
+  generatedAt: string;
+  wilayah: WilayahFilter;
+  summaryCounts: {
+    totalStudents: number;
+    studentsPutra: number;
+    studentsPutri: number;
+    totalTeachers: number;
+    totalRooms: number;
+    totalSchedules: number;
+    totalAttendanceLogs: number;
+    totalPembinaanRecords: number;
+    totalLabkomBookings: number;
+    totalExamLogs: number;
+    totalTeacherAbsences: number;
+  };
+  asramaReport: Array<{
+    kamar: string;
+    gender: Gender;
+    musyrif: string;
+    totalSantri: number;
+    totalLog: number;
+    H: number;
+    T: number;
+    S: number;
+    I: number;
+    A: number;
+    persenHadir: number;
+  }>;
+  akademikPacingReport: Array<{
+    guru: string;
+    kelas: string;
+    mapel: string;
+    gender: Gender;
+    pertemuanTerlaksana: number;
+    targetPertemuan: number;
+    lajuPersen: number;
+    statusLaju: string;
+    avgKehadiranPct: number;
+    materiTerakhir: string;
+    tanggalTerakhir: string;
+  }>;
+  quranReport: Array<{
+    kelompok: string;
+    pengampu: string;
+    gender: Gender;
+    totalSantri: number;
+    totalLog: number;
+    persenHadir: number;
+    totalSetoranRecorded: number;
+    catatanTerakhir: string;
+  }>;
+  waliKelasReport: Array<{
+    kelas: string;
+    gender: Gender;
+    waliKelas: string;
+    totalSantri: number;
+    persenHadirAkademik: number;
+    persenHadirAsrama: number;
+    persenHadirQuran: number;
+    klasikalCount: number;
+    khususCount: number;
+    wajibPct: number;
+    netPoin: number;
+    kasusAktif: number;
+  }>;
+  guruWaliReport: Array<{
+    guruWali: string;
+    genderScope: string;
+    totalSantriBinaan: number;
+    avgHadirAsrama: number;
+    avgHadirAkademik: number;
+    avgHadirQuran: number;
+    klasikalCount: number;
+    khususCount: number;
+    kasusAktif: number;
+  }>;
+  waliAsramaPembinaanReport: Array<{
+    kamar: string;
+    gender: Gender;
+    waliAsrama: string;
+    totalSantri: number;
+    persenHadirAsrama: number;
+    klasikalCount: number;
+    khususCount: number;
+    wajibPct: number;
+    netPoin: number;
+  }>;
+  labkomReport: Array<{
+    id: string;
+    tanggal: string;
+    kampus: LabkomKampus;
+    lab: string;
+    jamKe: string;
+    guru: string;
+    kelas: string;
+    mapel: string;
+    keterangan: string;
+    status: string;
+  }>;
+  ujianPiketReport: {
+    examSummary: Array<{
+      tanggal: string;
+      jenisUjian: string;
+      ruangan: string;
+      kelas: string;
+      mapel: string;
+      gender: Gender;
+      pengawas: string;
+      totalSiswa: number;
+      hadir: number;
+      absen: number;
+    }>;
+    teacherAbsences: TeacherAbsenceLog[];
+  };
+}
+
 

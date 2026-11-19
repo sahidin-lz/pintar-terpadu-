@@ -81,6 +81,13 @@ function registerApiRoutes() {
     res.json(recap);
   });
 
+  app.get('/api/pimpinan/laporan-lengkap', (req, res) => {
+    const rawW = String(req.query.wilayah || 'Semua');
+    const wilayah: WilayahFilter =
+      rawW === 'Putra' || rawW === 'Putri' ? rawW : 'Semua';
+    res.json(store.getPimpinanExecutiveReport(wilayah));
+  });
+
   app.post('/api/guru/import-personal', (req, res) => {
     const body = req.body || {};
     if (!body.teacherName) {

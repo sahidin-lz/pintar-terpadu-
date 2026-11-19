@@ -9,6 +9,7 @@ import {
   Download,
   Edit3,
   FileSpreadsheet,
+  FileText,
   Home,
   KeyRound,
   Layers,
@@ -38,7 +39,11 @@ import {
 } from '../utils/excelParser';
 import {
   buildClientDatabaseWorkbookSpec,
+  downloadLoginAccessCardsPdf,
   downloadMasterDatabaseExcelClient,
+  downloadPegawaiTokenTablePdf,
+  generateClientTeacherToken,
+  resolveTeacherToken,
 } from '../utils/exportHelpers';
 import { auth, pushSnapshotToFirestore } from '../firebase';
 import { loadSubTab, saveSubTab } from '../utils/sessionPersistence';
@@ -60,7 +65,17 @@ interface ImportSimModuleProps {
 
 type AdminTab = 'excel_upload' | 'pegawai_amanah' | 'kelola';
 
-const AMANAH_ROLES: UserRole[] = ['Guru', 'Wali Kelas', 'Musyrif', 'Musyrifah', 'Admin SIM'];
+const AMANAH_ROLES: UserRole[] = [
+  'Guru',
+  'Guru Wali',
+  'Wali Kelas',
+  'Wali Asrama',
+  'Musyrif',
+  'Musyrifah',
+  'Pengampu Al-Quran',
+  'Pimpinan',
+  'Admin SIM',
+];
 
 async function parseJsonSafe<T = Record<string, unknown>>(res: Response): Promise<T> {
   const rawText = await res.text();
@@ -1412,14 +1427,41 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={loadWorkbookSpec}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white hover:bg-white/20 whitespace-nowrap shrink-0"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loadingSpec ? 'animate-spin' : ''}`} />
-          Segarkan Data Template
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              downloadLoginAccessCardsPdf(staffDirectory, {
+                title: 'KARTU AKSES LOGIN DATABASE PEGAWAI & GURU',
+                subtitle: `Seluruh Pegawai (${staffDirectory.length} Akun) — Token & Hak Akses Sesuai Peran`,
+              });
+              notify(`Kartu Akses Login PDF (${staffDirectory.length} pegawai) berhasil diunduh.`, 'success');
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-400 px-3.5 py-2 text-xs font-bold text-slate-950 hover:bg-amber-300 whitespace-nowrap shrink-0 shadow-xs"
+          >
+            <KeyRound className="h-3.5 w-3.5" />
+            Unduh Kartu Akses Login (PDF)
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              downloadPegawaiTokenTablePdf(staffDirectory, 'Semua Wilayah');
+              notify('Daftar Token & PIN Pegawai (PDF Tabel) berhasil diunduh.', 'success');
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-teal-300/40 bg-teal-500/20 px-3 py-2 text-xs font-semibold text-teal-100 hover:bg-teal-500/30 whitespace-nowrap shrink-0"
+          >
+            <FileText className="h-3.5 w-3.5" />
+            Daftar Token Pegawai (PDF)
+          </button>
+          <button
+            type="button"
+            onClick={loadWorkbookSpec}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white hover:bg-white/20 whitespace-nowrap shrink-0"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loadingSpec ? 'animate-spin' : ''}`} />
+            Segarkan Data Template
+          </button>
+        </div>
       </div>
 
       {/* Live System Inventory (Collapsible) */}
@@ -2362,23 +2404,52 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
           <div className="space-y-5">
             {/* Top Bar: Tambah / Paste Banyak Nama Pegawai tanpa harus pakai semua template */}
             <div className="rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-50/70 via-sky-50/50 to-white p-4 space-y-3">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900">
-                    Master Pegawai &amp; Penetapan Amanah (Klik Nama → Pilih Amanah)
+                    Database Master Pegawai, Token Login &amp; Penetapan Amanah (Klik Nama → Pilih Amanah)
                   </h3>
                   <p className="text-xs text-slate-600 mt-0.5">
-                    Masukkan nama pegawai (lewat paste daftar nama, input cepat, atau upload sheet <b>Master_Pegawai</b>), lalu <b>klik nama pegawai</b> di kiri untuk menetapkan amanah <b>Kamar Musyrif/ah, Wali Kelas, Guru</b> secara langsung.
+                    Setiap guru/pembina otomatis masuk ke Database Pegawai dan memiliki <b>Token / PIN Akses unik</b> sesuai perannya (<b>Guru, Guru Wali, Wali Kelas, Wali Asrama, Pengampu Al-Qur&apos;an, Pimpinan</b>). Admin dapat mencetak <b>Kartu Akses Login (PDF)</b> untuk dibagikan kepada pegawai.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowBulkPegawaiBox((v) => !v)}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap shrink-0"
-                >
-                  <UserPlus className="h-3.5 w-3.5" />
-                  {showBulkPegawaiBox ? 'Tutup Input Daftar Nama' : '+ Tambah / Paste Daftar Nama Pegawai'}
-                </button>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetList = filteredStaffList.length > 0 ? filteredStaffList : staffDirectory;
+                      downloadLoginAccessCardsPdf(targetList, {
+                        title: `KARTU AKSES LOGIN PEGAWAI (${pegawaiWilayahFilter.toUpperCase()})`,
+                        subtitle: `${targetList.length} Pegawai — Token & Hak Akses Sesuai Peran Database Pegawai`,
+                      });
+                      notify(`Kartu Akses Login PDF (${targetList.length} pegawai) berhasil diunduh.`, 'success');
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#0B1324] px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 whitespace-nowrap shrink-0"
+                  >
+                    <KeyRound className="h-3.5 w-3.5 text-amber-300" />
+                    Unduh Kartu Login ({filteredStaffList.length} Pegawai PDF)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetList = filteredStaffList.length > 0 ? filteredStaffList : staffDirectory;
+                      downloadPegawaiTokenTablePdf(targetList, pegawaiWilayahFilter);
+                      notify('Tabel Daftar Token & PIN Pegawai (PDF) berhasil diunduh.', 'success');
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-teal-300 bg-white px-3 py-2 text-xs font-semibold text-teal-900 hover:bg-teal-50 whitespace-nowrap shrink-0"
+                  >
+                    <FileText className="h-3.5 w-3.5 text-teal-700" />
+                    Tabel Token &amp; PIN (PDF)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkPegawaiBox((v) => !v)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap shrink-0"
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    {showBulkPegawaiBox ? 'Tutup Input Daftar Nama' : '+ Tambah / Paste Nama Pegawai'}
+                  </button>
+                </div>
               </div>
 
               {showBulkPegawaiBox && (
@@ -2518,10 +2589,17 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                               </span>
                             </div>
                             <div className="flex flex-wrap items-center gap-1 text-[10px]">
+                              <span className="rounded bg-amber-100 border border-amber-300 px-1.5 py-0.5 font-mono-num font-bold text-amber-950">
+                                Token: {resolveTeacherToken(t)}
+                              </span>
                               {allRoles.map((r) => (
                                 <span
                                   key={r}
-                                  className="rounded border border-slate-200 bg-white px-1.5 py-0.5 font-semibold text-slate-700"
+                                  className={`rounded border px-1.5 py-0.5 font-semibold ${
+                                    r === 'Pimpinan'
+                                      ? 'border-amber-300 bg-amber-50 text-amber-900'
+                                      : 'border-slate-200 bg-white text-slate-700'
+                                  }`}
                                 >
                                   {r}
                                 </span>
@@ -2538,17 +2616,34 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                               )}
                             </div>
                           </div>
-                          <button
-                            type="button"
-                            onClick={(ev) => {
-                              ev.stopPropagation();
-                              handleDeleteAccount(t.id, t.nama);
-                            }}
-                            title="Hapus pegawai"
-                            className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-700 shrink-0"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                downloadLoginAccessCardsPdf([t], {
+                                  title: `KARTU AKSES LOGIN — ${t.nama}`,
+                                  subtitle: `Token Login: ${resolveTeacherToken(t)} · Peran: ${allRoles.join(', ')}`,
+                                });
+                                notify(`Kartu Akses Login PDF untuk ${t.nama} berhasil diunduh.`, 'success');
+                              }}
+                              title="Unduh Kartu Akses Login PDF pegawai ini"
+                              className="rounded border border-slate-200 bg-white px-1.5 py-1 text-[10px] font-semibold text-teal-800 hover:bg-teal-50"
+                            >
+                              Kartu PDF
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                handleDeleteAccount(t.id, t.nama);
+                              }}
+                              title="Hapus pegawai"
+                              className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-700 shrink-0"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         </div>
                       );
                     })}
@@ -2603,24 +2698,44 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3.5">
                       <div>
                         <div className="text-[11px] font-semibold text-teal-700">
-                          2. Atur Amanah Pegawai Terpilih
+                          2. Atur Amanah &amp; Token Akses Pegawai Terpilih
                         </div>
                         <h3 className="text-base font-bold text-slate-900 mt-0.5">
                           {selectedPegawai.nama}
                         </h3>
-                        <div className="text-[11px] text-slate-500 font-mono-num">
-                          Username: {selectedPegawai.username}
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-600 font-mono-num">
+                          <span>Username: <b>{selectedPegawai.username}</b></span>
+                          <span>·</span>
+                          <span className="rounded-md bg-amber-100 border border-amber-300 px-2 py-0.5 font-bold text-amber-950">
+                            Token / PIN Aktif: {resolveTeacherToken(selectedPegawai)}
+                          </span>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        disabled={savingAssign}
-                        onClick={handleSavePegawaiAmanah}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-50 shadow-xs"
-                      >
-                        <Save className="h-3.5 w-3.5" />
-                        {savingAssign ? 'Menyimpan...' : 'Simpan Amanah Pegawai'}
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            downloadLoginAccessCardsPdf([selectedPegawai], {
+                              title: `KARTU AKSES LOGIN — ${selectedPegawai.nama}`,
+                              subtitle: `Token Login: ${resolveTeacherToken(selectedPegawai)} · Peran: ${assignRoles.join(', ')}`,
+                            });
+                            notify(`Kartu Akses Login PDF untuk ${selectedPegawai.nama} berhasil diunduh.`, 'success');
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-950 hover:bg-amber-100"
+                        >
+                          <KeyRound className="h-3.5 w-3.5 text-amber-700" />
+                          Unduh Kartu Login (PDF)
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingAssign}
+                          onClick={handleSavePegawaiAmanah}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-50 shadow-xs"
+                        >
+                          <Save className="h-3.5 w-3.5" />
+                          {savingAssign ? 'Menyimpan...' : 'Simpan Amanah Pegawai'}
+                        </button>
+                      </div>
                     </div>
 
                     {/* A. Wilayah Tugas */}
@@ -2809,14 +2924,23 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                         />
                       </div>
                       <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                          Ubah PIN Login (Opsional)
-                        </label>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-[11px] font-semibold text-slate-600">
+                            Token / PIN Login Pegawai (Saat ini: <b className="font-mono-num text-teal-800">{resolveTeacherToken(selectedPegawai)}</b>)
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setAssignPin(generateClientTeacherToken(selectedPegawai.nama))}
+                            className="text-[10px] font-semibold text-teal-700 hover:underline"
+                          >
+                            Reset ke Token Standar ({generateClientTeacherToken(selectedPegawai.nama)})
+                          </button>
+                        </div>
                         <input
                           type="text"
                           value={assignPin}
                           onChange={(e) => setAssignPin(e.target.value)}
-                          placeholder="Biarkan kosong jika tidak diubah"
+                          placeholder={`Token aktif: ${resolveTeacherToken(selectedPegawai)} (ketik untuk ubah)`}
                           className="h-9 w-full rounded-lg border border-slate-300 px-3 text-xs font-mono-num"
                         />
                       </div>
@@ -3386,10 +3510,13 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                       className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-xs font-semibold focus:border-indigo-600 focus:outline-none"
                     >
                       <option value="Wali Kelas">Wali Kelas</option>
+                      <option value="Wali Asrama">Wali Asrama</option>
                       <option value="Musyrif">Musyrif</option>
                       <option value="Musyrifah">Musyrifah</option>
                       <option value="Guru">Guru Akademik</option>
+                      <option value="Guru Wali">Guru Wali</option>
                       <option value="Pengampu Al-Quran">Pengampu Al-Qur&apos;an</option>
+                      <option value="Pimpinan">Pimpinan (Akses Semua Laporan &amp; PDF)</option>
                     </select>
                   </div>
                   <div>
@@ -3457,16 +3584,30 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
               </form>
 
               <div className="lg:col-span-8 rounded-xl border border-slate-200 overflow-hidden">
-                <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 flex items-center justify-between text-xs font-semibold text-slate-900">
-                  <span>Daftar Akun Terdaftar ({teachers.length})</span>
-                  <span className="text-[11px] font-normal text-slate-500">Klik Edit untuk mengubah data akun</span>
+                <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-slate-900">
+                  <span>Daftar Database Pegawai &amp; Token Terdaftar ({teachers.length})</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        downloadLoginAccessCardsPdf(staffDirectory, {
+                          title: 'KARTU AKSES LOGIN DATABASE PEGAWAI & GURU',
+                        });
+                        notify('Kartu Akses Login PDF berhasil diunduh.', 'success');
+                      }}
+                      className="inline-flex items-center gap-1 rounded-md bg-[#0B1324] px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-slate-800"
+                    >
+                      <KeyRound className="h-3 w-3 text-amber-300" />
+                      Unduh Semua Kartu Login (PDF)
+                    </button>
+                  </div>
                 </div>
                 <div className="max-h-80 overflow-auto">
                   <table className="w-full text-left text-xs">
                     <thead className="sticky top-0 border-b border-slate-200 bg-slate-100 text-slate-600">
                       <tr>
                         <th className="px-3 py-2 font-semibold">Nama</th>
-                        <th className="px-3 py-2 font-semibold">Username / Email</th>
+                        <th className="px-3 py-2 font-semibold">Token / PIN Login</th>
                         <th className="px-3 py-2 font-semibold">Peran</th>
                         <th className="px-3 py-2 font-semibold">Penugasan</th>
                         <th className="px-3 py-2 text-right font-semibold">Aksi</th>
@@ -3477,11 +3618,14 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                         const roleColor =
                           t.peran === 'Admin Super'
                             ? 'text-teal-700 font-bold'
+                            : t.peran === 'Pimpinan'
+                            ? 'text-amber-700 font-bold'
                             : t.peran === 'Wali Kelas'
                             ? 'text-violet-700 font-semibold'
-                            : t.peran === 'Musyrif' || t.peran === 'Musyrifah'
+                            : t.peran === 'Musyrif' || t.peran === 'Musyrifah' || t.peran === 'Wali Asrama'
                             ? 'text-indigo-700 font-semibold'
                             : 'text-sky-700 font-semibold';
+                        const allRoles = Array.from(new Set([t.peran, ...(t.peranTambahan || [])]));
                         return (
                           <tr
                             key={t.id}
@@ -3489,20 +3633,41 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                               editingTeacherId === t.id ? 'bg-indigo-50/70' : ''
                             }`}
                           >
-                            <td className="px-3 py-2 font-semibold text-slate-900">{t.nama}</td>
-                            <td className="px-3 py-2 font-mono-num text-slate-600">{t.username}</td>
-                            <td className={`px-3 py-2 ${roleColor}`}>{t.peran}</td>
+                            <td className="px-3 py-2">
+                              <div className="font-semibold text-slate-900">{t.nama}</div>
+                              <div className="font-mono-num text-[10px] text-slate-500">{t.username}</div>
+                            </td>
+                            <td className="px-3 py-2">
+                              <span className="inline-block rounded bg-amber-100 border border-amber-300 px-2 py-0.5 font-mono-num text-[11px] font-bold text-amber-950">
+                                {t.peran === 'Admin Super' ? '121320' : resolveTeacherToken(t)}
+                              </span>
+                            </td>
+                            <td className={`px-3 py-2 ${roleColor}`}>
+                              {allRoles.join(', ')}
+                            </td>
                             <td className="px-3 py-2 text-[11px] text-slate-600">
                               {t.waliKelasOf ? `Wali: ${t.waliKelasOf}` : ''}
                               {t.waliKelasOf && t.kamarBinaan?.length ? ' · ' : ''}
                               {t.kamarBinaan?.length ? `Kamar: ${t.kamarBinaan.join(', ')}` : ''}
-                              {!t.waliKelasOf && !t.kamarBinaan?.length ? '-' : ''}
+                              {!t.waliKelasOf && !t.kamarBinaan?.length ? `Wilayah ${t.genderScope}` : ''}
                             </td>
                             <td className="px-3 py-2 text-right whitespace-nowrap">
                               {t.peran === 'Admin Super' ? (
                                 <span className="text-[11px] font-semibold text-teal-700">Utama</span>
                               ) : (
                                 <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      downloadLoginAccessCardsPdf([t], {
+                                        title: `KARTU AKSES LOGIN — ${t.nama}`,
+                                      });
+                                      notify(`Kartu Login PDF untuk ${t.nama} diunduh.`, 'success');
+                                    }}
+                                    className="mr-1 inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100"
+                                  >
+                                    Kartu PDF
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={() => handleStartEditAccount(t)}
