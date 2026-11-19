@@ -190,6 +190,21 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const [scheduleWilayahFilter, setScheduleWilayahFilter] = useState<'Semua' | 'Putra' | 'Putri'>('Semua');
   const [tidyingData, setTidyingData] = useState(false);
   const excelPreviewRef = useRef<HTMLDivElement | null>(null);
+  const wilayahExplorerRef = useRef<HTMLDivElement | null>(null);
+  const sheetViewerRef = useRef<HTMLDivElement | null>(null);
+  const managementPanelRef = useRef<HTMLDivElement | null>(null);
+
+  // Panel Lihat Data Putra & Putri (Langsung Terbuka di Atas)
+  const [wilayahExplorerOpen, setWilayahExplorerOpen] = useState<boolean>(false);
+  const [explorerWilayah, setExplorerWilayah] = useState<'Putra' | 'Putri' | 'Semua'>('Putra');
+  const [explorerCategory, setExplorerCategory] = useState<'santri' | 'kamar' | 'pegawai' | 'jadwal'>('santri');
+  const [explorerSearch, setExplorerSearch] = useState<string>('');
+  const [explorerKelasFilter, setExplorerKelasFilter] = useState<string>('SEMUA');
+  const [explorerKamarFilter, setExplorerKamarFilter] = useState<string>('SEMUA');
+
+  // Panel Lihat Isi Sheet (10 Kartu Sheet di Kotak #1)
+  const [selectedSheetViewName, setSelectedSheetViewName] = useState<string | null>(null);
+  const [sheetViewSearch, setSheetViewSearch] = useState<string>('');
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const [jKategori, setJKategori] = useState<'Akademik' | 'Al-Quran'>('Akademik');
   const [jGuru, setJGuru] = useState('');
@@ -1172,6 +1187,34 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     }
   };
 
+  const handleOpenWilayahExplorer = (
+    wilayah: 'Putra' | 'Putri' | 'Semua',
+    category: 'santri' | 'kamar' | 'pegawai' | 'jadwal' = 'santri',
+  ) => {
+    setExplorerWilayah(wilayah);
+    setExplorerCategory(category);
+    setExplorerKelasFilter('SEMUA');
+    setExplorerKamarFilter('SEMUA');
+    setWilayahExplorerOpen(true);
+    setStudentWilayahFilter(wilayah);
+    setScheduleWilayahFilter(wilayah);
+    setTimeout(() => {
+      wilayahExplorerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 60);
+  };
+
+  const handleOpenSheetViewer = (sheetName: string) => {
+    if (selectedSheetViewName === sheetName) {
+      setSelectedSheetViewName(null);
+      return;
+    }
+    setSelectedSheetViewName(sheetName);
+    setSheetViewSearch('');
+    setTimeout(() => {
+      sheetViewerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 60);
+  };
+
   const handleStartEditStudent = (st: Student) => {
     setEditingStudentId(st.id);
     setSNis(st.nis || '');
@@ -1183,6 +1226,9 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     setSPengampu(st.pengampuQuran || '');
     setActiveTab('kelola');
     notify(`Mode Edit Santri: ${st.nama}`, 'info');
+    setTimeout(() => {
+      managementPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
   };
 
   const handleDeleteStudentDirect = async (st: Student) => {
@@ -1273,6 +1319,9 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     setJJam(sch.jamKe);
     setActiveTab('kelola');
     notify(`Mode Edit Jadwal: ${sch.hari} · ${sch.guru} (${sch.kelas})`, 'info');
+    setTimeout(() => {
+      managementPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
   };
 
   const handleDeleteScheduleDirect = async (sch: ScheduleItem) => {
@@ -1596,8 +1645,22 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
               {inventoryCards.map((box) => {
                 const Icon = box.icon;
+                const targetCategory: 'santri' | 'kamar' | 'pegawai' | 'jadwal' =
+                  box.label === 'Kamar Asrama'
+                    ? 'kamar'
+                    : box.label === 'Akun Guru / Wali / Musyrif'
+                    ? 'pegawai'
+                    : box.label === "Jadwal KBM & Qur'an"
+                    ? 'jadwal'
+                    : 'santri';
                 return (
-                  <div key={box.label} className={`rounded-xl border p-4 ${box.card}`}>
+                  <button
+                    key={box.label}
+                    type="button"
+                    onClick={() => handleOpenWilayahExplorer('Semua', targetCategory)}
+                    className={`rounded-xl border p-4 text-left transition-all hover:shadow-md hover:-translate-y-0.5 cursor-pointer ${box.card}`}
+                    title={`Klik untuk melihat rincian ${box.label}`}
+                  >
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[11px] font-semibold text-slate-600 truncate">{box.label}</span>
                       <span className={`flex h-7 w-7 items-center justify-center rounded-lg shrink-0 ${box.iconBox}`}>
@@ -1620,7 +1683,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                         Putra: {counts.byWilayah.Putra.schedules} · Putri: {counts.byWilayah.Putri.schedules}
                       </div>
                     )}
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -1628,73 +1691,715 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
             {/* Panel Perbandingan Terpisah Wilayah Putra vs Wilayah Putri */}
             {counts?.byWilayah && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="rounded-xl border border-sky-200 bg-gradient-to-br from-sky-50/80 to-white p-4 flex items-center justify-between gap-3">
+                <div
+                  onClick={() => handleOpenWilayahExplorer('Putra', 'santri')}
+                  className={`rounded-xl border p-4 flex items-center justify-between gap-3 cursor-pointer transition-all hover:shadow-md ${
+                    wilayahExplorerOpen && explorerWilayah === 'Putra'
+                      ? 'border-2 border-sky-500 bg-sky-50/90 shadow-sm'
+                      : 'border-sky-200 bg-gradient-to-br from-sky-50/80 to-white'
+                  }`}
+                >
                   <div>
-                    <div className="text-xs font-bold text-sky-900 uppercase tracking-wide">
-                      Wilayah Putra (Banin)
+                    <div className="text-xs font-bold text-sky-900 uppercase tracking-wide flex items-center gap-1.5">
+                      <span>Wilayah Putra (Banin)</span>
+                      {wilayahExplorerOpen && explorerWilayah === 'Putra' && (
+                        <span className="rounded bg-sky-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                          Sedang Dibuka
+                        </span>
+                      )}
                     </div>
-                    <div className="mt-1.5 flex flex-wrap gap-2 text-[11px] font-mono-num">
-                      <span className="rounded-md bg-white border border-sky-200 px-2 py-0.5 font-bold text-sky-800">
+                    <div
+                      className="mt-1.5 flex flex-wrap gap-2 text-[11px] font-mono-num"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleOpenWilayahExplorer('Putra', 'santri')}
+                        className="rounded-md bg-white border border-sky-200 px-2 py-0.5 font-bold text-sky-800 hover:bg-sky-100 transition-colors cursor-pointer"
+                      >
                         Santri: {counts.byWilayah.Putra.students}
-                      </span>
-                      <span className="rounded-md bg-white border border-sky-200 px-2 py-0.5 font-semibold text-sky-700">
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenWilayahExplorer('Putra', 'kamar')}
+                        className="rounded-md bg-white border border-sky-200 px-2 py-0.5 font-semibold text-sky-700 hover:bg-sky-100 transition-colors cursor-pointer"
+                      >
                         Kamar: {counts.byWilayah.Putra.rooms}
-                      </span>
-                      <span className="rounded-md bg-white border border-sky-200 px-2 py-0.5 font-semibold text-sky-700">
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenWilayahExplorer('Putra', 'jadwal')}
+                        className="rounded-md bg-white border border-sky-200 px-2 py-0.5 font-semibold text-sky-700 hover:bg-sky-100 transition-colors cursor-pointer"
+                      >
                         Jadwal: {counts.byWilayah.Putra.schedules}
-                      </span>
-                      <span className="rounded-md bg-white border border-sky-200 px-2 py-0.5 font-semibold text-sky-700">
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenWilayahExplorer('Putra', 'pegawai')}
+                        className="rounded-md bg-white border border-sky-200 px-2 py-0.5 font-semibold text-sky-700 hover:bg-sky-100 transition-colors cursor-pointer"
+                      >
                         Pembinaan: {counts.byWilayah.Putra.pembinaanRecords}
-                      </span>
+                      </button>
                     </div>
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      setStudentWilayahFilter('Putra');
-                      setScheduleWilayahFilter('Putra');
-                      setActiveTab('kelola');
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (wilayahExplorerOpen && explorerWilayah === 'Putra') {
+                        setWilayahExplorerOpen(false);
+                      } else {
+                        handleOpenWilayahExplorer('Putra', 'santri');
+                      }
                     }}
-                    className="rounded-lg border border-sky-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-sky-800 hover:bg-sky-50 whitespace-nowrap shrink-0"
+                    className={`rounded-lg border px-3 py-1.5 text-[11px] font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                      wilayahExplorerOpen && explorerWilayah === 'Putra'
+                        ? 'border-sky-700 bg-sky-600 text-white hover:bg-sky-700'
+                        : 'border-sky-300 bg-white text-sky-800 hover:bg-sky-100'
+                    }`}
                   >
-                    Lihat Data Putra →
+                    {wilayahExplorerOpen && explorerWilayah === 'Putra'
+                      ? 'Tutup Data Putra ✕'
+                      : 'Lihat Data Putra →'}
                   </button>
                 </div>
 
-                <div className="rounded-xl border border-rose-200 bg-gradient-to-br from-rose-50/80 to-white p-4 flex items-center justify-between gap-3">
+                <div
+                  onClick={() => handleOpenWilayahExplorer('Putri', 'santri')}
+                  className={`rounded-xl border p-4 flex items-center justify-between gap-3 cursor-pointer transition-all hover:shadow-md ${
+                    wilayahExplorerOpen && explorerWilayah === 'Putri'
+                      ? 'border-2 border-rose-500 bg-rose-50/90 shadow-sm'
+                      : 'border-rose-200 bg-gradient-to-br from-rose-50/80 to-white'
+                  }`}
+                >
                   <div>
-                    <div className="text-xs font-bold text-rose-900 uppercase tracking-wide">
-                      Wilayah Putri (Banat)
+                    <div className="text-xs font-bold text-rose-900 uppercase tracking-wide flex items-center gap-1.5">
+                      <span>Wilayah Putri (Banat)</span>
+                      {wilayahExplorerOpen && explorerWilayah === 'Putri' && (
+                        <span className="rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                          Sedang Dibuka
+                        </span>
+                      )}
                     </div>
-                    <div className="mt-1.5 flex flex-wrap gap-2 text-[11px] font-mono-num">
-                      <span className="rounded-md bg-white border border-rose-200 px-2 py-0.5 font-bold text-rose-800">
+                    <div
+                      className="mt-1.5 flex flex-wrap gap-2 text-[11px] font-mono-num"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleOpenWilayahExplorer('Putri', 'santri')}
+                        className="rounded-md bg-white border border-rose-200 px-2 py-0.5 font-bold text-rose-800 hover:bg-rose-100 transition-colors cursor-pointer"
+                      >
                         Santri: {counts.byWilayah.Putri.students}
-                      </span>
-                      <span className="rounded-md bg-white border border-rose-200 px-2 py-0.5 font-semibold text-rose-700">
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenWilayahExplorer('Putri', 'kamar')}
+                        className="rounded-md bg-white border border-rose-200 px-2 py-0.5 font-semibold text-rose-700 hover:bg-rose-100 transition-colors cursor-pointer"
+                      >
                         Kamar: {counts.byWilayah.Putri.rooms}
-                      </span>
-                      <span className="rounded-md bg-white border border-rose-200 px-2 py-0.5 font-semibold text-rose-700">
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenWilayahExplorer('Putri', 'jadwal')}
+                        className="rounded-md bg-white border border-rose-200 px-2 py-0.5 font-semibold text-rose-700 hover:bg-rose-100 transition-colors cursor-pointer"
+                      >
                         Jadwal: {counts.byWilayah.Putri.schedules}
-                      </span>
-                      <span className="rounded-md bg-white border border-rose-200 px-2 py-0.5 font-semibold text-rose-700">
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenWilayahExplorer('Putri', 'pegawai')}
+                        className="rounded-md bg-white border border-rose-200 px-2 py-0.5 font-semibold text-rose-700 hover:bg-rose-100 transition-colors cursor-pointer"
+                      >
                         Pembinaan: {counts.byWilayah.Putri.pembinaanRecords}
-                      </span>
+                      </button>
                     </div>
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      setStudentWilayahFilter('Putri');
-                      setScheduleWilayahFilter('Putri');
-                      setActiveTab('kelola');
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (wilayahExplorerOpen && explorerWilayah === 'Putri') {
+                        setWilayahExplorerOpen(false);
+                      } else {
+                        handleOpenWilayahExplorer('Putri', 'santri');
+                      }
                     }}
-                    className="rounded-lg border border-rose-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-rose-800 hover:bg-rose-50 whitespace-nowrap shrink-0"
+                    className={`rounded-lg border px-3 py-1.5 text-[11px] font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                      wilayahExplorerOpen && explorerWilayah === 'Putri'
+                        ? 'border-rose-700 bg-rose-600 text-white hover:bg-rose-700'
+                        : 'border-rose-300 bg-white text-rose-800 hover:bg-rose-100'
+                    }`}
                   >
-                    Lihat Data Putri →
+                    {wilayahExplorerOpen && explorerWilayah === 'Putri'
+                      ? 'Tutup Data Putri ✕'
+                      : 'Lihat Data Putri →'}
                   </button>
                 </div>
               </div>
             )}
+
+            {/* PANEL INTERAKTIF LIHAT DATA WILAYAH PUTRA & PUTRI */}
+            {wilayahExplorerOpen && (() => {
+              const filteredStudents = adminStudents.filter((st) => {
+                if (explorerWilayah !== 'Semua' && st.gender !== explorerWilayah) return false;
+                if (explorerKelasFilter !== 'SEMUA' && st.kelas !== explorerKelasFilter) return false;
+                if (explorerKamarFilter !== 'SEMUA' && (st.kamar || '-') !== explorerKamarFilter) return false;
+                if (!explorerSearch.trim()) return true;
+                const q = explorerSearch.trim().toLowerCase();
+                return (
+                  st.nama.toLowerCase().includes(q) ||
+                  (st.nis || '').toLowerCase().includes(q) ||
+                  st.kelas.toLowerCase().includes(q) ||
+                  (st.kamar || '').toLowerCase().includes(q) ||
+                  (st.waliKelas || '').toLowerCase().includes(q) ||
+                  (st.musyrif || '').toLowerCase().includes(q) ||
+                  (st.kelompokQuran || '').toLowerCase().includes(q) ||
+                  (st.pengampuQuran || '').toLowerCase().includes(q) ||
+                  (st.guruWali || '').toLowerCase().includes(q)
+                );
+              });
+
+              const filteredRooms = rooms.filter((rm) => {
+                if (explorerWilayah !== 'Semua' && rm.gender !== explorerWilayah) return false;
+                if (!explorerSearch.trim()) return true;
+                const q = explorerSearch.trim().toLowerCase();
+                return (
+                  rm.kamar.toLowerCase().includes(q) ||
+                  rm.musyrif.toLowerCase().includes(q)
+                );
+              });
+
+              const filteredStaff = staffDirectory.filter((tc) => {
+                if (explorerWilayah !== 'Semua') {
+                  if (tc.genderScope !== explorerWilayah && tc.genderScope !== 'Semua') return false;
+                }
+                if (!explorerSearch.trim()) return true;
+                const q = explorerSearch.trim().toLowerCase();
+                return (
+                  tc.nama.toLowerCase().includes(q) ||
+                  tc.peran.toLowerCase().includes(q) ||
+                  (tc.peranTambahan || []).join(' ').toLowerCase().includes(q) ||
+                  (tc.waliKelasOf || '').toLowerCase().includes(q) ||
+                  (tc.kamarBinaan || []).join(' ').toLowerCase().includes(q)
+                );
+              });
+
+              const filteredSchedules = adminSchedules.filter((sch) => {
+                if (explorerWilayah !== 'Semua' && sch.gender !== explorerWilayah) return false;
+                if (explorerKelasFilter !== 'SEMUA' && sch.kelas !== explorerKelasFilter) return false;
+                if (!explorerSearch.trim()) return true;
+                const q = explorerSearch.trim().toLowerCase();
+                return (
+                  sch.guru.toLowerCase().includes(q) ||
+                  sch.mapel.toLowerCase().includes(q) ||
+                  sch.kelas.toLowerCase().includes(q) ||
+                  sch.hari.toLowerCase().includes(q)
+                );
+              });
+
+              const availableKelas = Array.from(
+                new Set(
+                  adminStudents
+                    .filter((st) => explorerWilayah === 'Semua' || st.gender === explorerWilayah)
+                    .map((st) => st.kelas)
+                    .filter(Boolean),
+                ),
+              ).sort();
+
+              const availableKamar = Array.from(
+                new Set(
+                  adminStudents
+                    .filter((st) => explorerWilayah === 'Semua' || st.gender === explorerWilayah)
+                    .map((st) => st.kamar || '-')
+                    .filter(Boolean),
+                ),
+              ).sort();
+
+              const headerTheme =
+                explorerWilayah === 'Putra'
+                  ? 'border-sky-300 bg-gradient-to-r from-sky-600 to-blue-700'
+                  : explorerWilayah === 'Putri'
+                  ? 'border-rose-300 bg-gradient-to-r from-rose-600 to-pink-700'
+                  : 'border-teal-300 bg-gradient-to-r from-teal-700 to-emerald-700';
+
+              return (
+                <div
+                  ref={wilayahExplorerRef}
+                  className="rounded-xl border-2 border-slate-300 bg-white shadow-md overflow-hidden"
+                >
+                  {/* Header Explorer */}
+                  <div className={`${headerTheme} px-4 py-3 text-white flex flex-wrap items-center justify-between gap-3`}>
+                    <div>
+                      <div className="text-sm font-bold flex items-center gap-2">
+                        <Users className="h-4 w-4" />
+                        <span>
+                          Tabel Data Database{' '}
+                          {explorerWilayah === 'Putra'
+                            ? 'Wilayah Putra (Banin)'
+                            : explorerWilayah === 'Putri'
+                            ? 'Wilayah Putri (Banat)'
+                            : 'Seluruh Wilayah (Putra & Putri)'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-white/85 mt-0.5">
+                        Menampilkan data langsung dari database SIM aktif. Klik tab di bawah untuk melihat Santri, Kamar Asrama, Guru/Wali, atau Jadwal.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExplorerWilayah('Putra');
+                          setExplorerKelasFilter('SEMUA');
+                          setExplorerKamarFilter('SEMUA');
+                        }}
+                        className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-colors ${
+                          explorerWilayah === 'Putra'
+                            ? 'bg-white text-sky-900 shadow-xs'
+                            : 'bg-white/15 text-white hover:bg-white/25'
+                        }`}
+                      >
+                        Putra ({adminStudents.filter((s) => s.gender === 'Putra').length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExplorerWilayah('Putri');
+                          setExplorerKelasFilter('SEMUA');
+                          setExplorerKamarFilter('SEMUA');
+                        }}
+                        className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-colors ${
+                          explorerWilayah === 'Putri'
+                            ? 'bg-white text-rose-900 shadow-xs'
+                            : 'bg-white/15 text-white hover:bg-white/25'
+                        }`}
+                      >
+                        Putri ({adminStudents.filter((s) => s.gender === 'Putri').length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExplorerWilayah('Semua');
+                          setExplorerKelasFilter('SEMUA');
+                          setExplorerKamarFilter('SEMUA');
+                        }}
+                        className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-colors ${
+                          explorerWilayah === 'Semua'
+                            ? 'bg-white text-teal-900 shadow-xs'
+                            : 'bg-white/15 text-white hover:bg-white/25'
+                        }`}
+                      >
+                        Semua ({adminStudents.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setWilayahExplorerOpen(false)}
+                        className="ml-1 inline-flex items-center gap-1 rounded-lg bg-black/25 px-2.5 py-1 text-xs font-bold text-white hover:bg-black/40"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        Tutup
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Sub-tab & Filter Bar */}
+                  <div className="border-b border-slate-200 bg-slate-50 p-3 flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setExplorerCategory('santri')}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                          explorerCategory === 'santri'
+                            ? 'bg-teal-700 text-white shadow-2xs'
+                            : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        Daftar Santri ({filteredStudents.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExplorerCategory('kamar')}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                          explorerCategory === 'kamar'
+                            ? 'bg-indigo-700 text-white shadow-2xs'
+                            : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        Kamar &amp; Wali Asrama ({filteredRooms.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExplorerCategory('pegawai')}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                          explorerCategory === 'pegawai'
+                            ? 'bg-violet-700 text-white shadow-2xs'
+                            : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        Guru, Wali &amp; Pegawai ({filteredStaff.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExplorerCategory('jadwal')}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                          explorerCategory === 'jadwal'
+                            ? 'bg-sky-700 text-white shadow-2xs'
+                            : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        Jadwal KBM &amp; Al-Qur&apos;an ({filteredSchedules.length})
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {(explorerCategory === 'santri' || explorerCategory === 'jadwal') && (
+                        <select
+                          value={explorerKelasFilter}
+                          onChange={(e) => setExplorerKelasFilter(e.target.value)}
+                          className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700"
+                        >
+                          <option value="SEMUA">Semua Kelas ({availableKelas.length})</option>
+                          {availableKelas.map((kls) => (
+                            <option key={kls} value={kls}>
+                              Kelas {kls}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                      {explorerCategory === 'santri' && (
+                        <select
+                          value={explorerKamarFilter}
+                          onChange={(e) => setExplorerKamarFilter(e.target.value)}
+                          className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700"
+                        >
+                          <option value="SEMUA">Semua Kamar ({availableKamar.length})</option>
+                          {availableKamar.map((kmr) => (
+                            <option key={kmr} value={kmr}>
+                              Kamar {kmr}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                      <div className="relative min-w-[220px] flex-1 sm:flex-initial">
+                        <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" />
+                        <input
+                          type="text"
+                          value={explorerSearch}
+                          onChange={(e) => setExplorerSearch(e.target.value)}
+                          placeholder="Cari nama, NIS, kelas, kamar, guru..."
+                          className="w-full rounded-lg border border-slate-300 bg-white pl-8 pr-7 py-1.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
+                        />
+                        {explorerSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setExplorerSearch('')}
+                            className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStudentWilayahFilter(explorerWilayah);
+                          setScheduleWilayahFilter(explorerWilayah);
+                          setActiveTab(explorerCategory === 'pegawai' ? 'pegawai_amanah' : 'kelola');
+                          setTimeout(() => {
+                            managementPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          }, 80);
+                        }}
+                        className="inline-flex items-center gap-1 rounded-lg border border-teal-300 bg-teal-50 px-2.5 py-1.5 text-xs font-bold text-teal-900 hover:bg-teal-100 whitespace-nowrap"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        Tambah / Edit di Form ↓
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Tabel Isi Berdasarkan Kategori */}
+                  <div className="max-h-[440px] overflow-auto">
+                    {explorerCategory === 'santri' && (
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead className="sticky top-0 bg-slate-100 text-[11px] font-bold uppercase text-slate-600 border-b border-slate-200 z-10">
+                          <tr>
+                            <th className="px-3 py-2.5 w-10">No</th>
+                            <th className="px-3 py-2.5">NIS</th>
+                            <th className="px-3 py-2.5">Nama Santri</th>
+                            <th className="px-3 py-2.5">Wilayah</th>
+                            <th className="px-3 py-2.5">Kelas &amp; Wali Kelas</th>
+                            <th className="px-3 py-2.5">Kamar &amp; Wali Asrama</th>
+                            <th className="px-3 py-2.5">Halaqah &amp; Pengampu Qur&apos;an</th>
+                            <th className="px-3 py-2.5">Guru Wali</th>
+                            <th className="px-3 py-2.5 text-right">Aksi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {filteredStudents.length === 0 ? (
+                            <tr>
+                              <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
+                                Tidak ada data santri yang cocok dengan filter pencarian.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredStudents.map((st, idx) => (
+                              <tr key={st.id} className="hover:bg-slate-50/90">
+                                <td className="px-3 py-2 font-mono-num text-slate-500">{idx + 1}</td>
+                                <td className="px-3 py-2 font-mono-num font-semibold text-slate-700">
+                                  {st.nis || '-'}
+                                </td>
+                                <td className="px-3 py-2 font-bold text-slate-900">{st.nama}</td>
+                                <td className="px-3 py-2">
+                                  <span
+                                    className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                                      st.gender === 'Putri'
+                                        ? 'bg-rose-100 text-rose-800'
+                                        : 'bg-sky-100 text-sky-800'
+                                    }`}
+                                  >
+                                    {st.gender}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2">
+                                  <div className="font-semibold text-slate-800">{st.kelas || '-'}</div>
+                                  <div className="text-[10px] text-slate-500">{st.waliKelas || '-'}</div>
+                                </td>
+                                <td className="px-3 py-2">
+                                  <div className="font-semibold text-slate-800">{st.kamar || '-'}</div>
+                                  <div className="text-[10px] text-slate-500">{st.musyrif || '-'}</div>
+                                </td>
+                                <td className="px-3 py-2">
+                                  <div className="font-medium text-slate-800">{st.kelompokQuran || '-'}</div>
+                                  <div className="text-[10px] text-teal-700">{st.pengampuQuran || '-'}</div>
+                                </td>
+                                <td className="px-3 py-2 text-[11px] text-slate-700">
+                                  {st.guruWali || '-'}
+                                </td>
+                                <td className="px-3 py-2 text-right whitespace-nowrap">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartEditStudent(st)}
+                                    className="mr-1 inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-50"
+                                  >
+                                    <Edit3 className="h-3 w-3" />
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteStudentDirect(st)}
+                                    className="inline-flex items-center rounded border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50"
+                                    title="Hapus santri"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    )}
+
+                    {explorerCategory === 'kamar' && (
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead className="sticky top-0 bg-slate-100 text-[11px] font-bold uppercase text-slate-600 border-b border-slate-200 z-10">
+                          <tr>
+                            <th className="px-3 py-2.5 w-10">No</th>
+                            <th className="px-3 py-2.5">Nama Kamar Asrama</th>
+                            <th className="px-3 py-2.5">Wilayah</th>
+                            <th className="px-3 py-2.5">Wali Asrama / Musyrif(ah)</th>
+                            <th className="px-3 py-2.5">Jumlah Santri</th>
+                            <th className="px-3 py-2.5 text-right">Aksi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {filteredRooms.length === 0 ? (
+                            <tr>
+                              <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                                Tidak ada data kamar asrama pada filter ini.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredRooms.map((rm, idx) => {
+                              const roomMembersCount = adminStudents.filter(
+                                (s) => s.gender === rm.gender && s.kamar === rm.kamar,
+                              ).length;
+                              return (
+                                <tr key={`${rm.gender}_${rm.kamar}`} className="hover:bg-slate-50/90">
+                                  <td className="px-3 py-2 font-mono-num text-slate-500">{idx + 1}</td>
+                                  <td className="px-3 py-2 font-bold text-slate-900">{rm.kamar}</td>
+                                  <td className="px-3 py-2">
+                                    <span
+                                      className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                                        rm.gender === 'Putri'
+                                          ? 'bg-rose-100 text-rose-800'
+                                          : 'bg-sky-100 text-sky-800'
+                                      }`}
+                                    >
+                                      {rm.gender}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-2 font-semibold text-slate-800">{rm.musyrif || '-'}</td>
+                                  <td className="px-3 py-2 font-mono-num font-bold text-teal-800">
+                                    {roomMembersCount} santri
+                                  </td>
+                                  <td className="px-3 py-2 text-right">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setExplorerCategory('santri');
+                                        setExplorerKamarFilter(rm.kamar);
+                                      }}
+                                      className="inline-flex items-center gap-1 rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-100"
+                                    >
+                                      Lihat Anggota Kamar →
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    )}
+
+                    {explorerCategory === 'pegawai' && (
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead className="sticky top-0 bg-slate-100 text-[11px] font-bold uppercase text-slate-600 border-b border-slate-200 z-10">
+                          <tr>
+                            <th className="px-3 py-2.5 w-10">No</th>
+                            <th className="px-3 py-2.5">Nama Guru / Pegawai</th>
+                            <th className="px-3 py-2.5">Wilayah</th>
+                            <th className="px-3 py-2.5">Peran &amp; Amanah</th>
+                            <th className="px-3 py-2.5">Kelas / Kamar Binaan</th>
+                            <th className="px-3 py-2.5">Token Akses Login</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {filteredStaff.length === 0 ? (
+                            <tr>
+                              <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                                Tidak ada data pegawai/guru pada filter ini.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredStaff.map((tc, idx) => (
+                              <tr key={tc.id} className="hover:bg-slate-50/90">
+                                <td className="px-3 py-2 font-mono-num text-slate-500">{idx + 1}</td>
+                                <td className="px-3 py-2 font-bold text-slate-900">{tc.nama}</td>
+                                <td className="px-3 py-2">
+                                  <span
+                                    className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                                      tc.genderScope === 'Putri'
+                                        ? 'bg-rose-100 text-rose-800'
+                                        : tc.genderScope === 'Putra'
+                                        ? 'bg-sky-100 text-sky-800'
+                                        : 'bg-slate-200 text-slate-800'
+                                    }`}
+                                  >
+                                    {tc.genderScope || 'Semua'}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2 font-semibold text-slate-800">
+                                  {Array.from(new Set([tc.peran, ...(tc.peranTambahan || [])])).join(', ')}
+                                </td>
+                                <td className="px-3 py-2 text-[11px] text-slate-700">
+                                  {[
+                                    tc.waliKelasOf ? `Kelas: ${tc.waliKelasOf}` : '',
+                                    tc.kamarBinaan && tc.kamarBinaan.length > 0
+                                      ? `Kamar: ${tc.kamarBinaan.join(', ')}`
+                                      : '',
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' · ') || '-'}
+                                </td>
+                                <td className="px-3 py-2 font-mono-num font-bold text-teal-800">
+                                  {resolveTeacherToken(tc)}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    )}
+
+                    {explorerCategory === 'jadwal' && (
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead className="sticky top-0 bg-slate-100 text-[11px] font-bold uppercase text-slate-600 border-b border-slate-200 z-10">
+                          <tr>
+                            <th className="px-3 py-2.5 w-10">No</th>
+                            <th className="px-3 py-2.5">Hari &amp; Jam</th>
+                            <th className="px-3 py-2.5">Wilayah</th>
+                            <th className="px-3 py-2.5">Guru / Pengampu</th>
+                            <th className="px-3 py-2.5">Mata Pelajaran / Halaqah</th>
+                            <th className="px-3 py-2.5">Kelas</th>
+                            <th className="px-3 py-2.5 text-right">Aksi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {filteredSchedules.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                                Tidak ada data jadwal pada filter ini.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredSchedules.map((sch, idx) => (
+                              <tr key={sch.id} className="hover:bg-slate-50/90">
+                                <td className="px-3 py-2 font-mono-num text-slate-500">{idx + 1}</td>
+                                <td className="px-3 py-2">
+                                  <span className="font-bold text-slate-900">{sch.hari}</span>
+                                  <span className="ml-1.5 font-mono-num text-[11px] text-slate-500">
+                                    JP {sch.jamKe}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2">
+                                  <span
+                                    className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                                      sch.gender === 'Putri'
+                                        ? 'bg-rose-100 text-rose-800'
+                                        : 'bg-sky-100 text-sky-800'
+                                    }`}
+                                  >
+                                    {sch.gender}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2 font-bold text-slate-900">{sch.guru}</td>
+                                <td className="px-3 py-2 font-semibold text-teal-800">{sch.mapel}</td>
+                                <td className="px-3 py-2 font-semibold text-slate-800">{sch.kelas}</td>
+                                <td className="px-3 py-2 text-right whitespace-nowrap">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartEditSchedule(sch)}
+                                    className="mr-1 inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-sky-800 hover:bg-sky-50"
+                                  >
+                                    <Edit3 className="h-3 w-3" />
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteScheduleDirect(sch)}
+                                    className="inline-flex items-center rounded border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50"
+                                    title="Hapus jadwal"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -1805,7 +2510,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
 
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white/80 border border-emerald-200/80 px-3.5 py-2 text-[11px] text-slate-700">
           <span>
-            <b>Cara Pakai:</b> Klik <b>1. Unduh Template Seluruh Database (.xlsx)</b> → isi/edit sheet di Excel → klik <b>2. Upload &amp; Simpan Seluruh Database (.xlsx)</b> untuk langsung memasukkan seluruh data ke sistem.
+            <b>Cara Pakai:</b> Klik <b>1. Unduh Template Seluruh Database (.xlsx)</b> → isi/edit sheet di Excel → klik <b>2. Upload &amp; Simpan Seluruh Database (.xlsx)</b> untuk langsung memasukkan seluruh data ke sistem. <b>Klik salah satu kartu sheet di bawah untuk melihat isi tabelnya.</b>
           </span>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -1830,29 +2535,154 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
         </div>
 
         {!templateMinimized && dataSheets.length > 0 && (
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5 pt-1">
-            {dataSheets.map((s) => {
-              const isPutri = s.name.toLowerCase().includes('putri');
-              const isPutra = s.name.toLowerCase().includes('putra');
-              const badgeCls = isPutri
-                ? 'border-rose-200/80 bg-rose-50/70'
-                : isPutra
-                ? 'border-sky-200/80 bg-sky-50/70'
-                : 'border-white/80 bg-white/85';
-              const titleCls = isPutri ? 'text-rose-800' : isPutra ? 'text-sky-800' : 'text-teal-800';
+          <div className="space-y-3 pt-1">
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
+              {dataSheets.map((s) => {
+                const isPutri = s.name.toLowerCase().includes('putri');
+                const isPutra = s.name.toLowerCase().includes('putra');
+                const isSelected = selectedSheetViewName === s.name;
+                const badgeCls = isSelected
+                  ? isPutri
+                    ? 'border-2 border-rose-600 bg-rose-100/90 ring-2 ring-rose-300'
+                    : isPutra
+                    ? 'border-2 border-sky-600 bg-sky-100/90 ring-2 ring-sky-300'
+                    : 'border-2 border-teal-700 bg-teal-50 ring-2 ring-teal-300'
+                  : isPutri
+                  ? 'border-rose-200/80 bg-rose-50/70 hover:border-rose-400 hover:bg-rose-50'
+                  : isPutra
+                  ? 'border-sky-200/80 bg-sky-50/70 hover:border-sky-400 hover:bg-sky-50'
+                  : 'border-white/80 bg-white/85 hover:border-emerald-400 hover:bg-white';
+                const titleCls = isPutri ? 'text-rose-800' : isPutra ? 'text-sky-800' : 'text-teal-800';
+                return (
+                  <button
+                    key={s.name}
+                    type="button"
+                    onClick={() => handleOpenSheetViewer(s.name)}
+                    className={`rounded-lg border px-3 py-2.5 text-left text-xs shadow-xs transition-all hover:shadow-sm cursor-pointer ${badgeCls}`}
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <div className={`font-mono-num text-[11px] font-bold truncate ${titleCls}`}>{s.name}</div>
+                      <span className="text-[10px] font-semibold text-slate-500 shrink-0">
+                        {isSelected ? 'Tutup ✕' : 'Lihat →'}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-600 truncate mt-0.5">{s.label}</div>
+                    <div className="mt-1 font-mono-num text-xs font-bold text-slate-900">
+                      {Math.max(0, s.rows.length - 1)} baris
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Tabel Pratinjau Langsung Saat Kartu Sheet Diklik */}
+            {selectedSheetViewName && (() => {
+              const activeSheet = dataSheets.find((s) => s.name === selectedSheetViewName);
+              if (!activeSheet) return null;
+              const headerRow = activeSheet.rows[0] || [];
+              const bodyRows = activeSheet.rows.slice(1).filter((row) => {
+                if (!sheetViewSearch.trim()) return true;
+                const q = sheetViewSearch.trim().toLowerCase();
+                return row.some((cell) => String(cell ?? '').toLowerCase().includes(q));
+              });
+              const isPutriSheet = activeSheet.name.toLowerCase().includes('putri');
+              const isPutraSheet = activeSheet.name.toLowerCase().includes('putra');
+
               return (
                 <div
-                  key={s.name}
-                  className={`rounded-lg border px-3 py-2.5 text-xs shadow-xs ${badgeCls}`}
+                  ref={sheetViewerRef}
+                  className="rounded-xl border-2 border-emerald-500 bg-white shadow-md overflow-hidden"
                 >
-                  <div className={`font-mono-num text-[11px] font-bold truncate ${titleCls}`}>{s.name}</div>
-                  <div className="text-[11px] text-slate-600 truncate mt-0.5">{s.label}</div>
-                  <div className="mt-1 font-mono-num text-xs font-bold text-slate-900">
-                    {Math.max(0, s.rows.length - 1)} baris
+                  <div className="bg-gradient-to-r from-emerald-700 to-teal-800 px-4 py-2.5 text-white flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-bold flex items-center gap-2">
+                        <FileSpreadsheet className="h-4 w-4" />
+                        <span>
+                          Isi Sheet <span className="font-mono-num underline">{activeSheet.name}</span> — {activeSheet.label} ({bodyRows.length} baris)
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute left-2.5 top-1.5 h-3.5 w-3.5 text-slate-400" />
+                        <input
+                          type="text"
+                          value={sheetViewSearch}
+                          onChange={(e) => setSheetViewSearch(e.target.value)}
+                          placeholder={`Cari di ${activeSheet.name}...`}
+                          className="rounded-lg border border-white/30 bg-white pl-8 pr-6 py-1 text-xs text-slate-800 focus:outline-none"
+                        />
+                        {sheetViewSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setSheetViewSearch('')}
+                            className="absolute right-1.5 top-1.5 text-slate-400 hover:text-slate-600"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      {(isPutraSheet || isPutriSheet) && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleOpenWilayahExplorer(
+                              isPutriSheet ? 'Putri' : 'Putra',
+                              activeSheet.name.toLowerCase().includes('musyrif') ? 'kamar' : 'santri',
+                            )
+                          }
+                          className="rounded-lg bg-amber-400 px-2.5 py-1 text-[11px] font-bold text-slate-950 hover:bg-amber-300"
+                        >
+                          Buka Mode Edit {isPutriSheet ? 'Putri' : 'Putra'} →
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSheetViewName(null)}
+                        className="inline-flex items-center gap-1 rounded-lg bg-black/25 px-2.5 py-1 text-xs font-bold text-white hover:bg-black/40"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        Tutup
+                      </button>
+                    </div>
+                  </div>
+                  <div className="max-h-[380px] overflow-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="sticky top-0 bg-slate-100 text-[11px] font-bold uppercase text-slate-700 border-b border-slate-200 z-10">
+                        <tr>
+                          <th className="px-3 py-2 w-10">No</th>
+                          {headerRow.map((col, cIdx) => (
+                            <th key={cIdx} className="px-3 py-2 whitespace-nowrap">
+                              {String(col ?? '')}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {bodyRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={headerRow.length + 1} className="px-4 py-6 text-center text-slate-500">
+                              Tidak ada baris data yang cocok.
+                            </td>
+                          </tr>
+                        ) : (
+                          bodyRows.map((r, rIdx) => (
+                            <tr key={rIdx} className="hover:bg-slate-50/90">
+                              <td className="px-3 py-1.5 font-mono-num text-slate-500">{rIdx + 1}</td>
+                              {headerRow.map((_, cIdx) => (
+                                <td key={cIdx} className="px-3 py-1.5 text-slate-800">
+                                  {String(r[cIdx] ?? '')}
+                                </td>
+                              ))}
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               );
-            })}
+            })()}
           </div>
         )}
       </div>
@@ -2012,6 +2842,9 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                           `Membuka form Input & Edit Langsung untuk komponen "${tpl.title}".`,
                           'info'
                         );
+                        setTimeout(() => {
+                          managementPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }, 80);
                       }}
                       className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50/60 px-3 py-1.5 text-[11px] font-semibold text-teal-900 hover:bg-teal-100/80 transition-colors whitespace-nowrap shrink-0"
                     >
@@ -2027,7 +2860,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       </div>
 
       {/* UPLOAD & MANAGEMENT PANEL */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-5">
+      <div ref={managementPanelRef} className="rounded-xl border border-slate-200 bg-white p-5 space-y-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between border-b border-slate-200 pb-4">
           <div className="grid grid-cols-1 sm:grid-cols-3 lg:inline-flex items-center gap-1 rounded-xl bg-slate-100 p-1 border border-slate-200/80 w-full lg:w-auto">
             <button
