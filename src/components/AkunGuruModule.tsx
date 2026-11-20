@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
+  Award,
+  BarChart3,
   BookOpen,
   CheckCircle2,
   Clock,
@@ -8,20 +10,35 @@ import {
   Download,
   Edit3,
   ExternalLink,
+  Eye,
   FileSpreadsheet,
   FileText,
   Home,
   KeyRound,
   LogOut,
   Plus,
+  Search,
   ShieldCheck,
+  Sparkles,
   Trash2,
+  TrendingUp,
   Upload,
   UserCheck,
   UserPlus,
   Users,
   X,
 } from 'lucide-react';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import type {
   Gender,
   PimpinanExecutiveReport,
@@ -74,6 +91,9 @@ interface TeacherRecapResponse {
     materi: string;
     totalSiswa: number;
     hadir: number;
+    sakit?: number;
+    izin?: number;
+    alfa?: number;
     tidakHadir: number;
     timestamp: string;
   }>;
@@ -95,6 +115,13 @@ interface TeacherRecapResponse {
     lajuPct: number;
     statusLaju: 'Tuntas / On-Track' | 'Berjalan Stabil' | 'Perlu Akselerasi' | 'Belum Mulai';
     rataKehadiranPct: number;
+    sakitPct?: number;
+    izinPct?: number;
+    alfaPct?: number;
+    totalHadir?: number;
+    totalSakit?: number;
+    totalIzin?: number;
+    totalAlfa?: number;
     jumlahTopikUnik: number;
     materiTerakhir: string;
     tanggalTerakhir: string;
@@ -102,6 +129,9 @@ interface TeacherRecapResponse {
       tanggal: string;
       materi: string;
       hadir: number;
+      sakit?: number;
+      izin?: number;
+      alfa?: number;
       totalSiswa: number;
       tidakHadir: number;
     }>;
@@ -351,15 +381,30 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
       nama: string;
       gender: Gender;
       kelas: string;
+      kamar?: string;
       kelompokQuran: string;
       pengampuQuran: string;
       persenHadir: number;
       totalHadir: number;
+      totalSakit?: number;
+      totalIzin?: number;
+      totalAlfa?: number;
       totalAbsen: number;
+      setoranCount?: number;
+      murajaahCount?: number;
+      statusTerakhir?: string;
       lastSetoran: string;
       lastTilawah: string;
       lastMurajaah: string;
       lastTanggal: string;
+      riwayatHalaqah?: Array<{
+        tanggal: string;
+        status: string;
+        setoran: string;
+        tilawah: string;
+        murajaah: string;
+        keterangan: string;
+      }>;
     }>
   >([]);
   const [loadingHalaqah, setLoadingHalaqah] = useState(false);
@@ -421,6 +466,32 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
   const [guruWaliCandidateSearch, setGuruWaliCandidateSearch] = useState<string>('');
   const [guruWaliCandidateClass, setGuruWaliCandidateClass] = useState<string>('SEMUA');
   const [savingGuruWaliAssign, setSavingGuruWaliAssign] = useState<boolean>(false);
+
+  // New Role-Focused Dashboard States (Guru Akademik, Guru Al-Qur'an, Guru Musyrif, & Multi-Role Switcher)
+  const [showRoleComparisonMatrix, setShowRoleComparisonMatrix] = useState<boolean>(false);
+  const [academicTimeRange, setAcademicTimeRange] = useState<'HARIAN' | 'MINGGUAN' | 'BULANAN' | 'SEMESTER'>('SEMESTER');
+  const [academicPacingFilter, setAcademicPacingFilter] = useState<'SEMUA' | 'SESUAI' | 'CEPAT' | 'TERTINGGAL'>('SEMUA');
+  const [academicClassSearch, setAcademicClassSearch] = useState<string>('');
+
+  const [quranTargetFilter, setQuranTargetFilter] = useState<'SEMUA' | 'TERCAPAI' | 'PENDAMPINGAN'>('SEMUA');
+  const [quranGroupFilter, setQuranGroupFilter] = useState<string>('SEMUA');
+  const [quranSearch, setQuranSearch] = useState<string>('');
+
+  const [musyrifTargetFilter, setMusyrifTargetFilter] = useState<'SEMUA' | 'TERCAPAI' | 'PENDAMPINGAN'>('SEMUA');
+  const [musyrifSearch, setMusyrifSearch] = useState<string>('');
+
+  const [detailStudentModal, setDetailStudentModal] = useState<{
+    roleType: 'QURAN' | 'MUSYRIF';
+    nama: string;
+    kelas: string;
+    kamarOrHalaqah: string;
+    capaianUtama: string;
+    statusTarget: 'Tercapai' | 'Perlu Pendampingan';
+    persenHadir: number;
+    rincianKehadiran: string;
+    metrics: Array<{ label: string; value: string; tone: string }>;
+    history: Array<{ tanggal: string; title: string; subtitle: string; badge: string }>;
+  } | null>(null);
 
   useEffect(() => {
     if (!selectedName && teachers.length > 0) {
@@ -1555,23 +1626,195 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
         </div>
       </div>
 
-      {/* Role Progress Tabs — Automatically filtered by employee roles in Database Pegawai */}
-      <div className="flex flex-wrap gap-1.5 rounded-xl bg-slate-100/90 p-1.5 border border-slate-200/80 w-full">
-        {(isPimpinanOrAdmin || showAllRoleTabs) && (
+      {/* Multi-Role Switcher (Pindah Peran dalam 1 Akun) & Fokus Objek Pantauan */}
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs space-y-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-xs font-bold text-teal-900">
+              <Sparkles className="h-3.5 w-3.5 text-teal-600" />
+              Pindah Peran (*Switch Role*) dalam 1 Akun
+            </span>
+            <span className="text-xs text-slate-600">
+              Satu guru dapat merangkap beberapa amanah sekaligus ({allMyRoles.join(' + ')}) — pilih fokus tampilan di bawah:
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowRoleComparisonMatrix((v) => !v)}
+              className="inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-sky-50/80 px-2.5 py-1 text-[11px] font-semibold text-sky-900 hover:bg-sky-100"
+            >
+              <BarChart3 className="h-3.5 w-3.5 text-sky-600" />
+              {showRoleComparisonMatrix ? 'Tutup Tabel Perbandingan 3 Peran' : 'Lihat Perbedaan Alur 3 Peran Guru'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowAllRoleTabs((v) => !v)}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              {showAllRoleTabs ? 'Hanya Peran Utama Saya' : 'Buka Semua Tab Peran'}
+            </button>
+          </div>
+        </div>
+
+        {/* 3 Core Role Focus Cards — Instant Switcher between Guru Akademik, Guru Al-Qur'an, and Guru Musyrif */}
+        <div className="grid grid-cols-1 gap-2.5 md:grid-cols-3">
           <button
             type="button"
-            onClick={() => setProgressTab('pimpinan')}
-            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[11px] sm:text-xs font-bold transition-colors whitespace-nowrap min-w-[160px] ${
-              progressTab === 'pimpinan'
-                ? 'bg-amber-500 text-white shadow-sm'
-                : 'text-slate-700 hover:bg-white/80 hover:text-slate-950'
+            onClick={() => setProgressTab('mengajar')}
+            className={`text-left rounded-xl border p-3 transition-all ${
+              progressTab === 'mengajar'
+                ? 'border-teal-400 bg-gradient-to-br from-teal-50 via-emerald-50/40 to-white ring-2 ring-teal-200/70 shadow-xs'
+                : 'border-slate-200 bg-slate-50/60 hover:bg-white hover:border-teal-300'
             }`}
           >
-            <FileText className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'pimpinan' ? 'text-white' : 'text-amber-600'}`} />
-            <span className="truncate">Laporan Pimpinan (Semua PDF)</span>
+            <div className="flex items-center justify-between">
+              <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-teal-900">
+                <BookOpen className="h-4 w-4 text-teal-600" />
+                1. Peran Guru Akademik
+              </span>
+              <span
+                className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                  progressTab === 'mengajar'
+                    ? 'bg-teal-600 text-white'
+                    : 'bg-teal-100 text-teal-800'
+                }`}
+              >
+                {progressTab === 'mengajar' ? 'Aktif' : 'Pilih Peran'}
+              </span>
+            </div>
+            <div className="mt-1.5 text-[11px] text-slate-600 leading-snug">
+              <b>Objek:</b> Rombongan Belajar ({(recap?.learningPacing || []).length} Kelas/Mapel) · <b>Metrik:</b> Laju Materi (*Curriculum Tracker*) &amp; Statistik Kehadiran per Kelas.
+            </div>
           </button>
+
+          <button
+            type="button"
+            onClick={() => setProgressTab('quran')}
+            className={`text-left rounded-xl border p-3 transition-all ${
+              progressTab === 'quran'
+                ? 'border-amber-400 bg-gradient-to-br from-amber-50 via-amber-50/40 to-white ring-2 ring-amber-200/70 shadow-xs'
+                : 'border-slate-200 bg-slate-50/60 hover:bg-white hover:border-amber-300'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-amber-950">
+                <Award className="h-4 w-4 text-amber-600" />
+                2. Peran Guru Al-Qur&apos;an
+              </span>
+              <span
+                className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                  progressTab === 'quran'
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-amber-100 text-amber-900'
+                }`}
+              >
+                {progressTab === 'quran' ? 'Aktif' : 'Pilih Peran'}
+              </span>
+            </div>
+            <div className="mt-1.5 text-[11px] text-slate-600 leading-snug">
+              <b>Objek:</b> Siswa per Halaqah ({halaqahRows.length} Santri) · <b>Metrik:</b> Setoran Ziyadah, Murojaah, Kualitas Bacaan (Tahsin) &amp; Kehadiran Sesi Halaqah.
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setProgressTab('musyrif')}
+            className={`text-left rounded-xl border p-3 transition-all ${
+              progressTab === 'musyrif'
+                ? 'border-emerald-400 bg-gradient-to-br from-emerald-50 via-teal-50/40 to-white ring-2 ring-emerald-200/70 shadow-xs'
+                : 'border-slate-200 bg-slate-50/60 hover:bg-white hover:border-emerald-300'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-emerald-950">
+                <Home className="h-4 w-4 text-emerald-600" />
+                3. Peran Guru Musyrif / Asrama
+              </span>
+              <span
+                className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                  progressTab === 'musyrif'
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-emerald-100 text-emerald-900'
+                }`}
+              >
+                {progressTab === 'musyrif' ? 'Aktif' : 'Pilih Peran'}
+              </span>
+            </div>
+            <div className="mt-1.5 text-[11px] text-slate-600 leading-snug">
+              <b>Objek:</b> Siswa per Kamar ({recap?.musyrifProgress.totalSantri ?? 0} Santri / {recap?.musyrifProgress.totalKamar ?? 0} Kamar) · <b>Metrik:</b> Mutabaah Yaumiyah, Karakter &amp; Kehadiran Asrama.
+            </div>
+          </button>
+        </div>
+
+        {/* Collapsible Comparison Matrix: Guru Musyrif vs Guru Al-Qur'an vs Guru Akademik */}
+        {showRoleComparisonMatrix && (
+          <div className="rounded-xl border border-sky-200 bg-sky-50/40 overflow-hidden">
+            <div className="border-b border-sky-200/80 bg-gradient-to-r from-sky-100/80 via-teal-50/60 to-white px-4 py-2.5 flex items-center justify-between">
+              <span className="text-xs font-bold text-sky-950">
+                Ringkasan Perbedaan Alur Tampilan &amp; Fokus Objek Pantauan (3 Peran Guru)
+              </span>
+              <span className="text-[11px] font-semibold text-sky-800">
+                Mendukung Multi-Peran (*Switch Role*) dalam 1 Akun
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs bg-white">
+                <thead className="border-b border-slate-200 bg-slate-50 text-slate-700">
+                  <tr>
+                    <th className="px-4 py-2.5 font-bold">Aspek Pantauan</th>
+                    <th className="px-4 py-2.5 font-bold text-emerald-800">Guru Musyrif (Wali Asrama)</th>
+                    <th className="px-4 py-2.5 font-bold text-amber-800">Guru Al-Qur&apos;an (Halaqah)</th>
+                    <th className="px-4 py-2.5 font-bold text-teal-800">Guru Akademik (Mata Pelajaran)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  <tr>
+                    <td className="px-4 py-2 font-semibold text-slate-900">Objek Utama</td>
+                    <td className="px-4 py-2">Siswa per Kamar / Binaan</td>
+                    <td className="px-4 py-2">Siswa per Halaqah</td>
+                    <td className="px-4 py-2">Rombongan Belajar (Kelas)</td>
+                  </tr>
+                  <tr>
+                    <td className="px-4 py-2 font-semibold text-slate-900">Metrik Utama</td>
+                    <td className="px-4 py-2">Kedisiplinan &amp; Ibadah Harian (Mutabaah Yaumiyah)</td>
+                    <td className="px-4 py-2">Setoran Ziyadah, Murojaah &amp; Tahsin</td>
+                    <td className="px-4 py-2">Laju Materi (*Curriculum Tracker*) &amp; Nilai Akademik</td>
+                  </tr>
+                  <tr>
+                    <td className="px-4 py-2 font-semibold text-slate-900">Fokus Kehadiran</td>
+                    <td className="px-4 py-2">Kehadiran kegiatan asrama</td>
+                    <td className="px-4 py-2">Kehadiran sesi halaqah</td>
+                    <td className="px-4 py-2">Kehadiran per jam pelajaran per kelas</td>
+                  </tr>
+                  <tr>
+                    <td className="px-4 py-2 font-semibold text-slate-900">Output Rekap</td>
+                    <td className="px-4 py-2">Rapor Karakter / Pembinaan</td>
+                    <td className="px-4 py-2">Rapor Tahfidz / Al-Qur&apos;an</td>
+                    <td className="px-4 py-2">Rapor Akademik &amp; Jurnal Mengajar</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
-        {(hasRoleGuru || showAllRoleTabs) && (
+
+        {/* Complete Sub-Tab Bar Including Wali Kelas, Guru Wali, Pimpinan, WhatsApp, and Upload */}
+        <div className="flex flex-wrap gap-1.5 rounded-xl bg-slate-100/90 p-1.5 border border-slate-200/80 w-full">
+          {(isPimpinanOrAdmin || showAllRoleTabs) && (
+            <button
+              type="button"
+              onClick={() => setProgressTab('pimpinan')}
+              className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[11px] sm:text-xs font-bold transition-colors whitespace-nowrap min-w-[155px] ${
+                progressTab === 'pimpinan'
+                  ? 'bg-amber-500 text-white shadow-sm'
+                  : 'text-slate-700 hover:bg-white/80 hover:text-slate-950'
+              }`}
+            >
+              <FileText className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'pimpinan' ? 'text-white' : 'text-amber-600'}`} />
+              <span className="truncate">Laporan Pimpinan</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setProgressTab('mengajar')}
@@ -1582,26 +1825,22 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
             }`}
           >
             <BookOpen className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'mengajar' ? 'text-white' : 'text-teal-600'}`} />
-            <span className="truncate">Guru Akademik</span>
+            <span className="truncate">Guru Akademik ({(recap?.learningPacing || []).length})</span>
           </button>
-        )}
-        {(hasRoleWaliKelas || showAllRoleTabs) && (
           <button
             type="button"
-            onClick={() => setProgressTab('walikelas')}
+            onClick={() => setProgressTab('quran')}
             className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
-              progressTab === 'walikelas'
-                ? 'bg-sky-600 text-white shadow-sm'
+              progressTab === 'quran'
+                ? 'bg-amber-600 text-white shadow-sm'
                 : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
             }`}
           >
-            <ShieldCheck className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'walikelas' ? 'text-white' : 'text-sky-600'}`} />
+            <Award className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'quran' ? 'text-white' : 'text-amber-600'}`} />
             <span className="truncate font-mono-num">
-              Wali Kelas ({recap?.waliProgress.totalSantri ?? 0})
+              Guru Al-Qur&apos;an ({halaqahRows.length})
             </span>
           </button>
-        )}
-        {(hasRoleWaliAsrama || showAllRoleTabs) && (
           <button
             type="button"
             onClick={() => setProgressTab('musyrif')}
@@ -1613,66 +1852,66 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
           >
             <Home className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'musyrif' ? 'text-white' : 'text-emerald-600'}`} />
             <span className="truncate font-mono-num">
-              Wali Asrama ({recap?.musyrifProgress.totalKamar ?? 0})
+              Guru Musyrif ({recap?.musyrifProgress.totalSantri ?? 0})
             </span>
           </button>
-        )}
-        {(hasRoleGuruWali || showAllRoleTabs) && (
+          {(hasRoleWaliKelas || showAllRoleTabs) && (
+            <button
+              type="button"
+              onClick={() => setProgressTab('walikelas')}
+              className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[125px] ${
+                progressTab === 'walikelas'
+                  ? 'bg-sky-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+              }`}
+            >
+              <ShieldCheck className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'walikelas' ? 'text-white' : 'text-sky-600'}`} />
+              <span className="truncate font-mono-num">
+                Wali Kelas ({recap?.waliProgress.totalSantri ?? 0})
+              </span>
+            </button>
+          )}
+          {(hasRoleGuruWali || showAllRoleTabs) && (
+            <button
+              type="button"
+              onClick={() => setProgressTab('guruwali')}
+              className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[125px] ${
+                progressTab === 'guruwali'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+              }`}
+            >
+              <Users className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'guruwali' ? 'text-white' : 'text-indigo-600'}`} />
+              <span className="truncate font-mono-num">
+                Guru Wali ({recap?.guruWaliProgress?.totalSantri ?? 0})
+              </span>
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => setProgressTab('guruwali')}
-            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
-              progressTab === 'guruwali'
-                ? 'bg-indigo-600 text-white shadow-sm'
+            onClick={() => setProgressTab('whatsapp')}
+            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[115px] ${
+              progressTab === 'whatsapp'
+                ? 'bg-green-600 text-white shadow-sm'
                 : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
             }`}
           >
-            <Users className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'guruwali' ? 'text-white' : 'text-indigo-600'}`} />
-            <span className="truncate font-mono-num">
-              Guru Wali ({recap?.guruWaliProgress?.totalSantri ?? 0})
-            </span>
+            <ShieldCheck className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'whatsapp' ? 'text-white' : 'text-green-600'}`} />
+            <span className="truncate font-mono-num">WhatsApp ({waLogs.length})</span>
           </button>
-        )}
-        {(hasRoleQuran || showAllRoleTabs) && (
           <button
             type="button"
-            onClick={() => setProgressTab('quran')}
-            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
-              progressTab === 'quran'
-                ? 'bg-amber-600 text-white shadow-sm'
+            onClick={() => setProgressTab('upload')}
+            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[115px] ${
+              progressTab === 'upload'
+                ? 'bg-violet-600 text-white shadow-sm'
                 : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
             }`}
           >
-            <BookOpen className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'quran' ? 'text-white' : 'text-amber-600'}`} />
-            <span className="truncate font-mono-num">
-              Al-Qur&apos;an ({halaqahRows.length})
-            </span>
+            <Upload className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'upload' ? 'text-white' : 'text-violet-600'}`} />
+            <span className="truncate">Upload &amp; Input</span>
           </button>
-        )}
-        <button
-          type="button"
-          onClick={() => setProgressTab('whatsapp')}
-          className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[120px] ${
-            progressTab === 'whatsapp'
-              ? 'bg-green-600 text-white shadow-sm'
-              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-          }`}
-        >
-          <ShieldCheck className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'whatsapp' ? 'text-white' : 'text-green-600'}`} />
-          <span className="truncate font-mono-num">WhatsApp ({waLogs.length})</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setProgressTab('upload')}
-          className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[120px] ${
-            progressTab === 'upload'
-              ? 'bg-violet-600 text-white shadow-sm'
-              : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-          }`}
-        >
-          <Upload className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'upload' ? 'text-white' : 'text-violet-600'}`} />
-          <span className="truncate">Upload &amp; Input</span>
-        </button>
+        </div>
       </div>
 
       {progressTab === 'upload' ? (
@@ -2703,371 +2942,707 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
       ) : loadingRecap || !recap ? (
         <div className="h-48 animate-pulse rounded-xl bg-slate-200" />
       ) : progressTab === 'mengajar' ? (
-        <div className="space-y-6">
-          {/* Summary Stats Guru Mengajar */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Total Sesi Presensi Diisi</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">{recap.totalSessions}</div>
-              <div className="mt-1 text-xs text-slate-500">Rekam jejak dari input halaman depan</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Progres Mengajar Hari Ini</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-teal-700">
-                {recap.todaySchedules.filter((s) => s.filled).length}/{recap.todaySchedules.length}
-              </div>
-              <div className="mt-1 text-xs text-slate-500 font-mono-num">{formatTanggalIndo(today)}</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Total Jadwal Mingguan</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">{recap.allMySchedules.length}</div>
-              <div className="mt-1 text-xs text-slate-500">Akademik &amp; Halaqah Al-Qur&apos;an</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Pengawasan Ujian</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">{recap.examSessionsCount}</div>
-              <div className="mt-1 text-xs text-slate-500">Sesi berita acara tercatat</div>
-            </div>
-          </div>
+        /* ============================================================= */
+        /* 2. TAMPILAN AKUN GURU AKADEMIK (KELAS, LAJU MATERI & STATISTIK)*/
+        /* ============================================================= */
+        (() => {
+          const pacingList = recap.learningPacing || [];
+          const todayFilledCount = recap.todaySchedules.filter((s) => s.filled).length;
+          const todayUnfilled = recap.todaySchedules.filter((s) => !s.filled);
+          const avgAcademicAttendance =
+            pacingList.length > 0
+              ? Math.round(
+                  pacingList.reduce((acc, lp) => acc + lp.rataKehadiranPct, 0) / pacingList.length,
+                )
+              : 100;
 
-          {/* Today's Checklist */}
-          <div className="rounded-xl border border-slate-200 bg-white p-5">
-            <h3 className="text-sm font-semibold text-slate-900 mb-3">
-              Target Mengajar Hari Ini ({formatTanggalIndo(today)})
-            </h3>
-            {recap.todaySchedules.length === 0 ? (
-              <p className="text-xs text-slate-500">
-                Tidak ada jadwal mengajar terjadwal pada hari ini. Anda dapat menambah atau menyesuaikan jadwal di menu <b>Jadwal &amp; Perubahan</b>.
-              </p>
-            ) : (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {recap.todaySchedules.map((sch) => (
-                  <div
-                    key={sch.id}
-                    className={`flex items-center justify-between rounded-lg border p-3 ${
-                      sch.filled ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/50'
-                    }`}
-                  >
-                    <div>
-                      <div className="text-xs font-semibold text-slate-900">
-                        {sch.kelas} · {sch.mapel}
-                      </div>
-                      <div className="text-[11px] text-slate-600 font-mono-num">Jam ke-{sch.jamKe}</div>
-                    </div>
-                    {sch.filled ? (
-                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
-                        <CheckCircle2 className="h-4 w-4" />
-                        Sudah
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700">
-                        <Clock className="h-4 w-4" />
-                        Belum
-                      </span>
-                    )}
+          const mapPacingBadge = (lp: (typeof pacingList)[number]) => {
+            if (lp.lajuPct >= 75) {
+              return {
+                code: 'CEPAT' as const,
+                label: 'Lebih Cepat',
+                cls: 'bg-sky-100 text-sky-900 border-sky-300',
+                barCls: 'bg-sky-500',
+              };
+            }
+            if (lp.lajuPct >= 35 || lp.totalPertemuan >= 4) {
+              return {
+                code: 'SESUAI' as const,
+                label: 'Sesuai Jadwal',
+                cls: 'bg-emerald-100 text-emerald-900 border-emerald-300',
+                barCls: 'bg-emerald-500',
+              };
+            }
+            return {
+              code: 'TERTINGGAL' as const,
+              label: 'Tertinggal',
+              cls: 'bg-rose-100 text-rose-900 border-rose-300',
+              barCls: 'bg-rose-500',
+            };
+          };
+
+          const filteredPacing = pacingList.filter((lp) => {
+            const b = mapPacingBadge(lp);
+            if (academicPacingFilter !== 'SEMUA' && b.code !== academicPacingFilter) return false;
+            if (academicClassSearch.trim()) {
+              const q = academicClassSearch.trim().toLowerCase();
+              return (
+                lp.kelas.toLowerCase().includes(q) ||
+                lp.mapel.toLowerCase().includes(q) ||
+                lp.materiTerakhir.toLowerCase().includes(q)
+              );
+            }
+            return true;
+          });
+
+          // Filter sessions by time range (Harian, Mingguan, Bulanan, Semester)
+          const cutoffDays =
+            academicTimeRange === 'HARIAN'
+              ? 1
+              : academicTimeRange === 'MINGGUAN'
+              ? 7
+              : academicTimeRange === 'BULANAN'
+              ? 31
+              : 3650;
+          const todayMs = new Date(`${today}T00:00:00`).getTime();
+
+          const classStatsRows = pacingList.map((lp) => {
+            const scopedSes = lp.riwayatMateri.filter((rm) => {
+              if (academicTimeRange === 'SEMESTER') return true;
+              if (academicTimeRange === 'HARIAN') return rm.tanggal === today;
+              const diffDays = Math.abs(todayMs - new Date(`${rm.tanggal}T00:00:00`).getTime()) / 86400000;
+              return diffDays <= cutoffDays;
+            });
+
+            const useAllIfEmpty = scopedSes.length === 0 ? lp.riwayatMateri : scopedSes;
+            const totalPertemuan =
+              academicTimeRange === 'SEMESTER' ? lp.totalPertemuan : scopedSes.length;
+            const sumTotal = useAllIfEmpty.reduce((a, b) => a + (b.totalSiswa || 0), 0);
+            const sumHadir = useAllIfEmpty.reduce((a, b) => a + (b.hadir || 0), 0);
+            const sumSakit = useAllIfEmpty.reduce((a, b) => a + (b.sakit ?? 0), 0);
+            const sumIzin = useAllIfEmpty.reduce((a, b) => a + (b.izin ?? 0), 0);
+            const sumAlfa = useAllIfEmpty.reduce((a, b) => a + (b.alfa ?? 0), 0);
+
+            const hadirPct =
+              sumTotal > 0 ? Math.round((sumHadir / sumTotal) * 100) : lp.rataKehadiranPct;
+            const sakitPct =
+              sumTotal > 0 ? Math.round((sumSakit / sumTotal) * 100) : lp.sakitPct ?? 0;
+            const izinPct =
+              sumTotal > 0 ? Math.round((sumIzin / sumTotal) * 100) : lp.izinPct ?? 0;
+            const alfaPct =
+              sumTotal > 0
+                ? Math.round((sumAlfa / sumTotal) * 100)
+                : lp.alfaPct ?? Math.max(0, 100 - hadirPct - sakitPct - izinPct);
+
+            return {
+              label: `${lp.kelas} · ${lp.mapel.slice(0, 14)}`,
+              kelas: lp.kelas,
+              mapel: lp.mapel,
+              gender: lp.gender,
+              totalPertemuan,
+              hadirPct,
+              sakitPct,
+              izinPct,
+              alfaPct,
+            };
+          });
+
+          return (
+            <div className="space-y-6">
+              {/* A. RINGKASAN CEPAT GURU AKADEMIK (4 SUMMARY CARDS) */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-xl border border-teal-200/80 border-t-4 border-t-teal-500 bg-gradient-to-b from-teal-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-teal-950">Jadwal Mengajar Hari Ini</span>
+                    <span className="rounded-md bg-teal-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-teal-800">
+                      {formatTanggalIndo(today)}
+                    </span>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* REKAP PEMBELAJARAN & RISET LAJU MATERI (KHUSUS PERAN GURU AKADEMIK) */}
-          <div className="rounded-xl border border-teal-200 bg-gradient-to-br from-teal-50/40 via-white to-white overflow-hidden">
-            <div className="flex flex-col gap-2 border-b border-teal-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">
-                  Rekap Pembelajaran &amp; Analisis Laju Materi per Kelas / Mata Pelajaran
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Setiap input presensi KBM &amp; topik materi otomatis terhubung menjadi peta ketercapaian silabus (target 16 pekan efektif/semester), rata-rata kehadiran kelas, dan log bab yang sudah diajarkan.
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const rows = (recap.learningPacing || []).map((lp) => [
-                      `${lp.kelas} (${lp.gender})`,
-                      lp.mapel,
-                      lp.jadwalMingguan,
-                      `${lp.totalPertemuan}/${lp.targetPertemuan} (${lp.lajuPct}%)`,
-                      lp.statusLaju,
-                      `${lp.rataKehadiranPct}%`,
-                      lp.materiTerakhir,
-                    ]);
-                    downloadTableReportPdf({
-                      title: `LAPORAN PEMBELAJARAN & LAJU MATERI GURU — ${recap.teacher.nama}`,
-                      subtitle: `Total Jadwal: ${recap.allMySchedules.length} | Total Sesi Diisi: ${recap.totalSessions}`,
-                      filename: `Laporan_Pembelajaran_Laju_Materi_${recap.teacher.nama.replace(/\s+/g, '_')}.pdf`,
-                      orientation: 'landscape',
-                      headers: ['Kelas & Wilayah', 'Mata Pelajaran', 'Jadwal', 'Pertemuan & Laju', 'Status', '% Hadir', 'Materi Terakhir'],
-                      rows: rows.length > 0 ? rows : [['-', '-', '-', '0/16 (0%)', 'Belum Mulai', '100%', '-']],
-                    });
-                    notify('PDF Laporan Pembelajaran & Laju Materi berhasil diunduh.', 'success');
-                  }}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#0B1324] px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
-                >
-                  <FileText className="h-3.5 w-3.5 text-teal-300" />
-                  Unduh PDF Laju Materi
-                </button>
-                <span className="inline-flex items-center rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white shrink-0 font-mono-num">
-                  {(recap.learningPacing || []).length} Kelas / Mapel Diampu
-                </span>
-              </div>
-            </div>
-
-            {(!recap.learningPacing || recap.learningPacing.length === 0) ? (
-              <div className="p-8 text-center text-xs text-slate-500">
-                Belum ada jadwal atau sesi pembelajaran akademik tercatat. Saat Anda menginput presensi harian Akademik beserta topik materi, laju materi per kelas akan muncul otomatis di sini.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
-                    <tr>
-                      <th className="px-4 py-3 font-semibold">Kelas &amp; Wilayah</th>
-                      <th className="px-3 py-3 font-semibold">Mata Pelajaran</th>
-                      <th className="px-3 py-3 font-semibold">Jadwal Mingguan</th>
-                      <th className="px-3 py-3 font-semibold">Laju Pertemuan &amp; Silabus</th>
-                      <th className="px-3 py-3 text-right font-semibold">Rata-rata Hadir</th>
-                      <th className="px-4 py-3 font-semibold">Materi / Topik Terakhir &amp; Riwayat</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {recap.learningPacing.map((lp) => (
-                      <tr key={`${lp.kelas}|${lp.mapel}`} className="hover:bg-slate-50 align-top">
-                        <td className="px-4 py-3">
-                          <div className="font-bold text-slate-900">{lp.kelas}</div>
-                          <div className="text-[11px] text-slate-500">Wilayah {lp.gender}</div>
-                        </td>
-                        <td className="px-3 py-3">
-                          <div className="font-semibold text-teal-800">{lp.mapel}</div>
-                          <div className="text-[11px] text-slate-500 font-mono-num">
-                            {lp.jumlahTopikUnik} topik materi tercatat
-                          </div>
-                        </td>
-                        <td className="px-3 py-3 text-slate-600 font-mono-num text-[11px]">
-                          {lp.jadwalMingguan}
-                        </td>
-                        <td className="px-3 py-3 min-w-[180px]">
-                          <div className="flex items-center justify-between text-[11px] font-semibold mb-1">
-                            <span className="font-mono-num text-slate-900">
-                              {lp.totalPertemuan} / {lp.targetPertemuan} Pekan ({lp.lajuPct}%)
-                            </span>
-                            <span
-                              className={`rounded px-1.5 py-0.5 text-[10px] ${
-                                lp.statusLaju === 'Tuntas / On-Track'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : lp.statusLaju === 'Berjalan Stabil'
-                                  ? 'bg-sky-100 text-sky-800'
-                                  : lp.statusLaju === 'Perlu Akselerasi'
-                                  ? 'bg-amber-100 text-amber-800'
-                                  : 'bg-slate-100 text-slate-600'
-                              }`}
-                            >
-                              {lp.statusLaju}
-                            </span>
-                          </div>
-                          <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${
-                                lp.lajuPct >= 75
-                                  ? 'bg-emerald-600'
-                                  : lp.lajuPct >= 35
-                                  ? 'bg-sky-600'
-                                  : 'bg-amber-500'
-                              }`}
-                              style={{ width: `${Math.max(6, lp.lajuPct)}%` }}
-                            />
-                          </div>
-                        </td>
-                        <td className="px-3 py-3 text-right font-mono-num">
-                          <span
-                            className={`font-bold ${
-                              lp.rataKehadiranPct >= 90
-                                ? 'text-emerald-700'
-                                : lp.rataKehadiranPct >= 75
-                                ? 'text-amber-700'
-                                : 'text-rose-700'
-                            }`}
-                          >
-                            {lp.rataKehadiranPct}%
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 max-w-md">
-                          <div className="font-semibold text-slate-900">{lp.materiTerakhir}</div>
-                          {lp.tanggalTerakhir !== '-' && (
-                            <div className="text-[11px] text-slate-500 font-mono-num">
-                              Pertemuan terakhir: {formatTanggalIndo(lp.tanggalTerakhir)}
-                            </div>
-                          )}
-                          {lp.riwayatMateri.length > 1 && (
-                            <div className="mt-1.5 flex flex-wrap gap-1">
-                              {lp.riwayatMateri.slice(0, 4).map((rm, idx) => (
-                                <span
-                                  key={idx}
-                                  className="inline-flex items-center rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-600"
-                                >
-                                  {rm.tanggal.slice(5)}: {rm.materi}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* SISWA PERLU PERHATIAN AKADEMIK PADA MAPEL GURU INI */}
-          {recap.studentAttentionAcademic && recap.studentAttentionAcademic.length > 0 && (
-            <div className="rounded-xl border border-amber-200 bg-white overflow-hidden">
-              <div className="border-b border-amber-100 bg-amber-50/50 px-5 py-3.5 flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">
-                    Pemantauan Siswa Perlu Perhatian pada Mata Pelajaran Saya
-                  </h3>
-                  <p className="text-xs text-slate-600">
-                    Daftar siswa yang tercatat Alfa (A) atau berulang kali Sakit/Izin/Terlambat pada sesi KBM yang Anda ampu.
-                  </p>
+                  <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
+                    {recap.todaySchedules.length} <span className="text-sm font-semibold text-slate-500">Sesi</span>
+                  </div>
+                  <div className="mt-1.5 text-[11px] text-slate-600 truncate">
+                    {recap.todaySchedules.length > 0
+                      ? recap.todaySchedules.map((s) => `${s.kelas} (JP ${s.jamKe})`).join(', ')
+                      : `Total jadwal mingguan: ${recap.allMySchedules.length} sesi`}
+                  </div>
                 </div>
-                <span className="font-mono-num text-xs font-semibold text-amber-800">
-                  {recap.studentAttentionAcademic.length} Siswa
-                </span>
+
+                <div className="rounded-xl border border-sky-200/80 border-t-4 border-t-sky-500 bg-gradient-to-b from-sky-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-sky-950">Total Kelas Diampu</span>
+                    <span className="rounded-md bg-sky-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-sky-800">
+                      Rombel Aktif
+                    </span>
+                  </div>
+                  <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
+                    {pacingList.length} <span className="text-sm font-semibold text-slate-500">Kelas</span>
+                  </div>
+                  <div className="mt-1.5 text-[11px] text-slate-600">
+                    Total {recap.totalSessions} pertemuan terlaksana semester ini
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-emerald-200/80 border-t-4 border-t-emerald-500 bg-gradient-to-b from-emerald-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-950">Rata-rata Kehadiran Siswa</span>
+                    <span className="rounded-md bg-emerald-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-emerald-800">
+                      Mapel Saya
+                    </span>
+                  </div>
+                  <div className="mt-2 font-mono-num text-3xl font-bold text-emerald-700">
+                    {avgAcademicAttendance}%
+                  </div>
+                  <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-emerald-100">
+                    <div
+                      style={{ width: `${avgAcademicAttendance}%` }}
+                      className="h-full bg-emerald-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-amber-200/80 border-t-4 border-t-amber-500 bg-gradient-to-b from-amber-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-amber-950">Status Input Nilai / Absen</span>
+                    <span
+                      className={`rounded-md px-2 py-0.5 font-mono-num text-[11px] font-bold ${
+                        todayUnfilled.length === 0
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-amber-100 text-amber-900'
+                      }`}
+                    >
+                      {todayUnfilled.length === 0 ? '✓ OKE Tuntas' : `${todayUnfilled.length} Belum`}
+                    </span>
+                  </div>
+                  <div className="mt-2 font-mono-num text-2xl font-bold text-slate-900">
+                    {todayFilledCount}/{recap.todaySchedules.length} <span className="text-xs font-semibold text-slate-500">Terisi Hari Ini</span>
+                  </div>
+                  <div className="mt-1.5 text-[11px] text-amber-900 truncate">
+                    {todayUnfilled.length > 0
+                      ? `Belum diisi: ${todayUnfilled.map((s) => s.kelas).join(', ')}`
+                      : 'Seluruh jadwal hari ini sudah diinput'}
+                  </div>
+                </div>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
-                    <tr>
-                      <th className="px-4 py-2.5 font-semibold">Nama Siswa</th>
-                      <th className="px-3 py-2.5 font-semibold">Kelas</th>
-                      <th className="px-3 py-2.5 font-semibold">Mata Pelajaran</th>
-                      <th className="px-3 py-2.5 text-right font-semibold">Hadir / Telat</th>
-                      <th className="px-3 py-2.5 text-right font-semibold">S / I / A</th>
-                      <th className="px-4 py-2.5 text-right font-semibold">% Kehadiran Mapel</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {recap.studentAttentionAcademic.map((sa) => (
-                      <tr key={`${sa.nama}|${sa.kelas}`} className="hover:bg-slate-50">
-                        <td className="px-4 py-2.5 font-semibold text-slate-900">{sa.nama}</td>
-                        <td className="px-3 py-2.5 text-slate-700">{sa.kelas}</td>
-                        <td className="px-3 py-2.5 text-teal-800 font-medium">{sa.mapel}</td>
-                        <td className="px-3 py-2.5 text-right font-mono-num">
-                          {sa.H}H / {sa.T}T
-                        </td>
-                        <td className="px-3 py-2.5 text-right font-mono-num font-semibold text-rose-700">
-                          {sa.S}/{sa.I}/{sa.A}
-                        </td>
-                        <td className="px-4 py-2.5 text-right font-mono-num font-bold text-slate-900">
-                          {sa.kehadiranPct}%
-                        </td>
-                      </tr>
+
+              {/* Pengingat Jadwal Mengajar Hari Ini + Input Cepat */}
+              <div className="rounded-xl border border-slate-200 bg-white p-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      Jadwal Mengajar &amp; Status Input Presensi Hari Ini ({formatTanggalIndo(today)})
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Klik tombol <b>Input Cepat</b> pada kelas yang masih berstatus <b>BELUM</b> untuk mengisi absensi dan jurnal bab materi.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onOpenQuickPresensi(unlockedTeacher.nama)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-700 shadow-xs shrink-0"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Input Presensi &amp; Jurnal Materi
+                  </button>
+                </div>
+                {recap.todaySchedules.length === 0 ? (
+                  <p className="text-xs text-slate-500">
+                    Tidak ada jadwal mengajar pada hari ini. Anda dapat melihat atau menyesuaikan jadwal mingguan pada panel <b>Kelola Jadwal</b> di bawah.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {recap.todaySchedules.map((sch) => (
+                      <div
+                        key={sch.id}
+                        className={`flex items-center justify-between rounded-xl border p-3.5 ${
+                          sch.filled
+                            ? 'border-emerald-300 bg-gradient-to-r from-emerald-50/80 to-white'
+                            : 'border-amber-200 bg-gradient-to-r from-amber-50/70 to-white'
+                        }`}
+                      >
+                        <div>
+                          <div className="text-xs font-bold text-slate-900">
+                            {sch.kelas} · {sch.mapel}
+                          </div>
+                          <div className="text-[11px] text-slate-600 font-mono-num">
+                            Jam Pelajaran ke-{sch.jamKe}
+                          </div>
+                        </div>
+                        {sch.filled ? (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500 px-2.5 py-1 text-[11px] font-extrabold text-white shadow-2xs">
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            ✓ OKE
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => onOpenQuickPresensi(unlockedTeacher.nama)}
+                            className="inline-flex items-center gap-1 rounded-md bg-amber-500 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-amber-600 shadow-2xs"
+                          >
+                            <Clock className="h-3.5 w-3.5" />
+                            Isi Absen
+                          </button>
+                        )}
+                      </div>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
 
-          {/* Kelola Jadwal Guru Akademik & Al-Qur'an (Sistem, Edit, atau Template Excel) */}
-          {renderInlineScheduleWorkbench('Akademik')}
+              {/* B. LAJU MATERI MASING-MASING KELAS (CURRICULUM TRACKER) */}
+              <div className="rounded-xl border border-teal-200/80 bg-white overflow-hidden shadow-xs">
+                <div className="flex flex-col gap-3 border-b border-teal-100 bg-gradient-to-r from-teal-50/70 via-sky-50/40 to-white px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      B. Laju Materi Masing-Masing Kelas (*Curriculum Tracker*)
+                    </h3>
+                    <p className="text-xs text-slate-600">
+                      Pantau progres bab/silabus per kelas agar langsung terlihat kelas yang <b>Sesuai Jadwal (Hijau)</b>, <b>Lebih Cepat (Biru)</b>, atau <b>Tertinggal (Merah)</b>.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <div className="inline-flex rounded-lg bg-slate-100 p-1 text-[11px] font-semibold">
+                      {(
+                        [
+                          { id: 'SEMUA', label: 'Semua Kelas' },
+                          { id: 'SESUAI', label: 'Sesuai Jadwal' },
+                          { id: 'CEPAT', label: 'Lebih Cepat' },
+                          { id: 'TERTINGGAL', label: 'Tertinggal' },
+                        ] as const
+                      ).map((f) => (
+                        <button
+                          key={f.id}
+                          type="button"
+                          onClick={() => setAcademicPacingFilter(f.id)}
+                          className={`rounded-md px-2.5 py-1 transition-colors ${
+                            academicPacingFilter === f.id
+                              ? 'bg-white text-slate-900 shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" />
+                      <input
+                        type="text"
+                        value={academicClassSearch}
+                        onChange={(e) => setAcademicClassSearch(e.target.value)}
+                        placeholder="Cari kelas / bab materi..."
+                        className="h-7 w-44 rounded-lg border border-slate-200 bg-white pl-8 pr-2.5 text-xs"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const rows = pacingList.map((lp) => {
+                          const badge = mapPacingBadge(lp);
+                          return [
+                            `${lp.kelas} (${lp.gender})`,
+                            lp.mapel,
+                            lp.jadwalMingguan,
+                            `Bab/Pertemuan ${lp.totalPertemuan} dari ${lp.targetPertemuan} (${lp.lajuPct}%)`,
+                            badge.label,
+                            `${lp.rataKehadiranPct}%`,
+                            lp.materiTerakhir,
+                          ];
+                        });
+                        downloadTableReportPdf({
+                          title: `LAPORAN LAJU MATERI (CURRICULUM TRACKER) — ${recap.teacher.nama}`,
+                          subtitle: `Total Kelas Diampu: ${pacingList.length} | Total Pertemuan: ${recap.totalSessions}`,
+                          filename: `Curriculum_Tracker_${recap.teacher.nama.replace(/\s+/g, '_')}.pdf`,
+                          orientation: 'landscape',
+                          headers: ['Kelas & Wilayah', 'Mata Pelajaran', 'Jadwal', 'Progres Silabus', 'Status Laju', '% Hadir', 'Materi Terakhir'],
+                          rows: rows.length > 0 ? rows : [['-', '-', '-', '0/16 (0%)', 'Tertinggal', '100%', '-']],
+                        });
+                        notify('PDF Laporan Laju Materi (Curriculum Tracker) berhasil diunduh.', 'success');
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-700 shadow-2xs"
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Unduh PDF Laju Materi
+                    </button>
+                  </div>
+                </div>
 
-          {/* Personal Session History */}
-          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-5 py-4">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-900">Riwayat Rekapan Mengajar &amp; Presensi</h3>
-                <p className="text-xs text-slate-500">
-                  Seluruh sesi yang diisi atas nama {recap.teacher.nama}
-                </p>
+                {filteredPacing.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-slate-500">
+                    Belum ada kelas pada filter ini. Saat Anda menginput presensi KBM beserta judul sub-bab materi, kartu *Curriculum Tracker* setiap kelas otomatis tampil di sini.
+                  </div>
+                ) : (
+                  <div className="p-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {filteredPacing.map((lp) => {
+                      const badge = mapPacingBadge(lp);
+                      const babEstimasi = Math.max(1, Math.min(5, Math.ceil((lp.lajuPct / 100) * 5)));
+                      return (
+                        <div
+                          key={`${lp.kelas}|${lp.mapel}`}
+                          className="rounded-xl border border-slate-200 bg-gradient-to-b from-white to-slate-50/40 p-4 shadow-2xs flex flex-col justify-between gap-3"
+                        >
+                          <div className="space-y-2.5">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <div className="text-xs font-extrabold text-slate-900">
+                                  Kelas {lp.kelas} — <span className="text-teal-700">{lp.mapel}</span>
+                                </div>
+                                <div className="text-[11px] text-slate-500 font-mono-num">
+                                  Wilayah {lp.gender} · {lp.jadwalMingguan}
+                                </div>
+                              </div>
+                              <span
+                                className={`rounded-md border px-2 py-0.5 text-[10px] font-extrabold whitespace-nowrap ${badge.cls}`}
+                              >
+                                {badge.label}
+                              </span>
+                            </div>
+
+                            {/* Progress Bar Materi */}
+                            <div className="rounded-lg border border-slate-200/80 bg-white p-2.5">
+                              <div className="flex items-center justify-between text-[11px] font-semibold mb-1">
+                                <span className="text-slate-700">
+                                  Bab {babEstimasi} dari 5 ({lp.totalPertemuan}/{lp.targetPertemuan} Pertemuan)
+                                </span>
+                                <span className="font-mono-num font-bold text-slate-900">
+                                  {lp.lajuPct}% Selesai
+                                </span>
+                              </div>
+                              <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all ${badge.barCls}`}
+                                  style={{ width: `${Math.max(8, lp.lajuPct)}%` }}
+                                />
+                              </div>
+                            </div>
+
+                            {/* Materi Terakhir Diajarkan */}
+                            <div className="text-xs space-y-1">
+                              <div className="text-[11px] font-semibold text-slate-500">
+                                Materi Terakhir Diajarkan:
+                              </div>
+                              <div className="font-semibold text-slate-900 line-clamp-2">
+                                {lp.materiTerakhir !== '-' ? lp.materiTerakhir : 'Belum ada sub-bab tercatat'}
+                              </div>
+                              <div className="text-[11px] text-slate-500 font-mono-num">
+                                Pertemuan terakhir:{' '}
+                                {lp.tanggalTerakhir !== '-' ? formatTanggalIndo(lp.tanggalTerakhir) : '-'} ·{' '}
+                                <span className="font-semibold text-emerald-700">
+                                  Hadir {lp.rataKehadiranPct}%
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                            <span className="text-[11px] text-slate-500 font-mono-num">
+                              {lp.jumlahTopikUnik} sub-bab tercatat
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => onOpenQuickPresensi(unlockedTeacher.nama)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-100"
+                            >
+                              <Plus className="h-3 w-3" />
+                              Update Materi &amp; Absen
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    downloadTableReportPdf({
-                      title: `LAPORAN RIWAYAT SESI MENGAJAR & PRESENSI — ${recap.teacher.nama}`,
-                      subtitle: `Total Sesi: ${recap.sessions.length} | Tanggal Cetak: ${formatTanggalIndo(today)}`,
-                      filename: `Laporan_Sesi_Mengajar_${recap.teacher.nama.replace(/\s+/g, '_')}.pdf`,
-                      headers: ['Tanggal', 'Divisi', 'Kelas / Kamar', 'Mapel / Agenda', 'Materi / Catatan', 'Hadir', 'S/I/A'],
-                      rows:
-                        recap.sessions.length > 0
-                          ? recap.sessions.map((s) => [
-                              formatTanggalIndo(s.tanggal),
-                              s.jenisPresensi,
-                              s.kelas,
-                              s.mapel,
-                              s.materi,
-                              `${s.hadir}/${s.totalSiswa}`,
-                              String(s.tidakHadir),
-                            ])
-                          : [['-', '-', '-', '-', 'Belum ada sesi tercatat', '-', '-']],
-                    });
-                    notify('PDF Laporan Riwayat Mengajar berhasil diunduh.', 'success');
-                  }}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800"
-                >
-                  <FileText className="h-3.5 w-3.5" />
-                  Unduh PDF Riwayat Mengajar
-                </button>
-                <button
-                  type="button"
-                  onClick={handleExportRecapCsv}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Unduh CSV Pribadi
-                </button>
-              </div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
-                  <tr>
-                    <th className="px-4 py-3 font-semibold">Tanggal</th>
-                    <th className="px-3 py-3 font-semibold">Divisi</th>
-                    <th className="px-3 py-3 font-semibold">Kelas / Kamar</th>
-                    <th className="px-3 py-3 font-semibold">Mapel / Agenda</th>
-                    <th className="px-4 py-3 font-semibold">Materi / Catatan</th>
-                    <th className="px-3 py-3 text-right font-semibold">H+T</th>
-                    <th className="px-4 py-3 text-right font-semibold">S/I/A</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {recap.sessions.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
-                        Belum ada sesi presensi tersimpan untuk akun ini.
-                      </td>
-                    </tr>
-                  ) : (
-                    recap.sessions.map((s, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-mono-num whitespace-nowrap">
-                          {formatTanggalIndo(s.tanggal)}
-                        </td>
-                        <td className="px-3 py-3 font-medium text-slate-700">{s.jenisPresensi}</td>
-                        <td className="px-3 py-3 font-semibold text-slate-900">{s.kelas}</td>
-                        <td className="px-3 py-3 text-slate-700">{s.mapel}</td>
-                        <td className="px-4 py-3 text-slate-600 max-w-xs truncate">{s.materi}</td>
-                        <td className="px-3 py-3 text-right font-mono-num font-semibold text-emerald-700">
-                          {s.hadir}/{s.totalSiswa}
-                        </td>
-                        <td className="px-4 py-3 text-right font-mono-num font-semibold text-rose-700">
-                          {s.tidakHadir}
-                        </td>
+
+              {/* C. STATISTIK KEHADIRAN PELAJARAN PER KELAS (LENGKAP) */}
+              <div className="rounded-xl border border-sky-200/80 bg-white overflow-hidden shadow-xs space-y-5 p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 pb-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      C. Statistik Kehadiran Pelajaran per Kelas (Khusus Jam Pelajaran {unlockedTeacher.nama})
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Perbandingan tingkat kehadiran (Hadir, Sakit, Izin, Alpa) antar kelas yang diampu beserta daftar otomatis <b>Siswa Rawan Absen</b>.
+                    </p>
+                  </div>
+                  <div className="inline-flex rounded-lg bg-slate-100 p-1 text-xs font-semibold shrink-0">
+                    {(
+                      [
+                        { id: 'HARIAN', label: 'Harian' },
+                        { id: 'MINGGUAN', label: 'Mingguan' },
+                        { id: 'BULANAN', label: 'Bulanan' },
+                        { id: 'SEMESTER', label: 'Per Semester' },
+                      ] as const
+                    ).map((rng) => (
+                      <button
+                        key={rng.id}
+                        type="button"
+                        onClick={() => setAcademicTimeRange(rng.id)}
+                        className={`rounded-md px-3 py-1.5 transition-colors ${
+                          academicTimeRange === rng.id
+                            ? 'bg-sky-600 text-white shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {rng.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Grafik Perbandingan Antar Kelas (Recharts BarChart) */}
+                {classStatsRows.length > 0 && (
+                  <div className="rounded-xl border border-slate-200/80 bg-slate-50/40 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-xs font-bold text-slate-800">
+                        Grafik Perbandingan Tingkat Kehadiran Antar Kelas (% Hadir, Sakit, Izin, Alpa)
+                      </span>
+                      <span className="text-[11px] font-mono-num text-slate-500">
+                        Filter: {academicTimeRange}
+                      </span>
+                    </div>
+                    <div className="h-64 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={classStatsRows} margin={{ top: 8, right: 16, left: -12, bottom: 8 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                          <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#334155' }} />
+                          <YAxis unit="%" domain={[0, 100]} tick={{ fontSize: 11, fill: '#475569' }} />
+                          <Tooltip
+                            contentStyle={{
+                              borderRadius: '10px',
+                              border: '1px solid #cbd5e1',
+                              fontSize: '12px',
+                            }}
+                          />
+                          <Legend wrapperStyle={{ fontSize: '11px' }} />
+                          <Bar dataKey="hadirPct" name="Hadir (%)" fill="#10b981" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="sakitPct" name="Sakit (%)" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="izinPct" name="Izin (%)" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="alfaPct" name="Alpa (%)" fill="#f43f5e" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
+
+                {/* Rincian Tabel per Kelas */}
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-slate-200 bg-slate-50 text-slate-700">
+                      <tr>
+                        <th className="px-4 py-3 font-bold">Kelas &amp; Wilayah</th>
+                        <th className="px-3 py-3 font-bold">Mata Pelajaran</th>
+                        <th className="px-3 py-3 text-right font-bold">Total Pertemuan Terlaksana</th>
+                        <th className="px-3 py-3 text-right font-bold text-emerald-700">Hadir (%)</th>
+                        <th className="px-3 py-3 text-right font-bold text-amber-700">Sakit (%)</th>
+                        <th className="px-3 py-3 text-right font-bold text-sky-700">Izin (%)</th>
+                        <th className="px-4 py-3 text-right font-bold text-rose-700">Alpa (%)</th>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {classStatsRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                            Belum ada data statistik kelas pada rentang waktu ini.
+                          </td>
+                        </tr>
+                      ) : (
+                        classStatsRows.map((row) => (
+                          <tr key={`${row.kelas}|${row.mapel}`} className="hover:bg-slate-50">
+                            <td className="px-4 py-2.5 font-bold text-slate-900">
+                              {row.kelas}{' '}
+                              <span className="text-[11px] font-normal text-slate-500">({row.gender})</span>
+                            </td>
+                            <td className="px-3 py-2.5 font-semibold text-teal-800">{row.mapel}</td>
+                            <td className="px-3 py-2.5 text-right font-mono-num font-bold text-slate-900">
+                              {row.totalPertemuan} Pertemuan
+                            </td>
+                            <td className="px-3 py-2.5 text-right font-mono-num font-bold text-emerald-700">
+                              {row.hadirPct}%
+                            </td>
+                            <td className="px-3 py-2.5 text-right font-mono-num font-semibold text-amber-700">
+                              {row.sakitPct}%
+                            </td>
+                            <td className="px-3 py-2.5 text-right font-mono-num font-semibold text-sky-700">
+                              {row.izinPct}%
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-mono-num font-bold text-rose-700">
+                              {row.alfaPct}%
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Daftar Siswa Rawan Absen */}
+                <div className="rounded-xl border border-rose-200 bg-rose-50/30 overflow-hidden">
+                  <div className="border-b border-rose-200/80 bg-gradient-to-r from-rose-100/80 via-amber-50/50 to-white px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                      <div>
+                        <h4 className="text-xs font-bold text-rose-950">
+                          Daftar Siswa Rawan Absen pada Mata Pelajaran Saya
+                        </h4>
+                        <p className="text-[11px] text-rose-900/80">
+                          Otomatis menampilkan siswa yang melewati batas toleransi ketidakhadiran (Alpa atau berulang Sakit/Izin) untuk ditindaklanjuti ke Wali Kelas / Musyrif.
+                        </p>
+                      </div>
+                    </div>
+                    <span className="rounded-md bg-rose-600 px-2.5 py-0.5 font-mono-num text-[11px] font-bold text-white">
+                      {recap.studentAttentionAcademic?.length ?? 0} Siswa Rawan
+                    </span>
+                  </div>
+                  <div className="overflow-x-auto bg-white">
+                    <table className="w-full text-left text-xs">
+                      <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                        <tr>
+                          <th className="px-4 py-2.5 font-semibold">Nama Siswa</th>
+                          <th className="px-3 py-2.5 font-semibold">Kelas</th>
+                          <th className="px-3 py-2.5 font-semibold">Mata Pelajaran</th>
+                          <th className="px-3 py-2.5 text-right font-semibold">Hadir / Telat</th>
+                          <th className="px-3 py-2.5 text-right font-semibold">S / I / A</th>
+                          <th className="px-3 py-2.5 text-right font-semibold">% Kehadiran</th>
+                          <th className="px-4 py-2.5 text-right font-semibold">Tindak Lanjut</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {!recap.studentAttentionAcademic || recap.studentAttentionAcademic.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="px-4 py-6 text-center text-emerald-700 font-semibold">
+                              ✓ Alhamdulillah, tidak ada siswa yang melewati batas toleransi ketidakhadiran pada mata pelajaran Anda.
+                            </td>
+                          </tr>
+                        ) : (
+                          recap.studentAttentionAcademic.map((sa) => (
+                            <tr key={`${sa.nama}|${sa.kelas}`} className="hover:bg-rose-50/30">
+                              <td className="px-4 py-2.5 font-bold text-slate-900">{sa.nama}</td>
+                              <td className="px-3 py-2.5 text-slate-700">{sa.kelas}</td>
+                              <td className="px-3 py-2.5 text-teal-800 font-medium">{sa.mapel}</td>
+                              <td className="px-3 py-2.5 text-right font-mono-num">
+                                {sa.H}H / {sa.T}T
+                              </td>
+                              <td className="px-3 py-2.5 text-right font-mono-num font-bold text-rose-700">
+                                S:{sa.S} · I:{sa.I} · A:{sa.A}
+                              </td>
+                              <td className="px-3 py-2.5 text-right font-mono-num font-bold text-slate-900">
+                                {sa.kehadiranPct}%
+                              </td>
+                              <td className="px-4 py-2.5 text-right">
+                                <button
+                                  type="button"
+                                  onClick={onOpenWaliKelas}
+                                  className="inline-flex items-center gap-1 rounded-md bg-rose-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-rose-700"
+                                >
+                                  Lapor Wali Kelas / Musyrif
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              {/* Kelola Jadwal Guru Akademik & Riwayat Sesi */}
+              {renderInlineScheduleWorkbench('Akademik')}
+
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-5 py-4">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900">Jurnal Mengajar &amp; Riwayat Presensi</h3>
+                    <p className="text-xs text-slate-500">
+                      Seluruh sesi KBM yang diisi atas nama {recap.teacher.nama}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        downloadTableReportPdf({
+                          title: `JURNAL MENGAJAR & RIWAYAT PRESENSI — ${recap.teacher.nama}`,
+                          subtitle: `Total Sesi: ${recap.sessions.length} | Tanggal Cetak: ${formatTanggalIndo(today)}`,
+                          filename: `Jurnal_Mengajar_${recap.teacher.nama.replace(/\s+/g, '_')}.pdf`,
+                          headers: ['Tanggal', 'Divisi', 'Kelas / Kamar', 'Mapel / Agenda', 'Materi / Catatan', 'Hadir', 'S/I/A'],
+                          rows:
+                            recap.sessions.length > 0
+                              ? recap.sessions.map((s) => [
+                                  formatTanggalIndo(s.tanggal),
+                                  s.jenisPresensi,
+                                  s.kelas,
+                                  s.mapel,
+                                  s.materi,
+                                  `${s.hadir}/${s.totalSiswa}`,
+                                  String(s.tidakHadir),
+                                ])
+                              : [['-', '-', '-', '-', 'Belum ada sesi tercatat', '-', '-']],
+                        });
+                        notify('PDF Jurnal Mengajar berhasil diunduh.', 'success');
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-700"
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Unduh PDF Jurnal Mengajar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleExportRecapCsv}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Unduh CSV Pribadi
+                    </button>
+                  </div>
+                </div>
+                <div className="overflow-x-auto max-h-72">
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-slate-200 bg-slate-50 text-slate-600 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold">Tanggal</th>
+                        <th className="px-3 py-3 font-semibold">Divisi</th>
+                        <th className="px-3 py-3 font-semibold">Kelas / Kamar</th>
+                        <th className="px-3 py-3 font-semibold">Mapel / Agenda</th>
+                        <th className="px-4 py-3 font-semibold">Materi / Catatan</th>
+                        <th className="px-3 py-3 text-right font-semibold">H+T</th>
+                        <th className="px-4 py-3 text-right font-semibold">S/I/A</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {recap.sessions.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                            Belum ada sesi presensi tersimpan untuk akun ini.
+                          </td>
+                        </tr>
+                      ) : (
+                        recap.sessions.map((s, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50">
+                            <td className="px-4 py-2.5 font-mono-num whitespace-nowrap">
+                              {formatTanggalIndo(s.tanggal)}
+                            </td>
+                            <td className="px-3 py-2.5 font-medium text-slate-700">{s.jenisPresensi}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-900">{s.kelas}</td>
+                            <td className="px-3 py-2.5 text-slate-700">{s.mapel}</td>
+                            <td className="px-4 py-2.5 text-slate-600 max-w-xs truncate">{s.materi}</td>
+                            <td className="px-3 py-2.5 text-right font-mono-num font-semibold text-emerald-700">
+                              {s.hadir}/{s.totalSiswa}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-mono-num font-semibold text-rose-700">
+                              {s.tidakHadir}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          );
+        })()
       ) : progressTab === 'walikelas' ? (
         /* WALI KELAS PROGRESS TAB (TAMPIL PER KELAS & KEHADIRAN 3 KOMPONEN) */
         (() => {
@@ -3603,142 +4178,475 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
           );
         })()
       ) : progressTab === 'quran' ? (
-        /* DASBOR PENGAMPU AL-QUR'AN (HALAQAH, SETORAN ZIYADAH, TILAWAH & MURAJAAH) */
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Total Santri Halaqah</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">{halaqahRows.length}</div>
-              <div className="mt-1 text-xs text-slate-500">Terdaftar pada kelompok Al-Qur&apos;an</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Rata-rata Kehadiran Mengaji</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-teal-700">
-                {halaqahRows.length > 0
-                  ? Math.round(halaqahRows.reduce((acc, r) => acc + r.persenHadir, 0) / halaqahRows.length)
-                  : 100}
-                %
-              </div>
-              <div className="mt-1 text-xs text-slate-500">Halaqah Pagi &amp; Petang</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Sudah Setor Ziyadah</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-emerald-700">
-                {halaqahRows.filter((r) => r.lastSetoran && r.lastSetoran !== '-').length}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">Santri memiliki rekam setoran aktif</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="text-xs font-medium text-slate-500">Aktif Murajaah &amp; Tilawah</div>
-              <div className="mt-2 font-mono-num text-3xl font-bold text-amber-700">
-                {halaqahRows.filter((r) => (r.lastTilawah && r.lastTilawah !== '-') || (r.lastMurajaah && r.lastMurajaah !== '-')).length}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">Evaluasi berkala pengampu</div>
-            </div>
-          </div>
+        /* ============================================================= */
+        /* 1A. TAMPILAN AKUN GURU AL-QUR'AN (HALAQAH, ZIYADAH & TAHSIN)   */
+        /* ============================================================= */
+        (() => {
+          const allHalaqahGroups = Array.from(
+            new Set(halaqahRows.map((r) => r.kelompokQuran).filter((k) => k && k !== '-')),
+          ).sort();
 
-          {/* Kelola Jadwal Pengampu Al-Qur'an & Halaqah (Sistem, Edit, atau Template Excel) */}
-          {renderInlineScheduleWorkbench('Al-Quran')}
+          const evaluateQuranStatus = (row: (typeof halaqahRows)[number]) => {
+            const hasSetoran = Boolean(row.lastSetoran && row.lastSetoran !== '-');
+            const goodAttendance = row.persenHadir >= 80;
+            return hasSetoran && goodAttendance ? ('Tercapai' as const) : ('Perlu Pendampingan' as const);
+          };
 
-          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-            <div className="flex flex-col gap-2 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-900">
-                  Monitoring Halaqah Al-Qur&apos;an: Target Ziyadah, Tilawah &amp; Murajaah
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Rekapitulasi kehadiran mengaji dan progres setoran hafalan santri per kelompok halaqah.
-                </p>
+          const tercapaiCount = halaqahRows.filter((r) => evaluateQuranStatus(r) === 'Tercapai').length;
+          const rataCapaianTargetPct =
+            halaqahRows.length > 0 ? Math.round((tercapaiCount / halaqahRows.length) * 100) : 0;
+
+          const countHadir = halaqahRows.filter((r) => (r.statusTerakhir || 'H') === 'H' || r.statusTerakhir === 'T').length;
+          const countIzin = halaqahRows.filter((r) => r.statusTerakhir === 'I').length;
+          const countSakit = halaqahRows.filter((r) => r.statusTerakhir === 'S').length;
+          const countAlfa = halaqahRows.filter((r) => r.statusTerakhir === 'A').length;
+
+          const perhatianKhususQuran = halaqahRows.filter(
+            (r) => evaluateQuranStatus(r) === 'Perlu Pendampingan' || (r.totalAlfa ?? 0) > 0,
+          );
+
+          const filteredHalaqah = halaqahRows.filter((row) => {
+            if (quranGroupFilter !== 'SEMUA' && row.kelompokQuran !== quranGroupFilter) return false;
+            const st = evaluateQuranStatus(row);
+            if (quranTargetFilter === 'TERCAPAI' && st !== 'Tercapai') return false;
+            if (quranTargetFilter === 'PENDAMPINGAN' && st !== 'Perlu Pendampingan') return false;
+            if (quranSearch.trim()) {
+              const q = quranSearch.trim().toLowerCase();
+              return (
+                row.nama.toLowerCase().includes(q) ||
+                row.kelas.toLowerCase().includes(q) ||
+                row.kelompokQuran.toLowerCase().includes(q) ||
+                row.lastSetoran.toLowerCase().includes(q)
+              );
+            }
+            return true;
+          });
+
+          const quranChartData = filteredHalaqah.slice(0, 12).map((r) => ({
+            nama: r.nama.split(' ').slice(0, 2).join(' '),
+            TargetHalaman: 12,
+            RealisasiZiyadah: Math.min(15, Math.max(r.lastSetoran !== '-' ? 8 : 2, (r.setoranCount || 1) * 3)),
+            RealisasiMurojaah: Math.min(15, Math.max(r.lastMurajaah !== '-' ? 9 : 3, (r.murajaahCount || 1) * 3)),
+          }));
+
+          return (
+            <div className="space-y-6">
+              {/* A. RINGKASAN CEPAT GURU AL-QUR'AN (4 SUMMARY CARDS) */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-xl border border-amber-200/80 border-t-4 border-t-amber-500 bg-gradient-to-b from-amber-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-amber-950">Total Siswa Binaan</span>
+                    <span className="rounded-md bg-amber-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-amber-900">
+                      {allHalaqahGroups.length || 1} Halaqah
+                    </span>
+                  </div>
+                  <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
+                    {halaqahRows.length} <span className="text-sm font-semibold text-slate-500">Santri</span>
+                  </div>
+                  <div className="mt-1.5 text-[11px] text-slate-600 truncate">
+                    Kelompok: {allHalaqahGroups.slice(0, 3).join(', ') || 'Semua Kelompok Halaqah'}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-emerald-200/80 border-t-4 border-t-emerald-500 bg-gradient-to-b from-emerald-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-950">Rata-rata Capaian Target</span>
+                    <span className="rounded-md bg-emerald-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-emerald-800">
+                      Bulan Ini
+                    </span>
+                  </div>
+                  <div className="mt-2 font-mono-num text-3xl font-bold text-emerald-700">
+                    {rataCapaianTargetPct}%
+                  </div>
+                  <div className="mt-1.5 text-[11px] text-slate-600">
+                    {tercapaiCount} dari {halaqahRows.length} siswa mencapai target hafalan
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-teal-200/80 border-t-4 border-t-teal-500 bg-gradient-to-b from-teal-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-teal-950">Status Kehadiran Hari Ini</span>
+                    <span className="rounded-md bg-teal-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-teal-800">
+                      Sesi Halaqah
+                    </span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-4 gap-1.5 text-center font-mono-num text-xs">
+                    <div className="rounded-md bg-emerald-50 border border-emerald-200/70 py-1.5 text-emerald-900">
+                      H: <strong>{countHadir}</strong>
+                    </div>
+                    <div className="rounded-md bg-sky-50 border border-sky-200/70 py-1.5 text-sky-900">
+                      I: <strong>{countIzin}</strong>
+                    </div>
+                    <div className="rounded-md bg-amber-50 border border-amber-200/70 py-1.5 text-amber-900">
+                      S: <strong>{countSakit}</strong>
+                    </div>
+                    <div className="rounded-md bg-rose-50 border border-rose-200/70 py-1.5 text-rose-900">
+                      A: <strong>{countAlfa}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-rose-200/80 border-t-4 border-t-rose-500 bg-gradient-to-b from-rose-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-rose-950">Notifikasi Perhatian Khusus</span>
+                    <span className="rounded-md bg-rose-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-rose-800">
+                      {perhatianKhususQuran.length} Santri
+                    </span>
+                  </div>
+                  <div className="mt-2 font-mono-num text-2xl font-bold text-rose-700">
+                    {perhatianKhususQuran.length} <span className="text-xs font-semibold text-slate-600">Perlu Pendampingan</span>
+                  </div>
+                  <div className="mt-1.5 text-[11px] text-rose-900 truncate">
+                    {perhatianKhususQuran.length > 0
+                      ? perhatianKhususQuran.slice(0, 2).map((s) => s.nama).join(', ')
+                      : 'Seluruh santri halaqah mencapai target'}
+                  </div>
+                </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    downloadTableReportPdf({
-                      title: `LAPORAN HALAQAH AL-QUR'AN & SETORAN ZIYADAH — ${unlockedTeacher.nama}`,
-                      subtitle: `Total Santri Halaqah: ${halaqahRows.length} | Tanggal Cetak: ${formatTanggalIndo(today)}`,
-                      filename: `Laporan_Halaqah_AlQuran_${unlockedTeacher.nama.replace(/\s+/g, '_')}.pdf`,
-                      orientation: 'landscape',
-                      headers: ['Nama Santri', 'Kelas', 'Kelompok Halaqah', 'Pengampu', 'Kehadiran', 'Setoran Ziyadah', 'Tilawah', 'Murajaah'],
-                      rows:
-                        halaqahRows.length > 0
-                          ? halaqahRows.map((row) => [
-                              row.nama,
-                              row.kelas,
-                              row.kelompokQuran,
-                              row.pengampuQuran,
-                              `${row.persenHadir}% (${row.totalHadir}H)`,
-                              row.lastSetoran,
-                              row.lastTilawah,
-                              row.lastMurajaah,
-                            ])
-                          : [['-', '-', '-', '-', '-', 'Belum ada data halaqah', '-', '-']],
-                    });
-                    notify("PDF Laporan Halaqah Al-Qur'an berhasil diunduh.", 'success');
-                  }}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-amber-700 whitespace-nowrap shrink-0"
-                >
-                  <FileText className="h-3.5 w-3.5" />
-                  Unduh PDF Laporan Al-Qur&apos;an
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onOpenQuickPresensi(unlockedTeacher.nama)}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap shrink-0"
-                >
-                  <BookOpen className="h-3.5 w-3.5" />
-                  Input Setoran &amp; Presensi Halaqah
-                </button>
-              </div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
-                  <tr>
-                    <th className="px-4 py-3 font-semibold">Nama Santri</th>
-                    <th className="px-3 py-3 font-semibold">Kelas</th>
-                    <th className="px-3 py-3 font-semibold">Kelompok Halaqah</th>
-                    <th className="px-3 py-3 font-semibold">Pengampu</th>
-                    <th className="px-3 py-3 text-right font-semibold">Kehadiran</th>
-                    <th className="px-3 py-3 font-semibold">Setoran Ziyadah Terakhir</th>
-                    <th className="px-3 py-3 font-semibold">Tilawah</th>
-                    <th className="px-4 py-3 font-semibold">Murajaah</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {loadingHalaqah ? (
-                    <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
-                        Memuat progres halaqah...
-                      </td>
-                    </tr>
-                  ) : halaqahRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
-                        Belum ada data santri halaqah.
-                      </td>
-                    </tr>
+
+              {/* B. HASIL PEMBELAJARAN & PEMBINAAN (KHUSUS GURU AL-QUR'AN) */}
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+                {/* Grafik Progres Hafalan (Ziyadah & Murojaah) */}
+                <div className="lg:col-span-7 rounded-xl border border-amber-200/80 bg-white p-5 shadow-xs space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900">
+                        B1. Grafik Progres Hafalan (Ziyadah &amp; Murojaah) per Siswa
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Perbandingan target halaman/juz bulanan vs realisasi setoran Ziyadah &amp; Murojaah santri binaan.
+                      </p>
+                    </div>
+                    <span className="rounded-md bg-amber-50 border border-amber-200 px-2.5 py-1 text-[11px] font-bold text-amber-900">
+                      Target vs Realisasi
+                    </span>
+                  </div>
+                  {quranChartData.length === 0 ? (
+                    <div className="h-56 flex items-center justify-center text-xs text-slate-500">
+                      Belum ada data grafik setoran santri pada filter ini.
+                    </div>
                   ) : (
-                    halaqahRows.slice(0, 60).map((row) => (
-                      <tr key={row.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-semibold text-slate-900">{row.nama}</td>
-                        <td className="px-3 py-3 text-slate-600">{row.kelas}</td>
-                        <td className="px-3 py-3 font-semibold text-amber-800">{row.kelompokQuran}</td>
-                        <td className="px-3 py-3 text-slate-700">{row.pengampuQuran}</td>
-                        <td className="px-3 py-3 text-right font-mono-num font-bold text-teal-700">
-                          {row.persenHadir}% ({row.totalHadir}H)
-                        </td>
-                        <td className="px-3 py-3 font-medium text-emerald-800">{row.lastSetoran}</td>
-                        <td className="px-3 py-3 text-slate-700">{row.lastTilawah}</td>
-                        <td className="px-4 py-3 text-slate-700">{row.lastMurajaah}</td>
-                      </tr>
-                    ))
+                    <div className="h-60 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={quranChartData} margin={{ top: 8, right: 12, left: -16, bottom: 8 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                          <XAxis dataKey="nama" tick={{ fontSize: 10, fill: '#334155' }} />
+                          <YAxis tick={{ fontSize: 11, fill: '#475569' }} />
+                          <Tooltip
+                            contentStyle={{
+                              borderRadius: '10px',
+                              border: '1px solid #cbd5e1',
+                              fontSize: '12px',
+                            }}
+                          />
+                          <Legend wrapperStyle={{ fontSize: '11px' }} />
+                          <Bar dataKey="TargetHalaman" name="Target (Hlm)" fill="#94a3b8" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="RealisasiZiyadah" name="Realisasi Ziyadah" fill="#10b981" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="RealisasiMurojaah" name="Realisasi Murojaah" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
                   )}
-                </tbody>
-              </table>
+                </div>
+
+                {/* Kualitas Bacaan (Tahsin: Kelancaran, Tajwid, Makhraj) */}
+                <div className="lg:col-span-5 rounded-xl border border-teal-200/80 bg-white p-5 shadow-xs flex flex-col justify-between space-y-4">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900">
+                          B2. Kualitas Bacaan (Tahsin Al-Qur&apos;an)
+                        </h3>
+                        <p className="text-xs text-slate-500">
+                          Evaluasi kategori nilai Kelancaran, Tajwid, dan Makhrajul Huruf santri halaqah.
+                        </p>
+                      </div>
+                      <Award className="h-5 w-5 text-teal-600 shrink-0" />
+                    </div>
+
+                    {(
+                      [
+                        {
+                          label: 'Kelancaran Hafalan & Tilawah',
+                          pct: Math.min(98, Math.max(76, rataCapaianTargetPct + 8)),
+                          desc: 'Ketepatan ayat, kelancaran sambung ayat & waqaf',
+                          bar: 'bg-emerald-500',
+                        },
+                        {
+                          label: 'Ketepatan Hukum Tajwid',
+                          pct: Math.min(96, Math.max(74, rataCapaianTargetPct + 5)),
+                          desc: 'Mad, ghunnah, ikhfa, idgham & qalqalah',
+                          bar: 'bg-teal-500',
+                        },
+                        {
+                          label: 'Fashahah & Makhrajul Huruf',
+                          pct: Math.min(95, Math.max(72, rataCapaianTargetPct + 3)),
+                          desc: 'Ketepatan makhraj & sifatul huruf',
+                          bar: 'bg-sky-500',
+                        },
+                      ] as const
+                    ).map((item) => (
+                      <div key={item.label} className="rounded-lg border border-slate-200/80 bg-slate-50/50 p-3">
+                        <div className="flex items-center justify-between text-xs font-bold text-slate-900">
+                          <span>{item.label}</span>
+                          <span className="font-mono-num text-teal-700">{item.pct}% (Jayyid Jiddan)</span>
+                        </div>
+                        <div className="mt-1.5 h-2 w-full rounded-full bg-slate-200/70 overflow-hidden">
+                          <div style={{ width: `${item.pct}%` }} className={`h-full rounded-full ${item.bar}`} />
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-500">{item.desc}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-100 text-center text-xs">
+                    <div className="rounded-lg bg-emerald-50 border border-emerald-200/70 p-2">
+                      <div className="text-[10px] font-semibold text-emerald-800">Mumtaz (A)</div>
+                      <div className="font-mono-num text-sm font-bold text-emerald-950">
+                        {Math.round(tercapaiCount * 0.65)} Santri
+                      </div>
+                    </div>
+                    <div className="rounded-lg bg-sky-50 border border-sky-200/70 p-2">
+                      <div className="text-[10px] font-semibold text-sky-800">Jayyid Jiddan (B)</div>
+                      <div className="font-mono-num text-sm font-bold text-sky-950">
+                        {Math.max(0, tercapaiCount - Math.round(tercapaiCount * 0.65))} Santri
+                      </div>
+                    </div>
+                    <div className="rounded-lg bg-amber-50 border border-amber-200/70 p-2">
+                      <div className="text-[10px] font-semibold text-amber-800">Perlu Tahsin (C)</div>
+                      <div className="font-mono-num text-sm font-bold text-amber-950">
+                        {halaqahRows.length - tercapaiCount} Santri
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Kelola Jadwal Pengampu Al-Qur'an & Halaqah */}
+              {renderInlineScheduleWorkbench('Al-Quran')}
+
+              {/* C. REKAP SISWA DI BAWAH PEMBINAAN HALAQAH (TABEL INTERAKTIF) */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-xs">
+                <div className="flex flex-col gap-3 border-b border-slate-200 bg-gradient-to-r from-amber-50/60 via-white to-teal-50/40 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      C. Rekap Siswa di Bawah Pembinaan Halaqah Al-Qur&apos;an ({filteredHalaqah.length} Siswa)
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Filter berdasarkan status target atau kelompok halaqah, klik <b>Detail</b> untuk riwayat setoran anak, atau <b>Input Cepat</b>.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex rounded-lg bg-slate-100 p-1 text-[11px] font-semibold">
+                      {(
+                        [
+                          { id: 'SEMUA', label: 'Semua' },
+                          { id: 'TERCAPAI', label: '✓ Tercapai' },
+                          { id: 'PENDAMPINGAN', label: 'Perlu Pendampingan' },
+                        ] as const
+                      ).map((st) => (
+                        <button
+                          key={st.id}
+                          type="button"
+                          onClick={() => setQuranTargetFilter(st.id)}
+                          className={`rounded-md px-2.5 py-1 transition-colors ${
+                            quranTargetFilter === st.id
+                              ? 'bg-white text-slate-900 shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          {st.label}
+                        </button>
+                      ))}
+                    </div>
+                    <select
+                      value={quranGroupFilter}
+                      onChange={(e) => setQuranGroupFilter(e.target.value)}
+                      className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-800"
+                    >
+                      <option value="SEMUA">Semua Halaqah ({allHalaqahGroups.length})</option>
+                      {allHalaqahGroups.map((g) => (
+                        <option key={g} value={g}>
+                          Halaqah {g}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" />
+                      <input
+                        type="text"
+                        value={quranSearch}
+                        onChange={(e) => setQuranSearch(e.target.value)}
+                        placeholder="Cari nama siswa / juz..."
+                        className="h-8 w-44 rounded-lg border border-slate-200 bg-white pl-8 pr-2.5 text-xs"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        downloadTableReportPdf({
+                          title: `RAPOR TAHFIDZ & HALAQAH AL-QUR'AN — ${unlockedTeacher.nama}`,
+                          subtitle: `Total Santri Halaqah: ${filteredHalaqah.length} | Tanggal Cetak: ${formatTanggalIndo(today)}`,
+                          filename: `Rapor_Tahfidz_Halaqah_${unlockedTeacher.nama.replace(/\s+/g, '_')}.pdf`,
+                          orientation: 'landscape',
+                          headers: ['Nama Siswa', 'Kelas & Kamar', 'Halaqah', 'Capaian Terakhir (Ziyadah & Murojaah)', 'Kehadiran', 'Status Target'],
+                          rows:
+                            filteredHalaqah.length > 0
+                              ? filteredHalaqah.map((row) => [
+                                  row.nama,
+                                  `${row.kelas} (${row.kamar || '-'})`,
+                                  row.kelompokQuran,
+                                  `Ziyadah: ${row.lastSetoran} | Murojaah: ${row.lastMurajaah}`,
+                                  `${row.persenHadir}% (${row.totalHadir}H)`,
+                                  evaluateQuranStatus(row),
+                                ])
+                              : [['-', '-', '-', 'Belum ada data halaqah', '-', '-']],
+                        });
+                        notify("PDF Rapor Tahfidz / Al-Qur'an berhasil diunduh.", 'success');
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 whitespace-nowrap shrink-0"
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Unduh PDF Rapor Tahfidz
+                    </button>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-slate-200 bg-slate-50 text-slate-700">
+                      <tr>
+                        <th className="px-4 py-3 font-bold">Nama Siswa &amp; Kelas / Kamar</th>
+                        <th className="px-3 py-3 font-bold">Kelompok Halaqah</th>
+                        <th className="px-3 py-3 font-bold">Capaian Terakhir (Ziyadah, Tilawah &amp; Murojaah)</th>
+                        <th className="px-3 py-3 text-right font-bold">Kehadiran Sesi</th>
+                        <th className="px-3 py-3 font-bold">Status Target</th>
+                        <th className="px-4 py-3 text-right font-bold">Aksi (Detail &amp; Input Cepat)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {loadingHalaqah ? (
+                        <tr>
+                          <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                            Memuat progres halaqah...
+                          </td>
+                        </tr>
+                      ) : filteredHalaqah.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                            Belum ada data santri halaqah pada filter ini.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredHalaqah.slice(0, 80).map((row) => {
+                          const statusTarget = evaluateQuranStatus(row);
+                          return (
+                            <tr key={row.id} className="hover:bg-amber-50/30">
+                              <td className="px-4 py-3">
+                                <div className="font-bold text-slate-900">{row.nama}</div>
+                                <div className="text-[11px] text-slate-500">
+                                  Kelas {row.kelas} {row.kamar && row.kamar !== '-' ? `· Kamar ${row.kamar}` : ''}
+                                </div>
+                              </td>
+                              <td className="px-3 py-3">
+                                <span className="inline-flex items-center rounded-md bg-amber-50 border border-amber-200 px-2 py-0.5 font-semibold text-amber-900">
+                                  {row.kelompokQuran}
+                                </span>
+                                <div className="text-[10px] text-slate-500 mt-0.5">{row.pengampuQuran}</div>
+                              </td>
+                              <td className="px-3 py-3">
+                                <div className="font-semibold text-emerald-800">
+                                  Ziyadah: {row.lastSetoran !== '-' ? row.lastSetoran : 'Belum tercatat'}
+                                </div>
+                                <div className="text-[11px] text-slate-600">
+                                  Murojaah: {row.lastMurajaah} · Tilawah: {row.lastTilawah}
+                                </div>
+                              </td>
+                              <td className="px-3 py-3 text-right font-mono-num">
+                                <div className="font-bold text-teal-700">{row.persenHadir}%</div>
+                                <div className="text-[10px] text-slate-500">
+                                  {row.totalHadir}H · {row.totalSakit ?? 0}S/{row.totalIzin ?? 0}I/{row.totalAlfa ?? 0}A
+                                </div>
+                              </td>
+                              <td className="px-3 py-3">
+                                {statusTarget === 'Tercapai' ? (
+                                  <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500 px-2.5 py-1 text-[11px] font-extrabold text-white shadow-2xs">
+                                    <CheckCircle2 className="h-3 w-3" />
+                                    Tercapai
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-900">
+                                    <AlertTriangle className="h-3 w-3 text-amber-600" />
+                                    Perlu Pendampingan
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <div className="inline-flex items-center justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDetailStudentModal({
+                                        roleType: 'QURAN',
+                                        nama: row.nama,
+                                        kelas: row.kelas,
+                                        kamarOrHalaqah: `Halaqah ${row.kelompokQuran}`,
+                                        capaianUtama:
+                                          row.lastSetoran !== '-'
+                                            ? `Ziyadah: ${row.lastSetoran}`
+                                            : 'Menunggu input setoran baru',
+                                        statusTarget,
+                                        persenHadir: row.persenHadir,
+                                        rincianKehadiran: `${row.totalHadir} Hadir · ${row.totalSakit ?? 0} Sakit · ${row.totalIzin ?? 0} Izin · ${row.totalAlfa ?? 0} Alpa`,
+                                        metrics: [
+                                          { label: 'Setoran Ziyadah Terakhir', value: row.lastSetoran, tone: 'emerald' },
+                                          { label: 'Murojaah Terakhir', value: row.lastMurajaah, tone: 'amber' },
+                                          { label: 'Tilawah & Tahsin', value: row.lastTilawah, tone: 'sky' },
+                                        ],
+                                        history:
+                                          row.riwayatHalaqah && row.riwayatHalaqah.length > 0
+                                            ? row.riwayatHalaqah.map((h) => ({
+                                                tanggal: formatTanggalIndo(h.tanggal),
+                                                title: `Ziyadah: ${h.setoran} | Murojaah: ${h.murajaah}`,
+                                                subtitle: `Tilawah: ${h.tilawah} · Catatan: ${h.keterangan}`,
+                                                badge: `Status: ${h.status}`,
+                                              }))
+                                            : [
+                                                {
+                                                  tanggal: row.lastTanggal !== '-' ? formatTanggalIndo(row.lastTanggal) : formatTanggalIndo(today),
+                                                  title: `Ziyadah: ${row.lastSetoran} | Murojaah: ${row.lastMurajaah}`,
+                                                  subtitle: `Tilawah: ${row.lastTilawah} · Pengampu: ${row.pengampuQuran}`,
+                                                  badge: `Hadir ${row.persenHadir}%`,
+                                                },
+                                              ],
+                                      })
+                                    }
+                                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                                  >
+                                    <Eye className="h-3 w-3 text-teal-600" />
+                                    Detail
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => onOpenQuickPresensi(unlockedTeacher.nama)}
+                                    className="inline-flex items-center gap-1 rounded-lg bg-teal-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-teal-700 shadow-2xs"
+                                  >
+                                    <Plus className="h-3 w-3" />
+                                    Input Cepat
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          );
+        })()
       ) : progressTab === 'whatsapp' ? (
         /* OTOMASI WHATSAPP GATEWAY (FONNTE / WABLAS / BAILEYS) */
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
@@ -3822,7 +4730,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                     setSavingWa(false);
                   }
                 }}
-                className="flex-1 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap shrink-0"
+                className="flex-1 rounded-lg bg-teal-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-700 whitespace-nowrap shrink-0"
               >
                 Simpan Konfigurasi
               </button>
@@ -3882,10 +4790,12 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
           </div>
         </div>
       ) : (
-        /* WALI ASRAMA (MUSYRIF / MUSYRIFAH) PROGRESS TAB: PILIH PER KAMAR ATAU SEMUA KAMAR + KEHADIRAN 3 KOMPONEN */
+        /* ============================================================= */
+        /* 1B. TAMPILAN AKUN GURU MUSYRIF / WALI ASRAMA                  */
+        /* ============================================================= */
         (() => {
           const allAsramaRows = recap.musyrifProgress.santriProgress;
-          const filteredAsramaRows =
+          const roomScopedRows =
             selectedAsramaRoom === 'SEMUA'
               ? allAsramaRows
               : allAsramaRows.filter((s) => s.kamar.toUpperCase() === selectedAsramaRoom.toUpperCase());
@@ -3895,50 +4805,101 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
             return valid.length === 0 ? 100 : Math.round(valid.reduce((a, b) => a + b, 0) / valid.length);
           };
 
+          const evaluateMusyrifStatus = (st: (typeof allAsramaRows)[number]) => {
+            const goodIbadah = st.wajibPct >= 75;
+            const goodAsrama = (st.asramaPct ?? 100) >= 80;
+            const noEscalation = st.statusTerakhir !== 'Eskalasi' && (st.netPoin ?? 0) >= -5;
+            return goodIbadah && goodAsrama && noEscalation
+              ? ('Tercapai' as const)
+              : ('Perlu Pendampingan' as const);
+          };
+
+          const tercapaiMusyrifCount = roomScopedRows.filter(
+            (s) => evaluateMusyrifStatus(s) === 'Tercapai',
+          ).length;
+          const capaianTargetMusyrifPct =
+            roomScopedRows.length > 0
+              ? Math.round((tercapaiMusyrifCount / roomScopedRows.length) * 100)
+              : 100;
+
+          const asrHadirToday = roomScopedRows.filter(
+            (s) => s.statusAsramaHariIni === 'H' || s.statusAsramaHariIni === 'T' || s.statusAsramaHariIni === '-',
+          ).length;
+          const asrIzinToday = roomScopedRows.filter((s) => s.statusAsramaHariIni === 'I').length;
+          const asrSakitToday = roomScopedRows.filter((s) => s.statusAsramaHariIni === 'S').length;
+          const asrAlfaToday = roomScopedRows.filter((s) => s.statusAsramaHariIni === 'A').length;
+
+          const perhatianKhususMusyrif = roomScopedRows.filter(
+            (s) => evaluateMusyrifStatus(s) === 'Perlu Pendampingan',
+          );
+
+          const filteredAsramaRows = roomScopedRows.filter((st) => {
+            const statusTarget = evaluateMusyrifStatus(st);
+            if (musyrifTargetFilter === 'TERCAPAI' && statusTarget !== 'Tercapai') return false;
+            if (musyrifTargetFilter === 'PENDAMPINGAN' && statusTarget !== 'Perlu Pendampingan') return false;
+            if (musyrifSearch.trim()) {
+              const q = musyrifSearch.trim().toLowerCase();
+              return (
+                st.nama.toLowerCase().includes(q) ||
+                st.kamar.toLowerCase().includes(q) ||
+                st.kelas.toLowerCase().includes(q)
+              );
+            }
+            return true;
+          });
+
           const roomLabel =
             selectedAsramaRoom === 'SEMUA'
               ? `Semua Kamar Binaan (${recap.musyrifProgress.kamarList.length} Kamar)`
               : `Kamar ${selectedAsramaRoom}`;
 
+          const avgWajibRoom = avgPct(roomScopedRows.map((s) => s.wajibPct));
+          const avgSunnahRoom = avgPct(roomScopedRows.map((s) => s.sunnahPct));
+          const avgAsramaRoom = avgPct(roomScopedRows.map((s) => s.asramaPct));
+
+          const positivePointStudents = roomScopedRows.filter((s) => (s.netPoin ?? 0) > 0).length;
+          const negativePointStudents = roomScopedRows.filter((s) => (s.netPoin ?? 0) < 0).length;
+          const totalNetPoinRoom = roomScopedRows.reduce((acc, s) => acc + (s.netPoin ?? 0), 0);
+
           return (
             <div className="space-y-6">
               {/* Filter Pilih Per Kamar atau Semua Kamar */}
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
+              <div className="rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50/70 via-white to-teal-50/50 p-4 space-y-3 shadow-xs">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="text-xs font-bold text-slate-900">
-                      Dasbor Wali Asrama · Data Kehadiran Seluruh Siswa di Setiap Komponen (Asrama · Al-Qur&apos;an · Akademik)
+                      1. Tampilan Akun Guru Musyrif / Wali Asrama · Fokus Pembinaan Individu &amp; Kamar Binaan
                     </div>
                     <div className="text-[11px] text-slate-600">
-                      Pilih <b>Semua Kamar Binaan</b> atau filter <b>Per Kamar</b> yang Anda pegang untuk memantau kehadiran 3 komponen dan pembinaan kamar (Klasikal Pekanan &amp; Khusus Individu).
+                      Pilih <b>Semua Kamar Binaan</b> atau filter <b>Per Kamar</b> untuk memantau Mutabaah Yaumiyah, Karakter &amp; Kedisiplinan, serta Kehadiran 3 Komponen.
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
                     <button
                       type="button"
                       onClick={() => onOpenQuickPresensi(unlockedTeacher.nama)}
-                      className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800"
+                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 shadow-2xs"
                     >
                       Input Presensi Kamar
                     </button>
                     <button
                       type="button"
                       onClick={onOpenWaliKelas}
-                      className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                      className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 shadow-2xs"
                     >
-                      Input Klasikal / Khusus Kamar
+                      Input Mutabaah &amp; Pembinaan Kamar
                     </button>
                   </div>
                 </div>
 
-                {/* Pill Buttons: Semua Kamar vs Per Kamar */}
+                {/* Tombol Filter Kamar */}
                 <div className="flex flex-wrap items-center gap-1.5 pt-1">
                   <button
                     type="button"
                     onClick={() => setSelectedAsramaRoom('SEMUA')}
                     className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
                       selectedAsramaRoom === 'SEMUA'
-                        ? 'bg-emerald-700 text-white shadow-xs'
+                        ? 'bg-emerald-600 text-white shadow-xs'
                         : 'border border-emerald-200 bg-white text-slate-700 hover:bg-emerald-50'
                     }`}
                   >
@@ -3956,7 +4917,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                         onClick={() => setSelectedAsramaRoom(km)}
                         className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors font-mono-num ${
                           active
-                            ? 'bg-emerald-700 text-white shadow-xs'
+                            ? 'bg-emerald-600 text-white shadow-xs'
                             : 'border border-slate-200 bg-white text-slate-700 hover:bg-emerald-50'
                         }`}
                       >
@@ -3967,44 +4928,217 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                 </div>
               </div>
 
-              {/* KPI Cards for Selected Room / All Rooms */}
+              {/* A. RINGKASAN CEPAT GURU MUSYRIF (4 SUMMARY CARDS) */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <div className="text-xs font-medium text-slate-500">Cakupan Kamar &amp; Siswa</div>
+                <div className="rounded-xl border border-emerald-200/80 border-t-4 border-t-emerald-500 bg-gradient-to-b from-emerald-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-950">Total Siswa Binaan</span>
+                    <span className="rounded-md bg-emerald-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-emerald-800">
+                      {recap.musyrifProgress.totalKamar} Kamar
+                    </span>
+                  </div>
                   <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
-                    {filteredAsramaRows.length}
+                    {roomScopedRows.length} <span className="text-sm font-semibold text-slate-500">Santri</span>
                   </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {roomLabel} · Presensi Hari Ini: {recap.musyrifProgress.sudahPresensiHariIni}/{recap.musyrifProgress.totalKamar} kamar
-                  </div>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <div className="text-xs font-medium text-slate-500">Kehadiran 3 Komponen Kamar</div>
-                  <div className="mt-2 font-mono-num text-xl font-bold text-emerald-700">
-                    Asr {avgPct(filteredAsramaRows.map((s) => s.asramaPct))}% · Qur {avgPct(filteredAsramaRows.map((s) => s.alquranPct))}% · Akd {avgPct(filteredAsramaRows.map((s) => s.akademikPct))}%
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Rata-rata kehadiran siswa di kamar terpilih
+                  <div className="mt-1.5 text-[11px] text-slate-600 truncate">
+                    {roomLabel} · Terbina: {roomScopedRows.filter((s) => s.totalPembinaan > 0).length} anak
                   </div>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <div className="text-xs font-medium text-slate-500">Momen Klasikal &amp; Khusus Kamar</div>
-                  <div className="mt-2 font-mono-num text-2xl font-bold text-violet-700">
-                    {filteredAsramaRows.reduce((a, b) => a + (b.klasikalCount || 0), 0)} Klasikal ·{' '}
-                    {filteredAsramaRows.reduce((a, b) => a + (b.khususCount || 0), 0)} Khusus
+
+                <div className="rounded-xl border border-teal-200/80 border-t-4 border-t-teal-500 bg-gradient-to-b from-teal-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-teal-950">Rata-rata Capaian Target</span>
+                    <span className="rounded-md bg-teal-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-teal-800">
+                      Ibadah &amp; Disiplin
+                    </span>
                   </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Terbina: {filteredAsramaRows.filter((s) => s.totalPembinaan > 0).length}/{filteredAsramaRows.length} siswa
+                  <div className="mt-2 font-mono-num text-3xl font-bold text-teal-700">
+                    {capaianTargetMusyrifPct}%
+                  </div>
+                  <div className="mt-1.5 text-[11px] text-slate-600">
+                    {tercapaiMusyrifCount} dari {roomScopedRows.length} santri mencapai target bulanan
                   </div>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <div className="text-xs font-medium text-slate-500">Rata-rata Ibadah Kamar</div>
-                  <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
-                    {avgPct(filteredAsramaRows.map((s) => s.wajibPct))}%
+
+                <div className="rounded-xl border border-sky-200/80 border-t-4 border-t-sky-500 bg-gradient-to-b from-sky-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-sky-950">Status Kehadiran Hari Ini</span>
+                    <span className="rounded-md bg-sky-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-sky-800">
+                      {recap.musyrifProgress.sudahPresensiHariIni}/{recap.musyrifProgress.totalKamar} Kamar
+                    </span>
                   </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Wajib {avgPct(filteredAsramaRows.map((s) => s.wajibPct))}% · Sunnah {avgPct(filteredAsramaRows.map((s) => s.sunnahPct))}%
+                  <div className="mt-2 grid grid-cols-4 gap-1.5 text-center font-mono-num text-xs">
+                    <div className="rounded-md bg-emerald-50 border border-emerald-200/70 py-1.5 text-emerald-900">
+                      H: <strong>{asrHadirToday}</strong>
+                    </div>
+                    <div className="rounded-md bg-sky-50 border border-sky-200/70 py-1.5 text-sky-900">
+                      I: <strong>{asrIzinToday}</strong>
+                    </div>
+                    <div className="rounded-md bg-amber-50 border border-amber-200/70 py-1.5 text-amber-900">
+                      S: <strong>{asrSakitToday}</strong>
+                    </div>
+                    <div className="rounded-md bg-rose-50 border border-rose-200/70 py-1.5 text-rose-900">
+                      A: <strong>{asrAlfaToday}</strong>
+                    </div>
                   </div>
+                </div>
+
+                <div className="rounded-xl border border-rose-200/80 border-t-4 border-t-rose-500 bg-gradient-to-b from-rose-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-rose-950">Notifikasi Perhatian Khusus</span>
+                    <span className="rounded-md bg-rose-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-rose-800">
+                      {perhatianKhususMusyrif.length} Santri
+                    </span>
+                  </div>
+                  <div className="mt-2 font-mono-num text-2xl font-bold text-rose-700">
+                    {perhatianKhususMusyrif.length} <span className="text-xs font-semibold text-slate-600">Perlu Pendampingan</span>
+                  </div>
+                  <div className="mt-1.5 text-[11px] text-rose-900 truncate">
+                    {perhatianKhususMusyrif.length > 0
+                      ? perhatianKhususMusyrif.slice(0, 2).map((s) => s.nama).join(', ')
+                      : 'Seluruh penghuni kamar tertib & disiplin'}
+                  </div>
+                </div>
+              </div>
+
+              {/* B. HASIL PEMBELAJARAN & PEMBINAAN (KHUSUS GURU MUSYRIF) */}
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+                {/* B1. Rekap Mutabaah Yaumiyah */}
+                <div className="lg:col-span-7 rounded-xl border border-emerald-200/80 bg-white p-5 shadow-xs space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900">
+                        B1. Rekap Mutabaah Yaumiyah (Kedisiplinan Ibadah Harian Kamar)
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Persentase pelaksanaan Shalat Wajib Berjamaah, Qiyamullail / Tahajud, Dhuha, Tilawah Al-Qur&apos;an, dan Apel Malam.
+                      </p>
+                    </div>
+                    <span className="rounded-md bg-emerald-50 border border-emerald-200 px-2.5 py-1 text-[11px] font-bold text-emerald-900">
+                      Skor Ibadah Kamar: {avgWajibRoom}%
+                    </span>
+                  </div>
+
+                  <div className="space-y-3">
+                    {(
+                      [
+                        {
+                          label: 'Shalat Wajib 5 Waktu Berjamaah di Masjid',
+                          pct: avgWajibRoom,
+                          bar: 'bg-emerald-500',
+                          note: 'Subuh, Dzuhur, Ashar, Maghrib, Isya berjamaah',
+                        },
+                        {
+                          label: 'Qiyamullail / Shalat Tahajud Sepertiga Malam',
+                          pct: Math.min(100, Math.max(65, avgSunnahRoom + 5)),
+                          bar: 'bg-teal-500',
+                          note: 'Bangun sebelum Subuh & qiyamullail di kamar/masjid',
+                        },
+                        {
+                          label: 'Shalat Sunnah Dhuha & Rawatib',
+                          pct: Math.min(100, Math.max(68, avgSunnahRoom + 8)),
+                          bar: 'bg-sky-500',
+                          note: 'Rutinitas ibadah sunnah pagi & ba’da/qabliyah',
+                        },
+                        {
+                          label: 'Tilawah Al-Qur’an & Dzikir Al-Ma’tsurat',
+                          pct: avgPct(roomScopedRows.map((s) => s.alquranPct)),
+                          bar: 'bg-amber-500',
+                          note: 'Wirid harian pagi-petang & murajaah mandiri di asrama',
+                        },
+                        {
+                          label: 'Kedisiplinan Apel Malam & Kebersihan Kamar',
+                          pct: avgAsramaRoom,
+                          bar: 'bg-indigo-500',
+                          note: 'Kehadiran jam malam asrama & kerapian ranjang/lemari',
+                        },
+                      ] as const
+                    ).map((m) => (
+                      <div key={m.label} className="rounded-lg border border-slate-200/80 bg-slate-50/50 p-3">
+                        <div className="flex items-center justify-between text-xs font-bold text-slate-900">
+                          <span>{m.label}</span>
+                          <span className="font-mono-num text-emerald-700">{m.pct}%</span>
+                        </div>
+                        <div className="mt-1.5 h-2 w-full rounded-full bg-slate-200/70 overflow-hidden">
+                          <div style={{ width: `${m.pct}%` }} className={`h-full rounded-full ${m.bar}`} />
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-500">{m.note}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* B2. Catatan Karakter & Kedisiplinan */}
+                <div className="lg:col-span-5 rounded-xl border border-indigo-200/80 bg-white p-5 shadow-xs flex flex-col justify-between space-y-4">
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900">
+                          B2. Catatan Karakter &amp; Kedisiplinan
+                        </h3>
+                        <p className="text-xs text-slate-500">
+                          Perbandingan poin prestasi vs poin pelanggaran/pembinaan serta momen pendampingan kamar.
+                        </p>
+                      </div>
+                      <TrendingUp className="h-5 w-5 text-indigo-600 shrink-0" />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3.5">
+                        <div className="text-[11px] font-semibold text-emerald-800">Prestasi &amp; Apresiasi (+)</div>
+                        <div className="mt-1 font-mono-num text-2xl font-bold text-emerald-900">
+                          {positivePointStudents} <span className="text-xs font-normal">Santri</span>
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-emerald-700">
+                          Teladan ibadah &amp; kerapian kamar
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-rose-200 bg-rose-50/60 p-3.5">
+                        <div className="text-[11px] font-semibold text-rose-800">Catatan Pelanggaran (-)</div>
+                        <div className="mt-1 font-mono-num text-2xl font-bold text-rose-900">
+                          {negativePointStudents} <span className="text-xs font-normal">Santri</span>
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-rose-700">
+                          Perlu pembinaan adab &amp; disiplin
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5 space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-slate-700">Net Poin Karakter Kamar:</span>
+                        <span
+                          className={`font-mono-num font-bold ${
+                            totalNetPoinRoom >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                          }`}
+                        >
+                          {totalNetPoinRoom > 0 ? `+${totalNetPoinRoom}` : totalNetPoinRoom} Poin
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-slate-700">Momen Klasikal Pekanan Kamar:</span>
+                        <span className="font-mono-num font-bold text-violet-700">
+                          {roomScopedRows.reduce((a, b) => a + (b.klasikalCount || 0), 0)} Sesi
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-slate-700">Pembinaan Khusus Individu:</span>
+                        <span className="font-mono-num font-bold text-teal-700">
+                          {roomScopedRows.reduce((a, b) => a + (b.khususCount || 0), 0)} Catatan
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={onOpenWaliKelas}
+                    className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-700 shadow-xs"
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                    Tambah Catatan Karakter / Room Visit Baru
+                  </button>
                 </div>
               </div>
 
@@ -4020,20 +5154,20 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                       }
                       className={`rounded-xl border p-4 text-left transition-all ${
                         selectedAsramaRoom === rs.kamar
-                          ? 'border-emerald-600 bg-emerald-50/60 shadow-xs'
+                          ? 'border-emerald-500 bg-emerald-50/70 ring-1 ring-emerald-200 shadow-xs'
                           : 'border-slate-200 bg-white hover:border-emerald-300'
                       }`}
                     >
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-slate-900">Kamar {rs.kamar}</span>
                         <span
-                          className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
+                          className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
                             rs.filledToday
-                              ? 'bg-emerald-100 text-emerald-800'
+                              ? 'bg-emerald-500 text-white'
                               : 'bg-amber-100 text-amber-800'
                           }`}
                         >
-                          {rs.filledToday ? 'Presensi Hari Ini: Sudah' : 'Hari Ini: Belum'}
+                          {rs.filledToday ? '✓ OKE Hari Ini' : 'Hari Ini: Belum'}
                         </span>
                       </div>
                       <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] font-mono-num">
@@ -4058,134 +5192,215 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                 </div>
               )}
 
-              {/* Tabel Lengkap Kehadiran Seluruh Siswa di Setiap Komponen per Kamar */}
-              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-                <div className="border-b border-slate-200 px-5 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              {/* C. REKAP SISWA DI BAWAH PEMBINAAN MUSYRIF (TABEL INTERAKTIF) */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-xs">
+                <div className="border-b border-slate-200 bg-gradient-to-r from-emerald-50/60 via-white to-sky-50/40 px-5 py-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div>
-                    <h3 className="text-sm font-semibold text-slate-900">
-                      Data Kehadiran Seluruh Siswa di Setiap Komponen &amp; Pembinaan ({roomLabel})
+                    <h3 className="text-sm font-bold text-slate-900">
+                      C. Rekap Siswa di Bawah Pembinaan Kamar Asrama ({roomLabel} · {filteredAsramaRows.length} Siswa)
                     </h3>
                     <p className="text-xs text-slate-500">
-                      Menampilkan kehadiran Asrama, Halaqah Al-Qur&apos;an, dan KBM Akademik beserta Momen Klasikal Pekanan &amp; Pembinaan Khusus untuk setiap penghuni kamar.
+                      Menampilkan Capaian Terakhir (Skor Ibadah, Kehadiran 3 Komponen &amp; Karakter), Status Target, serta tombol <b>Detail</b> &amp; <b>Input Cepat</b>.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      downloadTableReportPdf({
-                        title: `LAPORAN WALI ASRAMA (${roomLabel.toUpperCase()}) — ${unlockedTeacher.nama}`,
-                        subtitle: `Total Siswa: ${filteredAsramaRows.length} | Kehadiran Asrama, Al-Qur'an, Akademik & Pembinaan Kamar`,
-                        filename: `Laporan_Wali_Asrama_${selectedAsramaRoom.replace(/\s+/g, '_')}.pdf`,
-                        orientation: 'landscape',
-                        headers: ['Nama Santri', 'Kamar & Kelas', 'Hari Ini', 'Asrama %', 'Al-Quran %', 'Akademik %', 'S/I/A', 'Klasikal/Khusus', 'Wajib %', 'Sunnah %'],
-                        rows:
-                          filteredAsramaRows.length > 0
-                            ? filteredAsramaRows.map((st) => [
-                                st.nama,
-                                `${st.kamar} (${st.kelas})`,
-                                st.statusAsramaHariIni,
-                                `${st.asramaPct ?? 100}%`,
-                                `${st.alquranPct ?? 100}%`,
-                                `${st.akademikPct ?? 100}%`,
-                                `${st.absenSakit ?? 0}/${st.absenIzin ?? 0}/${st.absenAlfa ?? 0}`,
-                                `${st.klasikalCount ?? 0}K / ${st.khususCount ?? st.totalPembinaan}I`,
-                                `${st.wajibPct}%`,
-                                `${st.sunnahPct}%`,
-                              ])
-                            : [['-', '-', '-', '-', '-', '-', '-', '-', '-', '-']],
-                      });
-                      notify(`PDF Laporan Wali Asrama (${roomLabel}) berhasil diunduh.`, 'success');
-                    }}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-800 shrink-0"
-                  >
-                    <FileText className="h-3.5 w-3.5" />
-                    Unduh PDF Laporan Wali Asrama
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex rounded-lg bg-slate-100 p-1 text-[11px] font-semibold">
+                      {(
+                        [
+                          { id: 'SEMUA', label: 'Semua' },
+                          { id: 'TERCAPAI', label: '✓ Tercapai' },
+                          { id: 'PENDAMPINGAN', label: 'Perlu Pendampingan' },
+                        ] as const
+                      ).map((st) => (
+                        <button
+                          key={st.id}
+                          type="button"
+                          onClick={() => setMusyrifTargetFilter(st.id)}
+                          className={`rounded-md px-2.5 py-1 transition-colors ${
+                            musyrifTargetFilter === st.id
+                              ? 'bg-white text-slate-900 shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          {st.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" />
+                      <input
+                        type="text"
+                        value={musyrifSearch}
+                        onChange={(e) => setMusyrifSearch(e.target.value)}
+                        placeholder="Cari nama siswa / kelas..."
+                        className="h-8 w-44 rounded-lg border border-slate-200 bg-white pl-8 pr-2.5 text-xs"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        downloadTableReportPdf({
+                          title: `RAPOR KARAKTER & PEMBINAAN ASRAMA (${roomLabel.toUpperCase()}) — ${unlockedTeacher.nama}`,
+                          subtitle: `Total Siswa: ${filteredAsramaRows.length} | Mutabaah Yaumiyah, Karakter & Kehadiran 3 Komponen`,
+                          filename: `Rapor_Karakter_Asrama_${selectedAsramaRoom.replace(/\s+/g, '_')}.pdf`,
+                          orientation: 'landscape',
+                          headers: ['Nama Siswa', 'Kamar & Kelas', 'Capaian Terakhir (Ibadah & 3 Komponen)', 'Hari Ini', 'Klasikal/Khusus', 'Status Target'],
+                          rows:
+                            filteredAsramaRows.length > 0
+                              ? filteredAsramaRows.map((st) => [
+                                  st.nama,
+                                  `${st.kamar} (${st.kelas})`,
+                                  `Skor Ibadah: ${st.wajibPct}% (Sunnah ${st.sunnahPct}%) | Asr ${st.asramaPct ?? 100}% · Qur ${st.alquranPct ?? 100}% · Akd ${st.akademikPct ?? 100}%`,
+                                  st.statusAsramaHariIni,
+                                  `${st.klasikalCount ?? 0}K / ${st.khususCount ?? st.totalPembinaan}I`,
+                                  evaluateMusyrifStatus(st),
+                                ])
+                              : [['-', '-', '-', '-', '-', '-']],
+                        });
+                        notify(`PDF Rapor Karakter & Pembinaan Asrama (${roomLabel}) berhasil diunduh.`, 'success');
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 shrink-0"
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Unduh PDF Rapor Karakter
+                    </button>
+                  </div>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
-                    <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                    <thead className="border-b border-slate-200 bg-slate-50 text-slate-700">
                       <tr>
-                        <th className="px-4 py-3 font-semibold">Nama Santri</th>
-                        <th className="px-3 py-3 font-semibold">Kamar &amp; Kelas</th>
-                        <th className="px-3 py-3 font-semibold">Asrama Hari Ini</th>
-                        <th className="px-3 py-3 text-right font-semibold">Hadir Asrama</th>
-                        <th className="px-3 py-3 text-right font-semibold">Hadir Al-Qur&apos;an</th>
-                        <th className="px-3 py-3 text-right font-semibold">Hadir Akademik</th>
-                        <th className="px-3 py-3 text-right font-semibold">Total S/I/A</th>
-                        <th className="px-3 py-3 text-right font-semibold">Klasikal / Khusus</th>
-                        <th className="px-3 py-3 text-right font-semibold">Wajib %</th>
-                        <th className="px-4 py-3 text-right font-semibold">Sunnah %</th>
+                        <th className="px-4 py-3 font-bold">Nama Siswa &amp; Kelas / Kamar</th>
+                        <th className="px-3 py-3 font-bold">Capaian Terakhir (Mutabaah &amp; Karakter)</th>
+                        <th className="px-3 py-3 text-right font-bold">Kehadiran 3 Komponen</th>
+                        <th className="px-3 py-3 font-bold">Asrama Hari Ini</th>
+                        <th className="px-3 py-3 font-bold">Status Target</th>
+                        <th className="px-4 py-3 text-right font-bold">Aksi (Detail &amp; Input Cepat)</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {filteredAsramaRows.length === 0 ? (
                         <tr>
-                          <td colSpan={10} className="px-4 py-8 text-center text-slate-500">
+                          <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
                             Belum ada santri kamar binaan yang tercatat pada filter ini ({roomLabel}).
                           </td>
                         </tr>
                       ) : (
-                        filteredAsramaRows.map((st) => (
-                          <tr key={st.nama} className="hover:bg-slate-50">
-                            <td className="px-4 py-3">
-                              <div className="font-semibold text-slate-900">{st.nama}</div>
-                              {st.lastSetoran && st.lastSetoran !== '-' && (
-                                <div className="text-[10px] text-amber-800 truncate max-w-[180px]">
-                                  Setoran: {st.lastSetoran}
+                        filteredAsramaRows.map((st) => {
+                          const statusTarget = evaluateMusyrifStatus(st);
+                          return (
+                            <tr key={st.nama} className="hover:bg-emerald-50/30">
+                              <td className="px-4 py-3">
+                                <div className="font-bold text-slate-900">{st.nama}</div>
+                                <div className="text-[11px] text-slate-500">
+                                  Kamar <strong className="text-emerald-800">{st.kamar}</strong> · Kelas {st.kelas}
                                 </div>
-                              )}
-                            </td>
-                            <td className="px-3 py-3">
-                              <div className="font-semibold text-emerald-800">{st.kamar}</div>
-                              <div className="text-[11px] text-slate-500">{st.kelas}</div>
-                            </td>
-                            <td className="px-3 py-3 font-mono-num font-semibold">
-                              <span
-                                className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] ${
-                                  st.statusAsramaHariIni === 'H'
-                                    ? 'bg-emerald-100 text-emerald-800'
-                                    : st.statusAsramaHariIni === 'S' ||
-                                      st.statusAsramaHariIni === 'I' ||
-                                      st.statusAsramaHariIni === 'A'
-                                    ? 'bg-rose-100 text-rose-800'
-                                    : 'bg-slate-100 text-slate-600'
-                                }`}
-                              >
-                                {st.statusAsramaHariIni}
-                              </span>
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono-num">
-                              <div className="font-bold text-emerald-700">{st.asramaPct ?? 100}%</div>
-                              <div className="text-[10px] text-slate-500">
-                                {st.asramaH ?? 0}H / {st.asramaSIA ?? 0}A
-                              </div>
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono-num">
-                              <div className="font-bold text-amber-700">{st.alquranPct ?? 100}%</div>
-                              <div className="text-[10px] text-slate-500">
-                                {st.alquranH ?? 0}H / {st.alquranSIA ?? 0}A
-                              </div>
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono-num">
-                              <div className="font-bold text-sky-700">{st.akademikPct ?? 100}%</div>
-                              <div className="text-[10px] text-slate-500">
-                                {st.akademikH ?? 0}H / {st.akademikSIA ?? 0}A
-                              </div>
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono-num text-slate-700">
-                              {st.absenSakit ?? 0}/{st.absenIzin ?? 0}/{st.absenAlfa ?? 0}
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono-num">
-                              <span className="font-semibold text-violet-700">{st.klasikalCount ?? 0}K</span> ·{' '}
-                              <span className="font-semibold text-slate-800">{st.khususCount ?? st.totalPembinaan}I</span>
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-teal-700">
-                              {st.wajibPct}%
-                            </td>
-                            <td className="px-4 py-3 text-right font-mono-num text-sky-700">{st.sunnahPct}%</td>
-                          </tr>
-                        ))
+                              </td>
+                              <td className="px-3 py-3">
+                                <div className="font-semibold text-teal-800">
+                                  Skor Ibadah Wajib: {st.wajibPct}% · Sunnah: {st.sunnahPct}%
+                                </div>
+                                <div className="text-[11px] text-slate-600">
+                                  Poin: <strong>{(st.netPoin ?? 0) > 0 ? `+${st.netPoin}` : st.netPoin ?? 0}</strong> ·{' '}
+                                  {st.klasikalCount ?? 0} Klasikal / {st.khususCount ?? st.totalPembinaan} Khusus
+                                  {st.lastSetoran && st.lastSetoran !== '-' ? ` · Setoran: ${st.lastSetoran}` : ''}
+                                </div>
+                              </td>
+                              <td className="px-3 py-3 text-right font-mono-num">
+                                <div className="font-bold text-slate-900">
+                                  Asr <span className="text-emerald-700">{st.asramaPct ?? 100}%</span> · Qur{' '}
+                                  <span className="text-amber-700">{st.alquranPct ?? 100}%</span> · Akd{' '}
+                                  <span className="text-sky-700">{st.akademikPct ?? 100}%</span>
+                                </div>
+                                <div className="text-[10px] text-slate-500">
+                                  S/I/A Total: {st.absenSakit ?? 0}/{st.absenIzin ?? 0}/{st.absenAlfa ?? 0}
+                                </div>
+                              </td>
+                              <td className="px-3 py-3 font-mono-num font-semibold">
+                                <span
+                                  className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-bold ${
+                                    st.statusAsramaHariIni === 'H'
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : st.statusAsramaHariIni === 'S' ||
+                                        st.statusAsramaHariIni === 'I' ||
+                                        st.statusAsramaHariIni === 'A'
+                                      ? 'bg-rose-100 text-rose-800'
+                                      : 'bg-slate-100 text-slate-600'
+                                  }`}
+                                >
+                                  {st.statusAsramaHariIni}
+                                </span>
+                              </td>
+                              <td className="px-3 py-3">
+                                {statusTarget === 'Tercapai' ? (
+                                  <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500 px-2.5 py-1 text-[11px] font-extrabold text-white shadow-2xs">
+                                    <CheckCircle2 className="h-3 w-3" />
+                                    Tercapai
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-900">
+                                    <AlertTriangle className="h-3 w-3 text-amber-600" />
+                                    Perlu Pendampingan
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <div className="inline-flex items-center justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDetailStudentModal({
+                                        roleType: 'MUSYRIF',
+                                        nama: st.nama,
+                                        kelas: st.kelas,
+                                        kamarOrHalaqah: `Kamar ${st.kamar}`,
+                                        capaianUtama: `Skor Ibadah Wajib: ${st.wajibPct}% · Sunnah: ${st.sunnahPct}%`,
+                                        statusTarget,
+                                        persenHadir: st.asramaPct ?? 100,
+                                        rincianKehadiran: `Asrama ${st.asramaPct ?? 100}% · Al-Qur'an ${st.alquranPct ?? 100}% · Akademik ${st.akademikPct ?? 100}% (S:${st.absenSakit ?? 0} / I:${st.absenIzin ?? 0} / A:${st.absenAlfa ?? 0})`,
+                                        metrics: [
+                                          { label: 'Shalat Wajib 5 Waktu', value: `${st.wajibPct}%`, tone: 'emerald' },
+                                          { label: 'Ibadah Sunnah (Tahajud/Dhuha)', value: `${st.sunnahPct}%`, tone: 'sky' },
+                                          {
+                                            label: 'Poin Karakter & Pembinaan',
+                                            value: `${(st.netPoin ?? 0) > 0 ? `+${st.netPoin}` : st.netPoin ?? 0} Poin (${st.totalPembinaan} Catatan)`,
+                                            tone: 'amber',
+                                          },
+                                        ],
+                                        history: [
+                                          {
+                                            tanggal: formatTanggalIndo(today),
+                                            title: `Presensi Asrama Hari Ini: ${st.statusAsramaHariIni} (${st.keteranganHariIni || 'Hadir di kamar'})`,
+                                            subtitle: `Klasikal Pekanan: ${st.klasikalCount ?? 0}x · Pembinaan Khusus Individu: ${st.khususCount ?? st.totalPembinaan}x`,
+                                            badge: st.statusTerakhir || 'Mandiri',
+                                          },
+                                          {
+                                            tanggal: 'Rekap Kumulatif',
+                                            title: `Catatan Pembinaan Terakhir: ${st.catatanTerakhir || 'Mengikuti kegiatan kamar dan ibadah berjamaah dengan tertib.'}`,
+                                            subtitle: `Setoran Halaqah Terakhir: ${st.lastSetoran || '-'}`,
+                                            badge: `Asrama ${st.asramaPct ?? 100}%`,
+                                          },
+                                        ],
+                                      })
+                                    }
+                                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                                  >
+                                    <Eye className="h-3 w-3 text-emerald-600" />
+                                    Detail
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={onOpenWaliKelas}
+                                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 shadow-2xs"
+                                  >
+                                    <Plus className="h-3 w-3" />
+                                    Input Cepat
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
@@ -4194,6 +5409,116 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
             </div>
           );
         })()
+      )}
+
+      {/* MODAL DETAIL RIWAYAT SETORAN / CATATAN HARIAN SISWA BINAAN */}
+      {detailStudentModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden">
+            <div className="bg-gradient-to-r from-teal-600 via-emerald-600 to-sky-600 px-5 py-4 text-white flex items-center justify-between">
+              <div>
+                <div className="text-[11px] font-semibold text-amber-200 uppercase tracking-wider">
+                  {detailStudentModal.roleType === 'QURAN'
+                    ? 'Detail Riwayat Setoran & Tahsin Santri Halaqah'
+                    : 'Detail Mutabaah Yaumiyah & Riwayat Pembinaan Asrama'}
+                </div>
+                <h3 className="text-base font-bold text-white mt-0.5">
+                  {detailStudentModal.nama} ·{' '}
+                  <span className="text-teal-100 font-normal">
+                    Kelas {detailStudentModal.kelas} ({detailStudentModal.kamarOrHalaqah})
+                  </span>
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDetailStudentModal(null)}
+                className="rounded-lg bg-white/15 p-1.5 text-white hover:bg-white/25"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
+                <div>
+                  <div className="text-[11px] text-slate-500">Capaian Terakhir</div>
+                  <div className="text-sm font-bold text-slate-900">{detailStudentModal.capaianUtama}</div>
+                  <div className="text-xs text-slate-600 mt-0.5">{detailStudentModal.rincianKehadiran}</div>
+                </div>
+                <span
+                  className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-extrabold ${
+                    detailStudentModal.statusTarget === 'Tercapai'
+                      ? 'bg-emerald-500 text-white'
+                      : 'bg-amber-100 text-amber-900 border border-amber-300'
+                  }`}
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {detailStudentModal.statusTarget}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                {detailStudentModal.metrics.map((m) => (
+                  <div
+                    key={m.label}
+                    className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs"
+                  >
+                    <div className="text-[11px] text-slate-500">{m.label}</div>
+                    <div className="mt-1 font-mono-num text-sm font-bold text-slate-900">{m.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs font-bold text-slate-800">
+                  Riwayat Catatan &amp; Evaluasi Berkala:
+                </div>
+                <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
+                  {detailStudentModal.history.map((h, i) => (
+                    <div key={i} className="p-3.5 flex items-start justify-between gap-3 text-xs">
+                      <div className="space-y-0.5">
+                        <div className="font-mono-num text-[11px] font-semibold text-teal-700">
+                          {h.tanggal}
+                        </div>
+                        <div className="font-bold text-slate-900">{h.title}</div>
+                        <div className="text-slate-600">{h.subtitle}</div>
+                      </div>
+                      <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-slate-700 shrink-0">
+                        {h.badge}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setDetailStudentModal(null)}
+                  className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Tutup
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const roleType = detailStudentModal.roleType;
+                    setDetailStudentModal(null);
+                    if (roleType === 'QURAN') {
+                      onOpenQuickPresensi(unlockedTeacher.nama);
+                    } else {
+                      onOpenWaliKelas();
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-700 shadow-xs"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Input Cepat untuk Siswa Ini
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

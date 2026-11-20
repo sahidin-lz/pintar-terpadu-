@@ -5707,6 +5707,9 @@ class PintarStore {
         materi: string;
         totalSiswa: number;
         hadir: number;
+        sakit: number;
+        izin: number;
+        alfa: number;
         tidakHadir: number;
         timestamp: string;
       }
@@ -5723,6 +5726,9 @@ class PintarStore {
           materi: l.materi || '-',
           totalSiswa: 0,
           hadir: 0,
+          sakit: 0,
+          izin: 0,
+          alfa: 0,
           tidakHadir: 0,
           timestamp: l.timestamp,
         });
@@ -5730,7 +5736,12 @@ class PintarStore {
       const s = sessionMap.get(key)!;
       s.totalSiswa++;
       if (l.status === 'H' || l.status === 'T') s.hadir++;
-      else s.tidakHadir++;
+      else {
+        s.tidakHadir++;
+        if (l.status === 'S') s.sakit++;
+        else if (l.status === 'I') s.izin++;
+        else if (l.status === 'A') s.alfa++;
+      }
     }
 
     const sessions = Array.from(sessionMap.values()).sort((a, b) => b.tanggal.localeCompare(a.tanggal));
@@ -5763,6 +5774,9 @@ class PintarStore {
           tanggal: string;
           materi: string;
           hadir: number;
+          sakit: number;
+          izin: number;
+          alfa: number;
           totalSiswa: number;
           tidakHadir: number;
         }>;
@@ -5802,6 +5816,9 @@ class PintarStore {
         tanggal: ses.tanggal,
         materi: ses.materi && ses.materi !== '-' ? ses.materi : '(Belum dicatat topik materi)',
         hadir: ses.hadir,
+        sakit: ses.sakit,
+        izin: ses.izin,
+        alfa: ses.alfa,
         totalSiswa: ses.totalSiswa,
         tidakHadir: ses.tidakHadir,
       });
@@ -5813,8 +5830,14 @@ class PintarStore {
         const totalPertemuan = sortedSes.length;
         const lajuPct = Math.min(100, Math.round((totalPertemuan / targetEffectiveWeeks) * 100));
         const sumHadir = sortedSes.reduce((a, b) => a + b.hadir, 0);
+        const sumSakit = sortedSes.reduce((a, b) => a + b.sakit, 0);
+        const sumIzin = sortedSes.reduce((a, b) => a + b.izin, 0);
+        const sumAlfa = sortedSes.reduce((a, b) => a + b.alfa, 0);
         const sumTotal = sortedSes.reduce((a, b) => a + b.totalSiswa, 0);
-        const rataKehadiranPct = sumTotal > 0 ? Math.round((sumHadir / sumTotal) * 100) : 0;
+        const rataKehadiranPct = sumTotal > 0 ? Math.round((sumHadir / sumTotal) * 100) : 100;
+        const sakitPct = sumTotal > 0 ? Math.round((sumSakit / sumTotal) * 100) : 0;
+        const izinPct = sumTotal > 0 ? Math.round((sumIzin / sumTotal) * 100) : 0;
+        const alfaPct = sumTotal > 0 ? Math.round((sumAlfa / sumTotal) * 100) : 0;
         const distinctMateri = Array.from(
           new Set(
             sortedSes
@@ -5841,10 +5864,17 @@ class PintarStore {
           lajuPct,
           statusLaju,
           rataKehadiranPct,
+          sakitPct,
+          izinPct,
+          alfaPct,
+          totalHadir: sumHadir,
+          totalSakit: sumSakit,
+          totalIzin: sumIzin,
+          totalAlfa: sumAlfa,
           jumlahTopikUnik: distinctMateri.length,
           materiTerakhir: sortedSes[0]?.materi || '-',
           tanggalTerakhir: sortedSes[0]?.tanggal || '-',
-          riwayatMateri: sortedSes.slice(0, 8),
+          riwayatMateri: sortedSes.slice(0, 12),
         };
       })
       .sort((a, b) => a.kelas.localeCompare(b.kelas, 'id', { numeric: true }) || a.mapel.localeCompare(b.mapel));
@@ -6637,21 +6667,39 @@ class PintarStore {
         .sort((a, b) => b.tanggal.localeCompare(a.tanggal));
       const stat = this.buildDivisiStat(logs);
       const latestWithProgress = logs.find((l) => l.setoran || l.tilawah || l.murajaah) || logs[0];
+      const setoranCount = logs.filter((l) => l.setoran && l.setoran.trim() !== '' && l.setoran.trim() !== '-').length;
+      const murajaahCount = logs.filter((l) => (l.murajaah && l.murajaah.trim() !== '' && l.murajaah.trim() !== '-') || (l.tilawah && l.tilawah.trim() !== '' && l.tilawah.trim() !== '-')).length;
+      const latestLog = logs[0];
       return {
         id: st.id,
         nis: st.nis || '-',
         nama: st.nama,
         gender: st.gender,
         kelas: st.kelas,
+        kamar: st.kamar || '-',
         kelompokQuran: st.kelompokQuran || '-',
         pengampuQuran: st.pengampuQuran || reqGuruRaw || '-',
         persenHadir: stat.persenHadir,
         totalHadir: stat.H + stat.T,
+        totalSakit: stat.S,
+        totalIzin: stat.I,
+        totalAlfa: stat.A,
         totalAbsen: stat.S + stat.I + stat.A,
+        setoranCount,
+        murajaahCount,
+        statusTerakhir: latestLog?.status || 'H',
         lastSetoran: latestWithProgress?.setoran || '-',
         lastTilawah: latestWithProgress?.tilawah || '-',
         lastMurajaah: latestWithProgress?.murajaah || '-',
         lastTanggal: latestWithProgress?.tanggal || '-',
+        riwayatHalaqah: logs.slice(0, 8).map((l) => ({
+          tanggal: l.tanggal,
+          status: l.status,
+          setoran: l.setoran || '-',
+          tilawah: l.tilawah || '-',
+          murajaah: l.murajaah || '-',
+          keterangan: l.keterangan || '-',
+        })),
       };
     });
 
