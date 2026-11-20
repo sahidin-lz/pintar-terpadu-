@@ -186,20 +186,28 @@ export function saveSnapshotToLocalMirror(snap: Record<string, unknown> | null |
 }
 
 let hydrationInFlight: Promise<boolean> | null = null;
+let hasHydratedInSession = false;
 
 export function ensureServerHydratedFromMirror(): Promise<boolean> {
   if (typeof window === 'undefined') return Promise.resolve(false);
+  if (hasHydratedInSession) return Promise.resolve(false);
   if (hydrationInFlight) return hydrationInFlight;
 
   hydrationInFlight = (async () => {
     try {
       const mirrorRaw =
         localStorage.getItem(DB_MIRROR_KEY) || localStorage.getItem(LEGACY_BUNDLED_MIRROR_KEY);
-      if (!mirrorRaw) return false;
+      if (!mirrorRaw) {
+        hasHydratedInSession = true;
+        return false;
+      }
 
       const mirrorSnap = JSON.parse(mirrorRaw) as Record<string, unknown>;
       const mirrorScore = scoreSnapshotObject(mirrorSnap);
-      if (mirrorScore <= 0) return false;
+      if (mirrorScore <= 0) {
+        hasHydratedInSession = true;
+        return false;
+      }
 
       // If a valid non-empty mirror exists in localStorage, clear any stale explicitEmpty flag
       try {
@@ -208,6 +216,7 @@ export function ensureServerHydratedFromMirror(): Promise<boolean> {
         // Ignore
       }
 
+      hasHydratedInSession = true;
       const restoreRes = await fetch('/api/system/restore-snapshot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -215,7 +224,6 @@ export function ensureServerHydratedFromMirror(): Promise<boolean> {
       });
 
       if (restoreRes.ok) {
-        window.dispatchEvent(new CustomEvent('pintar:data-restored'));
         return true;
       }
       return false;
