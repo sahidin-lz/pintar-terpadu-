@@ -31,6 +31,7 @@ import {
 } from '../utils/exportHelpers';
 import {
   emitDataMutated,
+  ensureServerHydratedFromMirror,
   loadScopedState,
   loadSubTab,
   saveScopedState,
@@ -161,7 +162,15 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
     }
   }, [initialGuru, loggedInUser]);
 
-  // Load filtered teacher list whenever jenis or gender changes
+  useEffect(() => {
+    const onRestored = () => {
+      setTargetRefreshTick((n) => n + 1);
+    };
+    window.addEventListener('pintar:data-restored', onRestored);
+    return () => window.removeEventListener('pintar:data-restored', onRestored);
+  }, []);
+
+  // Load filtered teacher list whenever jenis, gender, or targetRefreshTick changes
   useEffect(() => {
     let active = true;
 
@@ -172,34 +181,16 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
         );
         let list: TeacherPublic[] = res.ok ? await res.json() : [];
 
-        // If serverless container cold-started empty, auto-restore from localStorage template mirror
+        // If serverless container or dev server cold-started empty, auto-restore from localStorage mirror
         if (list.length === 0) {
-          try {
-            const explicitEmpty = localStorage.getItem('pintar_db_explicit_empty_v1') === '1';
-            const mirrorRaw = localStorage.getItem('pintar_db_template_only_v2');
-            if (!explicitEmpty && mirrorRaw) {
-              const mirrorSnap = JSON.parse(mirrorRaw);
-              if (
-                (Array.isArray(mirrorSnap?.students) && mirrorSnap.students.length > 0) ||
-                (Array.isArray(mirrorSnap?.teachers) && mirrorSnap.teachers.length > 1)
-              ) {
-                const restoreRes = await fetch('/api/system/restore-snapshot', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ snapshot: mirrorSnap, mode: 'merge' }),
-                });
-                if (restoreRes.ok) {
-                  const retryRes = await fetch(
-                    `/api/presensi/teachers?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(gender)}`,
-                  );
-                  if (retryRes.ok) {
-                    list = await retryRes.json();
-                  }
-                }
-              }
+          const restored = await ensureServerHydratedFromMirror();
+          if (restored) {
+            const retryRes = await fetch(
+              `/api/presensi/teachers?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(gender)}`,
+            );
+            if (retryRes.ok) {
+              list = await retryRes.json();
             }
-          } catch {
-            // Ignore mirror parse/restore error
           }
         }
 
@@ -221,12 +212,15 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
 
         if (Array.isArray(list) && list.length > 0) {
           setNamaGuru((prev) => {
-            if (prev && list.some((t) => t.nama === prev)) {
-              return prev;
+            if (prev) {
+              const exactOrCaseMatch = list.find(
+                (t) => t.nama.trim().toUpperCase() === prev.trim().toUpperCase(),
+              );
+              if (exactOrCaseMatch) return exactOrCaseMatch.nama;
             }
             if (isRealTeachingUser(loggedInUser)) {
               const matchedUser = list.find(
-                (t) => t.nama.toUpperCase() === loggedInUser!.nama.toUpperCase(),
+                (t) => t.nama.trim().toUpperCase() === loggedInUser!.nama.trim().toUpperCase(),
               );
               if (matchedUser) return matchedUser.nama;
             }
@@ -244,7 +238,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
     return () => {
       active = false;
     };
-  }, [jenis, gender, loggedInUser]);
+  }, [jenis, gender, loggedInUser, targetRefreshTick]);
 
   // Load target rooms / classes whenever guru, jenis, gender, tanggal, or targetRefreshTick changes
   useEffect(() => {
@@ -260,9 +254,24 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
     setLoadingTargets(true);
 
     const url = `/api/presensi/opsi?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(gender)}&guru=${encodeURIComponent(namaGuru)}&hari=${encodeURIComponent(hari)}&tanggal=${encodeURIComponent(tanggal)}`;
-    fetch(url)
-      .then((r) => r.json())
-      .then((data) => {
+
+    const fetchAndBuildTargets = async () => {
+      try {
+        let res = await fetch(url);
+        let data = res.ok ? await res.json() : {};
+        const isEmpty =
+          jenis === 'Asrama'
+            ? !Array.isArray(data.rooms) || data.rooms.length === 0
+            : !Array.isArray(data.jadwal) || data.jadwal.length === 0;
+
+        if (isEmpty) {
+          const restored = await ensureServerHydratedFromMirror();
+          if (restored) {
+            res = await fetch(url);
+            data = res.ok ? await res.json() : {};
+          }
+        }
+
         if (!active) return;
         const opts: TargetOption[] = [];
         if (jenis === 'Asrama' && Array.isArray(data.rooms)) {
@@ -323,10 +332,12 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
           }
           return opts.length >= 1 ? opts[0].value : '';
         });
-      })
-      .finally(() => {
+      } finally {
         if (active) setLoadingTargets(false);
-      });
+      }
+    };
+
+    fetchAndBuildTargets();
 
     return () => {
       active = false;
@@ -343,9 +354,18 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
     let active = true;
     setLoadingSiswa(true);
     const url = `/api/presensi/siswa?tanggal=${encodeURIComponent(tanggal)}&guru=${encodeURIComponent(namaGuru)}&targetGrup=${encodeURIComponent(targetGrup)}&mapel=${encodeURIComponent(mapel)}&jenisPresensi=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(gender)}`;
-    fetch(url)
-      .then((r) => r.json())
-      .then((data) => {
+
+    const fetchRoster = async () => {
+      try {
+        let res = await fetch(url);
+        let data = res.ok ? await res.json() : {};
+        if (!Array.isArray(data.siswa) || data.siswa.length === 0) {
+          const restored = await ensureServerHydratedFromMirror();
+          if (restored) {
+            res = await fetch(url);
+            data = res.ok ? await res.json() : {};
+          }
+        }
         if (!active) return;
         if (data.error) {
           notify(data.error, 'error');
@@ -355,14 +375,16 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
         setMateri(data.materi || '');
         setIsEditMode(Boolean(data.isEdit));
         setGrupAktif(data.grupAktif || targetGrup);
-      })
-      .finally(() => {
+      } finally {
         if (active) setLoadingSiswa(false);
-      });
+      }
+    };
+
+    fetchRoster();
     return () => {
       active = false;
     };
-  }, [selectedTarget, tanggal, namaGuru, jenis, gender, notify]);
+  }, [selectedTarget, tanggal, namaGuru, jenis, gender, targetRefreshTick, notify]);
 
   const handleStatusChange = (idx: number, status: AttendanceStatus) => {
     setSiswaList((prev) =>

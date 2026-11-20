@@ -41,7 +41,11 @@ import {
   shiftDateStr,
 } from '../utils/exportHelpers';
 import { getAcademicSemester } from '../utils/semesterHelpers';
-import { loadSubTab, saveSubTab } from '../utils/sessionPersistence';
+import {
+  ensureServerHydratedFromMirror,
+  loadSubTab,
+  saveSubTab,
+} from '../utils/sessionPersistence';
 
 interface Props {
   options: ReportOptions | null;
@@ -131,8 +135,18 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
   const fetchMonitoring = async (tgl: string) => {
     setLoadingMon(true);
     try {
-      const res = await fetch(`/api/monitoring?tanggal=${encodeURIComponent(tgl)}`);
-      const data = await res.json();
+      let res = await fetch(`/api/monitoring?tanggal=${encodeURIComponent(tgl)}`);
+      let data = await res.json();
+      if (
+        (!data?.putra?.asrama || data.putra.asrama.length === 0) &&
+        (!data?.putri?.asrama || data.putri.asrama.length === 0)
+      ) {
+        const restored = await ensureServerHydratedFromMirror();
+        if (restored) {
+          res = await fetch(`/api/monitoring?tanggal=${encodeURIComponent(tgl)}`);
+          data = await res.json();
+        }
+      }
       setMonData(data);
     } catch {
       notify('Gagal memuat matriks monitoring.', 'error');
@@ -188,6 +202,20 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
   useEffect(() => {
     fetchMonthlySummary(statsBulan, statsWilayah, statsKelas);
   }, [statsBulan, statsWilayah, statsKelas]);
+
+  useEffect(() => {
+    const onSync = () => {
+      fetchMonitoring(tglMonitoring);
+      fetchAnalisis(tglAnalisis, statsWilayah);
+      fetchMonthlySummary(statsBulan, statsWilayah, statsKelas);
+    };
+    window.addEventListener('pintar:data-restored', onSync);
+    window.addEventListener('pintar:data-mutated', onSync);
+    return () => {
+      window.removeEventListener('pintar:data-restored', onSync);
+      window.removeEventListener('pintar:data-mutated', onSync);
+    };
+  }, [tglMonitoring, tglAnalisis, statsWilayah, statsBulan, statsKelas]);
 
   // Reset statsKelas if not in statsScopedClasses
   useEffect(() => {

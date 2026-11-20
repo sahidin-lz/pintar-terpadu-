@@ -117,7 +117,14 @@ const BUNDLED_DATA_DIR = resolveBundledDataDir();
 const BUNDLED_DB_FILE = path.join(BUNDLED_DATA_DIR, 'pintar-db.json');
 const BUNDLED_BACKUP_FILE = path.join(BUNDLED_DATA_DIR, 'pintar-db.backup.json');
 
-const RUNTIME_DATA_DIR = process.env.VERCEL ? '/tmp/pintar-data' : BUNDLED_DATA_DIR;
+const WORKSPACE_DB_FILE = path.resolve(process.cwd(), '.pintar-runtime-db.json');
+const WORKSPACE_BACKUP_FILE = path.resolve(process.cwd(), '.pintar-runtime-db.backup.json');
+
+const TMP_DATA_DIR = '/tmp/pintar-data';
+const TMP_DB_FILE = path.join(TMP_DATA_DIR, 'pintar-db.json');
+const TMP_BACKUP_FILE = path.join(TMP_DATA_DIR, 'pintar-db.backup.json');
+
+const RUNTIME_DATA_DIR = process.env.VERCEL ? TMP_DATA_DIR : BUNDLED_DATA_DIR;
 const DB_FILE = path.join(RUNTIME_DATA_DIR, 'pintar-db.json');
 const DB_BACKUP_FILE = path.join(RUNTIME_DATA_DIR, 'pintar-db.backup.json');
 
@@ -209,8 +216,14 @@ function normGroupCode(raw?: string): string {
   if (!s || s === '-' || s === 'KOSONG') return '';
   return s
     .replace(/^(KELAS|KAMAR|ASRAMA|HUJROH|KELOMPOK|KELP\.?|HALAQAH)\s+/i, '')
-    .replace(/[\s\-_.]+/g, '')
-    .replace(/0+(\d+)/g, '$1');
+    .replace(/\bXII\b/g, '12')
+    .replace(/\bXI\b/g, '11')
+    .replace(/\bX\b/g, '10')
+    .replace(/\b0+(\d+)\b/g, '$1')
+    .replace(/[\-_.\/]+/g, '.')
+    .replace(/\s*\.\s*/g, '.')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function matchGroupCode(a?: string, b?: string): boolean {
@@ -218,10 +231,51 @@ function matchGroupCode(a?: string, b?: string): boolean {
   const rawB = String(b || '').trim().toUpperCase();
   if (!rawA || !rawB || rawA === '-' || rawB === '-') return false;
   if (rawA === rawB) return true;
+
+  // Reject cross-gender matches when both explicitly specify opposite genders
+  const aPutra = /\b(PUTRA|IKHWAN)\b/.test(rawA);
+  const aPutri = /\b(PUTRI|AKHWAT)\b/.test(rawA);
+  const bPutra = /\b(PUTRA|IKHWAN)\b/.test(rawB);
+  const bPutri = /\b(PUTRI|AKHWAT)\b/.test(rawB);
+  if ((aPutra && bPutri) || (aPutri && bPutra)) return false;
+
   const na = normGroupCode(rawA);
   const nb = normGroupCode(rawB);
   if (!na || !nb) return false;
-  return na === nb;
+  if (na === nb) return true;
+
+  // Compare after stripping trailing/embedded gender words (e.g. "10.10 PUTRA" vs "10.10", or "11 MIPA 1 PUTRA" vs "11 MIPA 1")
+  const stripGenderWord = (v: string) =>
+    v
+      .replace(/\b(PUTRA|PUTRI|IKHWAN|AKHWAT)\b/g, '')
+      .replace(/\s*\.\s*/g, '.')
+      .replace(/^\.+|\.+$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const baseA = stripGenderWord(na);
+  const baseB = stripGenderWord(nb);
+  if (!baseA || !baseB) return false;
+  if (baseA === baseB) return true;
+
+  // Strictly enforce identical numeric token sequence so "10.1" never matches "10.10", "10.11" never matches "11.1", "11 MIPA 1" never matches "11 MIPA 2"
+  const numsA = (baseA.match(/\d+/g) || []).join('.');
+  const numsB = (baseB.match(/\d+/g) || []).join('.');
+  if (numsA !== numsB) return false;
+
+  // If both are named classes with identical numbers (e.g. "10 ABU BAKAR" vs "10 ABU BAKAR AS.SHIDDIQ"), allow prefix match on word/dot boundary
+  if (/[A-Z]{3,}/.test(baseA) && /[A-Z]{3,}/.test(baseB)) {
+    if (
+      baseA.startsWith(baseB + ' ') ||
+      baseB.startsWith(baseA + ' ') ||
+      baseA.startsWith(baseB + '.') ||
+      baseB.startsWith(baseA + '.')
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function isQuranScheduleItem(item: { mapel?: string; kategori?: string; kelas?: string }): boolean {
@@ -303,7 +357,9 @@ export function createSuperAdminRecord(): TeacherRecord {
 
 function ensureSuperAdmin(teachers: TeacherRecord[]): TeacherRecord[] {
   const withoutOld = teachers.filter(
-    (t) => t.id !== SUPER_ADMIN_ID && t.username.toLowerCase() !== SUPER_ADMIN_EMAIL
+    (t) =>
+      t.id !== SUPER_ADMIN_ID &&
+      !(t.peran === 'Admin Super' && t.username.toLowerCase() === SUPER_ADMIN_EMAIL),
   );
   return [createSuperAdminRecord(), ...withoutOld];
 }
@@ -400,6 +456,13 @@ class PintarStore {
   constructor() {
     try {
       this.db = this.loadFromDisk();
+      if (
+        this.db.students.length > 0 ||
+        this.db.schedules.length > 0 ||
+        this.db.rooms.length > 0
+      ) {
+        this.reconcileDatabaseRelations('1234');
+      }
     } catch {
       this.db = createInitialDatabase();
     }
@@ -465,15 +528,31 @@ class PintarStore {
 
   private loadFromDisk(): DatabaseSchema {
     try {
+      const runtimePrimaryFiles = new Set([WORKSPACE_DB_FILE, TMP_DB_FILE]);
+      const runtimeFiles = new Set([
+        WORKSPACE_DB_FILE,
+        WORKSPACE_BACKUP_FILE,
+        TMP_DB_FILE,
+        TMP_BACKUP_FILE,
+      ]);
       const candidates = Array.from(
-        new Set([DB_FILE, DB_BACKUP_FILE, BUNDLED_DB_FILE, BUNDLED_BACKUP_FILE]),
+        new Set([
+          WORKSPACE_DB_FILE,
+          WORKSPACE_BACKUP_FILE,
+          TMP_DB_FILE,
+          TMP_BACKUP_FILE,
+          DB_FILE,
+          DB_BACKUP_FILE,
+          BUNDLED_DB_FILE,
+          BUNDLED_BACKUP_FILE,
+        ]),
       );
 
       let bestRuntime: { db: DatabaseSchema; score: number } | null = null;
       let bestAny: { db: DatabaseSchema; score: number } | null = null;
+      let runtimeExplicitEmpty: DatabaseSchema | null = null;
 
-      for (let i = 0; i < candidates.length; i++) {
-        const file = candidates[i];
+      for (const file of candidates) {
         if (!fs.existsSync(file)) continue;
         try {
           const raw = fs.readFileSync(file, 'utf-8');
@@ -483,12 +562,16 @@ class PintarStore {
           const normalized = this.normalizeLoadedSchema(parsed);
           const score = this.scoreDatabase(normalized);
 
-          // Respect explicit user reset only if the runtime primary file explicitly records it
-          if (file === DB_FILE && normalized.settings?.explicitEmpty && score === 0) {
-            return normalized;
+          if (
+            runtimePrimaryFiles.has(file) &&
+            normalized.settings?.explicitEmpty &&
+            score === 0 &&
+            !runtimeExplicitEmpty
+          ) {
+            runtimeExplicitEmpty = normalized;
           }
 
-          if (i < 2 && score > 0 && (!bestRuntime || score > bestRuntime.score)) {
+          if (runtimeFiles.has(file) && score > 0 && (!bestRuntime || score > bestRuntime.score)) {
             bestRuntime = { db: normalized, score };
           }
           if (!bestAny || score > bestAny.score) {
@@ -499,8 +582,11 @@ class PintarStore {
         }
       }
 
-      if (bestRuntime && bestAny && bestRuntime.score >= bestAny.score) {
+      if (bestRuntime && bestRuntime.score > 0) {
         return bestRuntime.db;
+      }
+      if (runtimeExplicitEmpty) {
+        return runtimeExplicitEmpty;
       }
       if (bestAny && bestAny.score > 0) {
         return bestAny.db;
@@ -535,21 +621,31 @@ class PintarStore {
     } else if (options?.explicitEmpty !== undefined) {
       target.settings.explicitEmpty = options.explicitEmpty;
     }
-    try {
-      if (!fs.existsSync(RUNTIME_DATA_DIR)) {
-        fs.mkdirSync(RUNTIME_DATA_DIR, { recursive: true });
+
+    const serialized = JSON.stringify(target, null, 2);
+    const writeTargetPair = (primaryPath: string, backupPath: string) => {
+      try {
+        const dir = path.dirname(primaryPath);
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        const tmpFile = `${primaryPath}.tmp`;
+        fs.writeFileSync(tmpFile, serialized, 'utf-8');
+        fs.renameSync(tmpFile, primaryPath);
+        if (hasData) {
+          const tmpBackup = `${backupPath}.tmp`;
+          fs.writeFileSync(tmpBackup, serialized, 'utf-8');
+          fs.renameSync(tmpBackup, backupPath);
+        }
+      } catch {
+        // Ignore permission errors on read-only directories
       }
-      const serialized = JSON.stringify(target, null, 2);
-      const tmpFile = `${DB_FILE}.tmp`;
-      fs.writeFileSync(tmpFile, serialized, 'utf-8');
-      fs.renameSync(tmpFile, DB_FILE);
-      if (hasData) {
-        const tmpBackup = `${DB_BACKUP_FILE}.tmp`;
-        fs.writeFileSync(tmpBackup, serialized, 'utf-8');
-        fs.renameSync(tmpBackup, DB_BACKUP_FILE);
-      }
-    } catch {
-      // In read-only serverless environments (e.g., Vercel), keep state in memory without crashing
+    };
+
+    writeTargetPair(WORKSPACE_DB_FILE, WORKSPACE_BACKUP_FILE);
+    writeTargetPair(TMP_DB_FILE, TMP_BACKUP_FILE);
+    if (DB_FILE !== TMP_DB_FILE && DB_FILE !== WORKSPACE_DB_FILE) {
+      writeTargetPair(DB_FILE, DB_BACKUP_FILE);
     }
   }
 
@@ -634,7 +730,10 @@ class PintarStore {
 
     const uname = (payload.username || makeUsername(cleanNama)).trim().toLowerCase();
     const exists = this.db.teachers.find(
-      (t) => normalizeStr(t.nama) === normalizeStr(cleanNama) || t.username.toLowerCase() === uname
+      (t) =>
+        t.id !== SUPER_ADMIN_ID &&
+        t.peran !== 'Admin Super' &&
+        (normalizeStr(t.nama) === normalizeStr(cleanNama) || t.username.toLowerCase() === uname),
     );
     if (exists) {
       return { ok: false, error: `Akun dengan nama "${cleanNama}" atau username "${uname}" sudah terdaftar.` };
@@ -712,28 +811,41 @@ class PintarStore {
       return { ok: false, error: 'Masukkan Token Login pegawai sesuai sheet Master_Pegawai pada Template.' };
     }
 
-    // 1. Fast-path Super Admin verification
-    if (SUPER_ADMIN_ACCEPTED_IDS.has(req) || (!req && SUPER_ADMIN_ACCEPTED_PINS.has(cleanPin) && cleanPin === SUPER_ADMIN_PIN)) {
-      const superAdmin =
-        this.db.teachers.find((t) => t.id === SUPER_ADMIN_ID || t.peran === 'Admin Super') ||
-        createSuperAdminRecord();
-      if (superAdmin.pin === cleanPin || SUPER_ADMIN_ACCEPTED_PINS.has(cleanPin)) {
-        return { ok: true, teacher: { ...superAdmin } };
-      }
+    // 1. Fast-path Super Admin verification (only intercept 'sahidin' when Super Admin PIN is entered, so teacher SAHIDIN can also login with teacher token)
+    const isExplicitSuperAdminId =
+      req === 'sahidin30@gmail.com' ||
+      req === 'sahidin30' ||
+      req === 'admin' ||
+      req === 'admin super' ||
+      req === 'sahidin (admin super)';
+    const superAdmin =
+      this.db.teachers.find((t) => t.id === SUPER_ADMIN_ID || t.peran === 'Admin Super') ||
+      createSuperAdminRecord();
+    const isSuperAdminPinMatch =
+      superAdmin.pin === cleanPin || SUPER_ADMIN_ACCEPTED_PINS.has(cleanPin);
+
+    if (
+      (SUPER_ADMIN_ACCEPTED_IDS.has(req) && isSuperAdminPinMatch) ||
+      (!req && cleanPin === SUPER_ADMIN_PIN)
+    ) {
+      return { ok: true, teacher: { ...superAdmin } };
+    }
+    if (isExplicitSuperAdminId && !isSuperAdminPinMatch) {
       return {
         ok: false,
         error: 'PIN Admin Super tidak cocok. Gunakan PIN default: 121320.',
       };
     }
 
-    // 2. Match by explicit teacher name / username + Token Login from uploaded Template
+    // 2. Match by explicit teacher name / username + Token Login from uploaded Template (excluding SUPER_ADMIN_ID)
     const teacher = req
       ? this.db.teachers.find(
           (t) =>
-            normalizeStr(t.nama) === req ||
-            normalizeStr(t.username) === req ||
-            normalizeStr(t.username.split('@')[0]) === req ||
-            normalizeStr(t.id) === req,
+            t.id !== SUPER_ADMIN_ID &&
+            (normalizeStr(t.nama) === req ||
+              normalizeStr(t.username) === req ||
+              normalizeStr(t.username.split('@')[0]) === req ||
+              normalizeStr(t.id) === req),
         )
       : undefined;
 
@@ -1418,14 +1530,17 @@ class PintarStore {
     let updated = 0;
     for (const r of payload.rows) {
       const cleanNama = r.nama.trim().toUpperCase();
-      if (!cleanNama) continue;
+      if (!cleanNama || cleanNama.includes('ADMIN SUPER') || r.peran === 'Admin Super') continue;
       const existing = this.db.teachers.find(
         (t) =>
-          matchTeacherName(t.nama, cleanNama) ||
-          (r.username && normalizeStr(t.username) === normalizeStr(r.username))
+          t.id !== SUPER_ADMIN_ID &&
+          t.peran !== 'Admin Super' &&
+          (matchTeacherName(t.nama, cleanNama) ||
+            (r.username &&
+              normalizeStr(r.username) !== SUPER_ADMIN_EMAIL &&
+              normalizeStr(t.username) === normalizeStr(r.username))),
       );
       if (existing) {
-        if (existing.id === SUPER_ADMIN_ID) continue;
         const extras = new Set<UserRole>(existing.peranTambahan || []);
         (r.peranTambahan || []).forEach((p) => extras.add(p));
         if (existing.peran && existing.peran !== r.peran) {
@@ -1585,7 +1700,13 @@ class PintarStore {
     ) => {
       if (!rawName || isPlaceholderTeacherName(rawName)) return;
       const cleanNama = rawName.trim().replace(/\s+/g, ' ').toUpperCase();
-      let rec = this.db.teachers.find((t) => matchTeacherName(t.nama, cleanNama));
+      if (cleanNama.includes('ADMIN SUPER')) return;
+      let rec = this.db.teachers.find(
+        (t) =>
+          t.id !== SUPER_ADMIN_ID &&
+          t.peran !== 'Admin Super' &&
+          matchTeacherName(t.nama, cleanNama),
+      );
 
       if (!rec) {
         rec = {
@@ -1606,8 +1727,6 @@ class PintarStore {
         this.db.teachers.push(rec);
         return;
       }
-
-      if (rec.id === SUPER_ADMIN_ID) return;
 
       // Ensure unique Token Login exists on existing record if missing
       if (!rec.pin) {
@@ -2730,12 +2849,14 @@ class PintarStore {
 
       if (Array.isArray(snapshot.teachers)) {
         for (const t of snapshot.teachers) {
-          if (!t?.nama || t.peran === 'Admin Super') continue;
+          if (!t?.nama || t.id === SUPER_ADMIN_ID || t.peran === 'Admin Super') continue;
           const exists = this.db.teachers.find(
             (x) =>
-              normalizeStr(x.nama) === normalizeStr(t.nama) ||
-              normalizeStr(x.username) === normalizeStr(t.username) ||
-              matchTeacherName(x.nama, t.nama),
+              x.id !== SUPER_ADMIN_ID &&
+              x.peran !== 'Admin Super' &&
+              (normalizeStr(x.nama) === normalizeStr(t.nama) ||
+                normalizeStr(x.username) === normalizeStr(t.username) ||
+                matchTeacherName(x.nama, t.nama)),
           );
           if (!exists) {
             this.db.teachers.push({
@@ -3101,16 +3222,16 @@ class PintarStore {
     if (!req) return [];
 
     // 1. Rooms from teacher's kamarBinaan in Master_Pegawai
-    const matchedTeachers = this.db.teachers.filter((t) => matchTeacherName(t.nama, namaGuru));
+    const matchedTeachers = this.db.teachers.filter(
+      (t) => t.id !== SUPER_ADMIN_ID && t.peran !== 'Admin Super' && matchTeacherName(t.nama, namaGuru),
+    );
+    const oppositeRegex = gender === 'Putra' ? /\b(PUTRI|AKHWAT)\b/i : /\b(PUTRA|IKHWAN)\b/i;
     const fromTeacherRecord: string[] = [];
     for (const t of matchedTeachers) {
       for (const km of t.kamarBinaan || []) {
         const cleanKm = km.trim();
-        if (cleanKm && cleanKm !== '-') {
-          const rGender: Gender = t.genderScope === 'Putri' ? 'Putri' : inferGender(cleanKm);
-          if (rGender === gender || t.genderScope === gender) {
-            fromTeacherRecord.push(cleanKm);
-          }
+        if (cleanKm && cleanKm !== '-' && !oppositeRegex.test(cleanKm)) {
+          fromTeacherRecord.push(cleanKm);
         }
       }
     }
@@ -3119,7 +3240,7 @@ class PintarStore {
     const fromStudents = this.db.students
       .filter(
         (s) =>
-          s.gender === gender &&
+          (s.gender === gender || !oppositeRegex.test(s.kamar || '')) &&
           s.kamar &&
           s.kamar !== '-' &&
           s.musyrif &&
@@ -3133,7 +3254,7 @@ class PintarStore {
         (r) =>
           r.kamar &&
           r.kamar !== '-' &&
-          r.gender === gender &&
+          (r.gender === gender || !oppositeRegex.test(r.kamar)) &&
           r.musyrif &&
           matchTeacherName(r.musyrif, namaGuru),
       )
@@ -3179,15 +3300,22 @@ class PintarStore {
     const asramaStudentSetToday = new Set(asramaLogsToday.map((l) => normalizeStr(l.namaSiswa)));
 
     // Check if this teacher directly owns these rooms (not just fallback to all gender rooms)
-    const teacherRecord = this.db.teachers.find((t) => matchTeacherName(t.nama, namaGuru));
+    const teacherRecord = this.db.teachers.find(
+      (t) => t.id !== SUPER_ADMIN_ID && t.peran !== 'Admin Super' && matchTeacherName(t.nama, namaGuru),
+    );
     const hasOwnRooms =
       Boolean(teacherRecord?.kamarBinaan && teacherRecord.kamarBinaan.length > 0) ||
-      this.db.students.some((s) => s.gender === gender && s.musyrif && matchTeacherName(s.musyrif, namaGuru)) ||
-      this.db.rooms.some((r) => r.gender === gender && r.musyrif && matchTeacherName(r.musyrif, namaGuru));
+      this.db.students.some((s) => s.musyrif && matchTeacherName(s.musyrif, namaGuru)) ||
+      this.db.rooms.some((r) => r.musyrif && matchTeacherName(r.musyrif, namaGuru));
 
     return rooms.map((km) => {
-      const rmObj = this.db.rooms.find((r) => r.gender === gender && matchGroupCode(r.kamar, km));
-      const roomStudents = this.db.students.filter((s) => s.gender === gender && matchGroupCode(s.kamar, km));
+      const rmObj =
+        this.db.rooms.find((r) => r.gender === gender && matchGroupCode(r.kamar, km)) ||
+        this.db.rooms.find((r) => matchGroupCode(r.kamar, km));
+      let roomStudents = this.db.students.filter((s) => s.gender === gender && matchGroupCode(s.kamar, km));
+      if (roomStudents.length === 0) {
+        roomStudents = this.db.students.filter((s) => matchGroupCode(s.kamar, km));
+      }
       const studentMusyrif = roomStudents.find((s) => s.musyrif && !isPlaceholderTeacherName(s.musyrif))?.musyrif;
       const musyrif = hasOwnRooms
         ? (teacherRecord?.nama || namaGuru.trim().toUpperCase())
@@ -3340,20 +3468,105 @@ class PintarStore {
         addResult(`HALAQAH ${namaGuru.trim().toUpperCase()}`, "HALAQAH AL-QUR'AN", 'Halaqah');
       }
 
+      if (results.length === 0) {
+        const anyDayQuranSchedules = this.db.schedules.filter(
+          (sc) =>
+            isQuranScheduleItem(sc) &&
+            (sc.gender === gender || !sc.gender) &&
+            matchTeacherName(sc.guru, namaGuru),
+        );
+        for (const sc of anyDayQuranSchedules) {
+          addResult(sc.kelas, sc.mapel || "HALAQAH AL-QUR'AN", sc.hari ? `${sc.hari} · ${sc.jamKe}` : sc.jamKe);
+        }
+      }
+
+      // 4. Fallback if teacher has no bound Al-Qur'an group yet: show all distinct kelompokQuran of that gender
+      if (results.length === 0) {
+        const allGroups = new Map<string, string>();
+        for (const st of this.db.students) {
+          if (st.gender !== gender) continue;
+          const klp = (st.kelompokQuran && st.kelompokQuran !== '-' ? st.kelompokQuran : st.kelas || '').trim();
+          if (klp && klp !== '-') {
+            const code = normGroupCode(klp) || klp.toUpperCase();
+            if (!allGroups.has(code)) {
+              allGroups.set(code, klp.toUpperCase());
+            }
+          }
+        }
+        for (const klp of Array.from(allGroups.values()).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }))) {
+          addResult(klp, "HALAQAH AL-QUR'AN", 'Kode Kelas Al-Qur’an');
+        }
+      }
+
       return results;
     }
 
-    // jenis === 'Belajar' (Akademik): strictly filter by selected day (reqHari), teacher, and gender
+    // jenis === 'Belajar' (Akademik):
+    const oppositeGenderRegex = gender === 'Putra' ? /\b(PUTRI|AKHWAT)\b/i : /\b(PUTRA|IKHWAN)\b/i;
+
+    // 1. Primary: schedules matching selected day (reqHari), teacher, and gender
     const todayAcademicSchedules = this.db.schedules.filter(
       (sc) =>
         !isQuranScheduleItem(sc) &&
-        sc.gender === gender &&
+        (sc.gender === gender || !oppositeGenderRegex.test(sc.kelas || '')) &&
         matchTeacherName(sc.guru, namaGuru) &&
         (!reqHari || normalizeDayName(sc.hari) === reqHari),
     );
 
     for (const sc of todayAcademicSchedules) {
       addResult(sc.kelas, sc.mapel, sc.jamKe);
+    }
+
+    // 2. Fallback if teacher has no schedule on reqHari (e.g. Sunday/Holiday or different day in template):
+    // show their schedules from other days (with day label in jamKe) so the teacher is never blocked from filling presensi
+    if (results.length === 0) {
+      const anyDayAcademicSchedules = this.db.schedules.filter(
+        (sc) =>
+          !isQuranScheduleItem(sc) &&
+          (sc.gender === gender || !sc.gender || !oppositeGenderRegex.test(sc.kelas || '')) &&
+          matchTeacherName(sc.guru, namaGuru),
+      );
+      for (const sc of anyDayAcademicSchedules) {
+        const jamWithDay = sc.hari ? `${sc.hari} · Jam ${sc.jamKe || '1-2'}` : sc.jamKe || '1-2';
+        addResult(sc.kelas, sc.mapel, jamWithDay);
+      }
+    }
+
+    // 3. Fallback if teacher is a Wali Kelas or has classes in students/teachers without explicit schedule rows yet
+    if (results.length === 0) {
+      const matchedTeachers = this.db.teachers.filter(
+        (t) => t.id !== SUPER_ADMIN_ID && t.peran !== 'Admin Super' && matchTeacherName(t.nama, namaGuru),
+      );
+      for (const t of matchedTeachers) {
+        if (t.waliKelasOf && t.waliKelasOf !== '-') {
+          for (const wk of t.waliKelasOf.split(/[;,]/).map((s) => s.trim()).filter(Boolean)) {
+            if (!oppositeGenderRegex.test(wk)) {
+              addResult(wk, 'PEMBELAJARAN KELAS', 'Wali Kelas');
+            }
+          }
+        }
+      }
+      for (const st of this.db.students) {
+        if (st.gender === gender && st.waliKelas && matchTeacherName(st.waliKelas, namaGuru) && st.kelas && st.kelas !== '-') {
+          addResult(st.kelas, 'PEMBELAJARAN KELAS', 'Wali Kelas');
+        }
+      }
+    }
+
+    // 4. Final fallback: all distinct academic classes of that gender so any substitute/new teacher can still take attendance
+    if (results.length === 0) {
+      const allClasses = new Map<string, string>();
+      for (const st of this.db.students) {
+        if (st.gender === gender && st.kelas && st.kelas !== '-') {
+          const code = normGroupCode(st.kelas) || st.kelas.toUpperCase();
+          if (!allClasses.has(code)) {
+            allClasses.set(code, st.kelas.trim().toUpperCase());
+          }
+        }
+      }
+      for (const kls of Array.from(allClasses.values()).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }))) {
+        addResult(kls, 'PEMBELAJARAN KELAS', '1-2');
+      }
     }
 
     return results;
@@ -3395,7 +3608,10 @@ class PintarStore {
         return matchesKelompok || matchesHalaqahPengampu || matchesKelas;
       }
       // jenisPresensi === 'Belajar' (Akademik)
-      return targetArr.some((t) => matchGroupCode(s.kelas, t));
+      return (
+        targetArr.some((t) => matchGroupCode(s.kelas, t)) ||
+        targetArr.some((t) => matchGroupCode(s.kelompokQuran, t))
+      );
     };
 
     let candidateStudents = this.db.students.filter(
@@ -5384,6 +5600,9 @@ class PintarStore {
     const req = normalizeStr(namaGuru);
     const teacher =
       this.db.teachers.find((t) => normalizeStr(t.nama) === req || normalizeStr(t.username) === req) ||
+      this.db.teachers.find(
+        (t) => t.id !== SUPER_ADMIN_ID && t.peran !== 'Admin Super' && matchTeacherName(t.nama, namaGuru),
+      ) ||
       this.db.teachers.find((t) => matchTeacherName(t.nama, namaGuru));
     if (!teacher) return null;
 
@@ -6374,10 +6593,20 @@ class PintarStore {
   public getLabkomState(): LabkomStatePayload {
     this.ensureLabkomInitialized();
 
-    // Sync any newly added teachers/classes from main school DB into master list dynamically (non-destructive)
+    // Sync any newly added teachers/classes/mapel from main school DB into master list dynamically (non-destructive)
     const guruSet = new Set(
       this.db.labkomMasters!
         .filter((m) => m.kategori === 'GURU')
+        .map((m) => m.nilai.toUpperCase()),
+    );
+    const kelasSet = new Set(
+      this.db.labkomMasters!
+        .filter((m) => m.kategori === 'KELAS')
+        .map((m) => m.nilai.toUpperCase()),
+    );
+    const mapelSet = new Set(
+      this.db.labkomMasters!
+        .filter((m) => m.kategori === 'MAPEL')
         .map((m) => m.nilai.toUpperCase()),
     );
     const mergedMasters = [...this.db.labkomMasters!];
@@ -6386,6 +6615,25 @@ class PintarStore {
       if (t.nama && !guruSet.has(t.nama.toUpperCase())) {
         mergedMasters.push({ id: `LM_T_${t.id}`, kategori: 'GURU', nilai: t.nama });
         guruSet.add(t.nama.toUpperCase());
+      }
+    }
+    for (const s of this.db.students) {
+      const kls = (s.kelas || '').trim().toUpperCase();
+      if (kls && kls !== '-' && !kelasSet.has(kls)) {
+        mergedMasters.push({ id: `LM_K_${kelasSet.size + 1}`, kategori: 'KELAS', nilai: kls });
+        kelasSet.add(kls);
+      }
+    }
+    for (const sc of this.db.schedules) {
+      const kls = (sc.kelas || '').trim().toUpperCase();
+      if (kls && kls !== '-' && !kelasSet.has(kls)) {
+        mergedMasters.push({ id: `LM_K_${kelasSet.size + 1}`, kategori: 'KELAS', nilai: kls });
+        kelasSet.add(kls);
+      }
+      const mpl = (sc.mapel || '').trim().toUpperCase();
+      if (mpl && mpl !== '-' && !mapelSet.has(mpl)) {
+        mergedMasters.push({ id: `LM_M_${mapelSet.size + 1}`, kategori: 'MAPEL', nilai: mpl });
+        mapelSet.add(mpl);
       }
     }
 
@@ -7666,7 +7914,7 @@ class PintarStore {
       if (!kamar || kamar === '-') continue;
       const musyrif = cleanWs(rm.musyrif).toUpperCase();
       const gender = inferPutraPutri([kamar, musyrif], rm.gender);
-      const key = `${gender}|${normalizeStr(kamar)}`;
+      const key = `${gender}|${normGroupCode(kamar) || normalizeStr(kamar)}`;
       const prev = roomMap.get(key);
       if (!prev) {
         roomMap.set(key, { kamar, musyrif, gender });
@@ -7683,14 +7931,14 @@ class PintarStore {
     const scheduleMap = new Map<string, ScheduleItem>();
     for (const sc of this.db.schedules) {
       const guru = cleanWs(sc.guru).toUpperCase();
-      const hari = cleanWs(sc.hari || 'SENIN').toUpperCase();
+      const hari = normalizeDayName(cleanWs(sc.hari || 'SENIN')) || 'SENIN';
       const kelas = cleanWs(sc.kelas).toUpperCase();
       const mapel = cleanWs(sc.mapel).toUpperCase();
       const jamKe = cleanWs(sc.jamKe || '1-2').toUpperCase();
       if (!guru || !kelas || !mapel) continue;
       const gender = inferPutraPutri([kelas, guru], sc.gender);
       if (gender !== sc.gender) genderReclassified++;
-      const key = `${gender}|${hari}|${normalizeStr(guru)}|${normalizeStr(kelas)}|${normalizeStr(mapel)}|${jamKe}`;
+      const key = `${gender}|${hari}|${normalizeStr(guru)}|${normGroupCode(kelas) || normalizeStr(kelas)}|${normalizeStr(mapel)}|${jamKe}`;
       if (!scheduleMap.has(key)) {
         scheduleMap.set(key, { ...sc, guru, hari, kelas, mapel, jamKe, gender });
       } else {

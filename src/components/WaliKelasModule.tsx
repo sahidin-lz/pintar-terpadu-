@@ -42,7 +42,12 @@ import {
   getTodayDateStr,
   printHtmlDocument,
 } from '../utils/exportHelpers';
-import { emitDataMutated, loadSubTab, saveSubTab } from '../utils/sessionPersistence';
+import {
+  emitDataMutated,
+  ensureServerHydratedFromMirror,
+  loadSubTab,
+  saveSubTab,
+} from '../utils/sessionPersistence';
 
 interface WaliKelasModuleProps {
   unlockedTeacher: TeacherPublic | null;
@@ -334,16 +339,26 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
     }
   }, [unlockedTeacher]);
 
-  const loadStudents = () => {
-    fetch('/api/pembinaan/students')
-      .then((r) => r.json())
-      .then((list: Student[]) => {
-        setStudents(list);
-        if (list.length > 0) {
-          setFormSantri((prev) => prev || list[0].nama);
-          setSelectedSantri((prev) => prev || list[0].nama);
+  const loadStudents = async () => {
+    try {
+      let res = await fetch('/api/pembinaan/students');
+      let list: Student[] = res.ok ? await res.json() : [];
+      if (!Array.isArray(list) || list.length === 0) {
+        const restored = await ensureServerHydratedFromMirror();
+        if (restored) {
+          res = await fetch('/api/pembinaan/students');
+          list = res.ok ? await res.json() : [];
         }
-      });
+      }
+      const safeList = Array.isArray(list) ? list : [];
+      setStudents(safeList);
+      if (safeList.length > 0) {
+        setFormSantri((prev) => prev || safeList[0].nama);
+        setSelectedSantri((prev) => prev || safeList[0].nama);
+      }
+    } catch {
+      // Ignore network errors
+    }
   };
 
   const loadRecords = () => {
@@ -383,6 +398,16 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
 
   useEffect(() => {
     loadStudents();
+    const onSync = () => {
+      loadStudents();
+      loadRecords();
+    };
+    window.addEventListener('pintar:data-restored', onSync);
+    window.addEventListener('pintar:data-mutated', onSync);
+    return () => {
+      window.removeEventListener('pintar:data-restored', onSync);
+      window.removeEventListener('pintar:data-mutated', onSync);
+    };
   }, []);
 
   useEffect(() => {

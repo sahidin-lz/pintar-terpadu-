@@ -53,12 +53,18 @@ import type {
 } from './types';
 import { getAcademicSemester } from './utils/semesterHelpers';
 import {
+  DB_EXPLICIT_EMPTY_KEY,
+  DB_MIRROR_KEY,
+  LEGACY_BUNDLED_MIRROR_KEY,
+  ensureServerHydratedFromMirror,
   loadPersistedModule,
   loadPersistedQuickGuru,
   loadPersistedUser,
   savePersistedModule,
   savePersistedQuickGuru,
   savePersistedUser,
+  saveSnapshotToLocalMirror,
+  scoreSnapshotObject,
 } from './utils/sessionPersistence';
 
 const VALID_MODULES: readonly ActiveModule[] = [
@@ -213,34 +219,16 @@ const MODULE_META: Record<
   },
 };
 
-const DB_MIRROR_KEY = 'pintar_db_template_only_v2';
-const LEGACY_BUNDLED_MIRROR_KEY = 'pintar_db_mirror_v1';
-const DB_EXPLICIT_EMPTY_KEY = 'pintar_db_explicit_empty_v1';
-
 function scoreCounts(c?: SystemCounts | null): number {
   if (!c) return 0;
   return (
-    (c.students || 0) * 10 +
-    Math.max(0, (c.teachers || 0) - 1) * 5 +
-    (c.schedules || 0) * 4 +
-    (c.attendanceLogs || 0) * 8 +
-    (c.pembinaanRecords || 0) * 8 +
-    (c.examLogs || 0) * 6 +
-    (c.rooms || 0) * 2
-  );
-}
-
-function scoreSnapshot(snap: Record<string, unknown> | null): number {
-  if (!snap) return 0;
-  const arrLen = (k: string) => (Array.isArray(snap[k]) ? (snap[k] as unknown[]).length : 0);
-  return (
-    arrLen('students') * 10 +
-    Math.max(0, arrLen('teachers') - 1) * 5 +
-    arrLen('schedules') * 4 +
-    arrLen('attendanceLogs') * 8 +
-    arrLen('pembinaanRecords') * 8 +
-    arrLen('examLogs') * 6 +
-    arrLen('rooms') * 2
+    (c.students || 0) * 5 +
+    Math.max(0, (c.teachers || 0) - 1) * 3 +
+    (c.schedules || 0) * 2 +
+    (c.rooms || 0) +
+    (c.attendanceLogs || 0) * 3 +
+    (c.pembinaanRecords || 0) * 3 +
+    (c.examLogs || 0) * 2
   );
 }
 
@@ -311,23 +299,26 @@ export default function App() {
       const res = await fetch('/api/system/snapshot');
       if (!res.ok) return;
       const snap = (await res.json()) as Record<string, unknown>;
-      if (scoreSnapshot(snap) <= 0) return;
+      const serverSnapScore = scoreSnapshotObject(snap);
+      if (serverSnapScore <= 0) return;
 
-      // Strip oversized inline base64 attachments (>64KB) so localStorage stays lightweight
-      const compactAttachments = Array.isArray(snap.attachments)
-        ? snap.attachments.slice(0, 50).map((att: Record<string, unknown>) => ({
-            ...att,
-            url:
-              typeof att.url === 'string' && att.url.length > 65536
-                ? ''
-                : att.url,
-          }))
-        : [];
+      // Never overwrite a richer local mirror with a smaller/empty snapshot
+      try {
+        const existingRaw =
+          localStorage.getItem(DB_MIRROR_KEY) || localStorage.getItem(LEGACY_BUNDLED_MIRROR_KEY);
+        if (existingRaw) {
+          const existingSnap = JSON.parse(existingRaw) as Record<string, unknown>;
+          const existingStudents = Array.isArray(existingSnap.students) ? existingSnap.students.length : 0;
+          const serverStudents = Array.isArray(snap.students) ? snap.students.length : 0;
+          if (existingStudents > 0 && serverStudents === 0) {
+            return;
+          }
+        }
+      } catch {
+        // Proceed with save
+      }
 
-      const compactSnap = { ...snap, attachments: compactAttachments };
-      localStorage.setItem(DB_MIRROR_KEY, JSON.stringify(compactSnap));
-      localStorage.removeItem(LEGACY_BUNDLED_MIRROR_KEY);
-      localStorage.removeItem(DB_EXPLICIT_EMPTY_KEY);
+      saveSnapshotToLocalMirror(snap);
     } catch {
       // Ignore localStorage quota or transient network errors
     }
@@ -343,46 +334,35 @@ export default function App() {
     }
   }, []);
 
-  const loadBootstrap = useCallback(async (options?: { skipMirrorWrite?: boolean }) => {
+  const loadBootstrap = useCallback(async (options?: { skipMirrorWrite?: boolean; skipRestoreCheck?: boolean }) => {
     try {
-      try {
-        localStorage.removeItem(LEGACY_BUNDLED_MIRROR_KEY);
-      } catch {
-        // Ignore
-      }
       const res = await fetch('/api/bootstrap');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as BootstrapPayload;
 
-      // Whenever a Vercel/GitHub deployment cold-starts empty (or with fewer records than the user's uploaded template mirror),
+      // Whenever a Vercel/GitHub deployment or dev server restarts empty (or with fewer records than the user's uploaded template mirror),
       // automatically restore the user's uploaded template data to the server.
       const serverScore = scoreCounts(data.counts);
-      if (!restoredOnceRef.current || serverScore === 0) {
+      if (!options?.skipRestoreCheck && (!restoredOnceRef.current || serverScore === 0)) {
         restoredOnceRef.current = true;
         try {
-          const explicitEmpty = localStorage.getItem(DB_EXPLICIT_EMPTY_KEY) === '1';
-          const mirrorRaw = localStorage.getItem(DB_MIRROR_KEY);
-          if (!explicitEmpty && mirrorRaw) {
+          const mirrorRaw =
+            localStorage.getItem(DB_MIRROR_KEY) || localStorage.getItem(LEGACY_BUNDLED_MIRROR_KEY);
+          if (mirrorRaw) {
             const mirrorSnap = JSON.parse(mirrorRaw) as Record<string, unknown>;
-            const mirrorScore = scoreSnapshot(mirrorSnap);
+            const mirrorScore = scoreSnapshotObject(mirrorSnap);
             const mirrorHasLogs =
               (Array.isArray(mirrorSnap.attendanceLogs) && mirrorSnap.attendanceLogs.length > (data.counts.attendanceLogs || 0)) ||
               (Array.isArray(mirrorSnap.pembinaanRecords) && mirrorSnap.pembinaanRecords.length > (data.counts.pembinaanRecords || 0)) ||
               (Array.isArray(mirrorSnap.examLogs) && mirrorSnap.examLogs.length > (data.counts.examLogs || 0));
 
             if (mirrorScore > serverScore || mirrorHasLogs) {
-              const restoreMode = serverScore === 0 ? 'replace' : 'merge';
-              const restoreRes = await fetch('/api/system/restore-snapshot', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ snapshot: mirrorSnap, mode: restoreMode }),
-              });
-              if (restoreRes.ok) {
+              const restored = await ensureServerHydratedFromMirror();
+              if (restored) {
                 const refreshed = await fetch('/api/bootstrap');
                 if (refreshed.ok) {
                   const refreshedData = (await refreshed.json()) as BootstrapPayload;
                   setBootstrap(refreshedData);
-                  notify('Data hasil upload template Anda dipulihkan otomatis setelah pembaruan server.', 'info');
                   return;
                 }
               }
@@ -445,16 +425,22 @@ export default function App() {
       }
     };
 
+    const onDataRestored = () => {
+      loadBootstrap({ skipMirrorWrite: true, skipRestoreCheck: true });
+    };
+
     window.addEventListener('pintar:data-mutated', scheduleMirrorSync);
+    window.addEventListener('pintar:data-restored', onDataRestored);
     window.addEventListener('pagehide', syncBrowserMirror);
     document.addEventListener('visibilitychange', onVisibilityOrHide);
     return () => {
       window.removeEventListener('pintar:data-mutated', scheduleMirrorSync);
+      window.removeEventListener('pintar:data-restored', onDataRestored);
       window.removeEventListener('pagehide', syncBrowserMirror);
       document.removeEventListener('visibilitychange', onVisibilityOrHide);
       if (syncTimer) window.clearTimeout(syncTimer);
     };
-  }, [syncBrowserMirror]);
+  }, [loadBootstrap, syncBrowserMirror]);
 
   const navGroups: Array<{
     group: string;

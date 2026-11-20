@@ -68,7 +68,12 @@ import {
   matchesSemesterFilter,
   parseFlexibleDateToIso,
 } from '../utils/semesterHelpers';
-import { emitDataMutated, loadSubTab, saveSubTab } from '../utils/sessionPersistence';
+import {
+  emitDataMutated,
+  ensureServerHydratedFromMirror,
+  loadSubTab,
+  saveSubTab,
+} from '../utils/sessionPersistence';
 
 type LabkomTab =
   | 'dashboard'
@@ -645,9 +650,21 @@ export const LabkomRuangModule: React.FC<Props> = ({
   const fetchLabkomState = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/labkom/state');
+      let res = await fetch('/api/labkom/state');
       if (!res.ok) throw new Error('HTTP error');
-      const data = (await res.json()) as LabkomStatePayload;
+      let data = (await res.json()) as LabkomStatePayload;
+      if (
+        (!data.siswaPutra || data.siswaPutra.length === 0) &&
+        (!data.siswaPutri || data.siswaPutri.length === 0)
+      ) {
+        const restored = await ensureServerHydratedFromMirror();
+        if (restored) {
+          res = await fetch('/api/labkom/state');
+          if (res.ok) {
+            data = (await res.json()) as LabkomStatePayload;
+          }
+        }
+      }
       setState(data);
       setTemplateEditorVal(data.broadcastTemplate);
     } catch {
@@ -659,6 +676,13 @@ export const LabkomRuangModule: React.FC<Props> = ({
 
   useEffect(() => {
     fetchLabkomState();
+    const onRestored = () => {
+      fetchLabkomState();
+    };
+    window.addEventListener('pintar:data-restored', onRestored);
+    return () => {
+      window.removeEventListener('pintar:data-restored', onRestored);
+    };
   }, [fetchLabkomState]);
 
   const getMaster = useCallback(

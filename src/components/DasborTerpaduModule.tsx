@@ -40,7 +40,11 @@ import {
   formatTanggalIndo,
   getTodayDateStr,
 } from '../utils/exportHelpers';
-import { loadSubTab, saveSubTab } from '../utils/sessionPersistence';
+import {
+  ensureServerHydratedFromMirror,
+  loadSubTab,
+  saveSubTab,
+} from '../utils/sessionPersistence';
 
 export type DashboardTargetModule =
   | 'dashboard'
@@ -86,9 +90,22 @@ export const DasborTerpaduModule: React.FC<DasborTerpaduModuleProps> = ({
   const loadAnalytics = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/analisis?tanggal=${encodeURIComponent(tanggal)}`);
+      let res = await fetch(`/api/analisis?tanggal=${encodeURIComponent(tanggal)}`);
       if (!res.ok) throw new Error();
-      const data = (await res.json()) as AnalyticsTerpadu;
+      let data = (await res.json()) as AnalyticsTerpadu;
+      if (
+        (data.pembinaanAnalisis?.Putra?.totalSantri || 0) +
+          (data.pembinaanAnalisis?.Putri?.totalSantri || 0) ===
+        0
+      ) {
+        const restored = await ensureServerHydratedFromMirror();
+        if (restored) {
+          res = await fetch(`/api/analisis?tanggal=${encodeURIComponent(tanggal)}`);
+          if (res.ok) {
+            data = (await res.json()) as AnalyticsTerpadu;
+          }
+        }
+      }
       setAnalisis(data);
     } catch {
       notify('Gagal memuat ringkasan dasbor terpadu.', 'error');
@@ -99,6 +116,15 @@ export const DasborTerpaduModule: React.FC<DasborTerpaduModuleProps> = ({
 
   useEffect(() => {
     loadAnalytics();
+    const onSync = () => {
+      loadAnalytics();
+    };
+    window.addEventListener('pintar:data-restored', onSync);
+    window.addEventListener('pintar:data-mutated', onSync);
+    return () => {
+      window.removeEventListener('pintar:data-restored', onSync);
+      window.removeEventListener('pintar:data-mutated', onSync);
+    };
   }, [loadAnalytics]);
 
   const presensiChartData = useMemo(() => {

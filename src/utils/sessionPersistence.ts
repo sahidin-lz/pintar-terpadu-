@@ -134,3 +134,98 @@ export function emitDataMutated(): void {
     // Ignore
   }
 }
+
+export const DB_MIRROR_KEY = 'pintar_db_template_only_v2';
+export const LEGACY_BUNDLED_MIRROR_KEY = 'pintar_db_mirror_v1';
+export const DB_EXPLICIT_EMPTY_KEY = 'pintar_db_explicit_empty_v1';
+
+export function scoreSnapshotObject(snap: Record<string, unknown> | null | undefined): number {
+  if (!snap) return 0;
+  const arrLen = (v: unknown) => (Array.isArray(v) ? v.length : 0);
+  return (
+    arrLen(snap.students) * 5 +
+    Math.max(0, arrLen(snap.teachers) - 1) * 3 +
+    arrLen(snap.schedules) * 2 +
+    arrLen(snap.rooms) +
+    arrLen(snap.attendanceLogs) * 3 +
+    arrLen(snap.pembinaanRecords) * 3 +
+    arrLen(snap.examLogs) * 2
+  );
+}
+
+export function saveSnapshotToLocalMirror(snap: Record<string, unknown> | null | undefined): boolean {
+  if (!snap || scoreSnapshotObject(snap) <= 0) return false;
+  try {
+    localStorage.removeItem(DB_EXPLICIT_EMPTY_KEY);
+    localStorage.removeItem(LEGACY_BUNDLED_MIRROR_KEY);
+  } catch {
+    // Ignore
+  }
+
+  const compactAttachments = Array.isArray(snap.attachments)
+    ? snap.attachments.slice(0, 50).map((att: Record<string, unknown>) => ({
+        ...att,
+        url: typeof att.url === 'string' && att.url.length > 65536 ? '' : att.url,
+      }))
+    : [];
+
+  try {
+    const compactSnap = { ...snap, attachments: compactAttachments };
+    localStorage.setItem(DB_MIRROR_KEY, JSON.stringify(compactSnap));
+    return true;
+  } catch {
+    // Fallback if localStorage quota is tight: strip attachments & whatsappLogs
+    try {
+      const slimSnap = { ...snap, attachments: [], whatsappLogs: [] };
+      localStorage.setItem(DB_MIRROR_KEY, JSON.stringify(slimSnap));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+let hydrationInFlight: Promise<boolean> | null = null;
+
+export function ensureServerHydratedFromMirror(): Promise<boolean> {
+  if (typeof window === 'undefined') return Promise.resolve(false);
+  if (hydrationInFlight) return hydrationInFlight;
+
+  hydrationInFlight = (async () => {
+    try {
+      const mirrorRaw =
+        localStorage.getItem(DB_MIRROR_KEY) || localStorage.getItem(LEGACY_BUNDLED_MIRROR_KEY);
+      if (!mirrorRaw) return false;
+
+      const mirrorSnap = JSON.parse(mirrorRaw) as Record<string, unknown>;
+      const mirrorScore = scoreSnapshotObject(mirrorSnap);
+      if (mirrorScore <= 0) return false;
+
+      // If a valid non-empty mirror exists in localStorage, clear any stale explicitEmpty flag
+      try {
+        localStorage.removeItem(DB_EXPLICIT_EMPTY_KEY);
+      } catch {
+        // Ignore
+      }
+
+      const restoreRes = await fetch('/api/system/restore-snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ snapshot: mirrorSnap, mode: 'merge' }),
+      });
+
+      if (restoreRes.ok) {
+        window.dispatchEvent(new CustomEvent('pintar:data-restored'));
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      hydrationInFlight = null;
+    }
+  })();
+
+  return hydrationInFlight;
+}
+

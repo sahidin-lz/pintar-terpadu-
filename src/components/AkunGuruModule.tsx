@@ -567,6 +567,21 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
     }
   }, [pimpinanWilayah, unlockedTeacher]);
 
+  useEffect(() => {
+    if (!unlockedTeacher) return;
+    const onSync = () => {
+      fetchRecap(unlockedTeacher.nama);
+      fetchHalaqahRecap(unlockedTeacher.nama);
+      fetchPimpinanExecutiveReport(pimpinanWilayah);
+    };
+    window.addEventListener('pintar:data-restored', onSync);
+    window.addEventListener('pintar:data-mutated', onSync);
+    return () => {
+      window.removeEventListener('pintar:data-restored', onSync);
+      window.removeEventListener('pintar:data-mutated', onSync);
+    };
+  }, [unlockedTeacher, pimpinanWilayah]);
+
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanCustom = customNameInput.trim();

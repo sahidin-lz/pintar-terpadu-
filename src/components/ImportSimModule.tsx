@@ -43,7 +43,7 @@ import {
   resolveTeacherToken,
 } from '../utils/exportHelpers';
 import { auth, pushSnapshotToFirestore } from '../firebase';
-import { loadSubTab, saveSubTab } from '../utils/sessionPersistence';
+import { loadSubTab, saveSnapshotToLocalMirror, saveSubTab } from '../utils/sessionPersistence';
 
 const IMPORT_TABS: readonly AdminTab[] = ['excel_upload', 'pegawai_amanah', 'kelola'];
 
@@ -786,11 +786,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
         setExcelWorkbook(parsed);
 
         if (data.snapshot) {
-          try {
-            localStorage.setItem('pintar_db_template_only_v2', JSON.stringify(data.snapshot));
-          } catch {
-            // ignore storage errors
-          }
+          saveSnapshotToLocalMirror(data.snapshot);
           if (Array.isArray(data.snapshot.students)) {
             setAdminStudents(data.snapshot.students);
           }
@@ -907,11 +903,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       }>(res);
 
       if (data.snapshot) {
-        try {
-          localStorage.setItem('pintar_db_template_only_v2', JSON.stringify(data.snapshot));
-        } catch {
-          // ignore storage errors
-        }
+        saveSnapshotToLocalMirror(data.snapshot);
         if (Array.isArray(data.snapshot.students)) {
           setAdminStudents(data.snapshot.students);
         }
