@@ -3090,15 +3090,16 @@ class PintarStore {
     };
 
     if (jenis === 'Al-Quran') {
-      // 1. From schedules (4_Jadwal_Mengajar) on reqHari first, then other days
-      const allQuranSchedulesForTeacher = this.db.schedules.filter(
-        (sc) => isQuranScheduleItem(sc) && matchTeacherName(sc.guru, namaGuru),
+      // 1. From schedules (4_Jadwal_Mengajar) strictly on the selected day (reqHari) and gender
+      const quranSchedulesToday = this.db.schedules.filter(
+        (sc) =>
+          isQuranScheduleItem(sc) &&
+          sc.gender === gender &&
+          matchTeacherName(sc.guru, namaGuru) &&
+          (!reqHari || normalizeDayName(sc.hari) === reqHari),
       );
-      const genderMatchedQuranSchedules = allQuranSchedulesForTeacher.filter((sc) => sc.gender === gender);
-      const quranSchedules =
-        genderMatchedQuranSchedules.length > 0 ? genderMatchedQuranSchedules : allQuranSchedulesForTeacher;
 
-      for (const sc of quranSchedules.filter((s) => !reqHari || normalizeDayName(s.hari) === reqHari)) {
+      for (const sc of quranSchedulesToday) {
         addResult(sc.kelas, sc.mapel || "HALAQAH AL-QUR'AN", sc.jamKe);
       }
 
@@ -3120,28 +3121,17 @@ class PintarStore {
         }
       }
 
-      // 3. From teacher's kelompokQuranBinaan
+      // 3. From teacher's kelompokQuranBinaan matching this gender
       for (const t of this.db.teachers) {
         if (matchTeacherName(t.nama, namaGuru)) {
           for (const klp of t.kelompokQuranBinaan || []) {
             const clean = klp.trim();
-            if (clean && clean !== '-') {
+            if (clean && clean !== '-' && inferGender(clean) === gender) {
               const code = normGroupCode(clean) || clean.toUpperCase();
               if (!teacherGroupsFromStudents.has(code)) {
                 teacherGroupsFromStudents.set(code, clean.toUpperCase());
               }
             }
-          }
-        }
-      }
-
-      // Also include any kode kelas Al-Qur'an from the teacher's Al-Qur'an schedules
-      for (const sc of quranSchedules) {
-        const clean = (sc.kelas || '').trim();
-        if (clean && clean !== '-') {
-          const code = normGroupCode(clean) || clean.toUpperCase();
-          if (!teacherGroupsFromStudents.has(code)) {
-            teacherGroupsFromStudents.set(code, clean.toUpperCase());
           }
         }
       }
@@ -3161,87 +3151,20 @@ class PintarStore {
         addResult(`HALAQAH ${namaGuru.trim().toUpperCase()}`, "HALAQAH AL-QUR'AN", 'Halaqah');
       }
 
-      // 4. Schedules for this teacher on other days of the week
-      for (const sc of quranSchedules.filter((s) => reqHari && normalizeDayName(s.hari) !== reqHari)) {
-        addResult(sc.kelas, sc.mapel || "HALAQAH AL-QUR'AN", `${sc.hari} · ${sc.jamKe}`);
-      }
-
-      // 5. Fallback: if this teacher has no specific halaqah bound yet, provide all Kode Kelas Al-Qur'an in this gender
-      if (results.length === 0) {
-        for (const st of this.db.students) {
-          if (st.gender !== gender) continue;
-          const klp = (st.kelompokQuran || '').trim();
-          if (klp && klp !== '-') {
-            addResult(klp.toUpperCase(), "HALAQAH AL-QUR'AN", st.pengampuQuran ? `Pengampu: ${st.pengampuQuran}` : 'Kode Kelas Al-Qur’an');
-          } else if (st.pengampuQuran && st.pengampuQuran !== '-') {
-            addResult(`HALAQAH ${st.pengampuQuran.toUpperCase()}`, "HALAQAH AL-QUR'AN", 'Halaqah');
-          }
-        }
-        for (const sc of this.db.schedules.filter((s) => s.gender === gender && isQuranScheduleItem(s))) {
-          addResult(sc.kelas, sc.mapel || "HALAQAH AL-QUR'AN", `${sc.hari} · ${sc.jamKe}`);
-        }
-      }
-
       return results;
     }
 
-    // jenis === 'Belajar' (Akademik)
-    const teacherAcademicSchedules = this.db.schedules.filter(
-      (sc) => !isQuranScheduleItem(sc) && matchTeacherName(sc.guru, namaGuru),
+    // jenis === 'Belajar' (Akademik): strictly filter by selected day (reqHari), teacher, and gender
+    const todayAcademicSchedules = this.db.schedules.filter(
+      (sc) =>
+        !isQuranScheduleItem(sc) &&
+        sc.gender === gender &&
+        matchTeacherName(sc.guru, namaGuru) &&
+        (!reqHari || normalizeDayName(sc.hari) === reqHari),
     );
-    const genderMatchedSchedules = teacherAcademicSchedules.filter((sc) => sc.gender === gender);
-    const activeTeacherSchedules =
-      genderMatchedSchedules.length > 0 ? genderMatchedSchedules : teacherAcademicSchedules;
 
-    // 1. Schedules on the selected day (hari)
-    for (const sc of activeTeacherSchedules) {
-      if (!reqHari || normalizeDayName(sc.hari) === reqHari) {
-        addResult(sc.kelas, sc.mapel, sc.jamKe);
-      }
-    }
-
-    // 2. Schedules for this teacher on other days of the week (so teacher can still fill attendance on any day)
-    for (const sc of activeTeacherSchedules) {
-      if (reqHari && normalizeDayName(sDay(sc.hari)) !== reqHari) {
-        addResult(sc.kelas, sc.mapel, `${sc.hari} · ${sc.jamKe}`);
-      }
-    }
-
-    // 3. Teacher's Wali Kelas class (from Master_Pegawai / 3A / 3B or students.waliKelas)
-    for (const t of this.db.teachers) {
-      if (matchTeacherName(t.nama, namaGuru) && t.waliKelasOf && t.waliKelasOf !== '-') {
-        for (const wk of t.waliKelasOf.split(/[;,]/).map((s) => s.trim()).filter(Boolean)) {
-          addResult(wk, 'KBM / KELAS BINAAN', 'Harian');
-        }
-      }
-    }
-    for (const st of this.db.students) {
-      if (st.gender === gender && st.kelas && st.kelas !== '-' && st.waliKelas && matchTeacherName(st.waliKelas, namaGuru)) {
-        addResult(st.kelas, 'KBM / KELAS BINAAN', 'Harian');
-      }
-    }
-
-    // 4. Fallback: if this teacher has no schedules in 4_Jadwal_Mengajar yet, show all classes in this Wilayah
-    if (results.length === 0) {
-      for (const sc of this.db.schedules.filter(
-        (s) => s.gender === gender && !isQuranScheduleItem(s) && (!reqHari || normalizeDayName(s.hari) === reqHari),
-      )) {
-        addResult(sc.kelas, sc.mapel, `${sc.jamKe} (${sc.guru})`);
-      }
-      const distinctClasses = Array.from(
-        new Set(
-          this.db.students
-            .filter((st) => st.gender === gender && st.kelas && st.kelas !== '-')
-            .map((st) => st.kelas.trim().toUpperCase()),
-        ),
-      ).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
-      for (const kls of distinctClasses) {
-        addResult(kls, 'KBM AKADEMIK', 'Harian');
-      }
-    }
-
-    function sDay(raw?: string): string {
-      return raw || '';
+    for (const sc of todayAcademicSchedules) {
+      addResult(sc.kelas, sc.mapel, sc.jamKe);
     }
 
     return results;

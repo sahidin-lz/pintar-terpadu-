@@ -85,10 +85,18 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   const isRealTeachingUser = (u?: TeacherPublic | null): boolean =>
     Boolean(u?.nama && u.peran !== 'Admin Super' && u.peran !== 'Admin SIM');
 
+  const isValidGuruName = (name?: string | null): boolean =>
+    Boolean(
+      name &&
+        name.trim() &&
+        !name.trim().toUpperCase().includes('ADMIN SUPER') &&
+        name.trim().toUpperCase() !== 'ADMIN SIM',
+    );
+
   const [namaGuru, setNamaGuru] = useState<string>(() => {
-    if (initialGuru) return initialGuru;
+    if (isValidGuruName(initialGuru)) return initialGuru!.trim();
     const saved = loadScopedState<string>('pintar_presensi_guru_v1', '');
-    if (saved && !saved.toUpperCase().includes('ADMIN SUPER')) return saved;
+    if (isValidGuruName(saved)) return saved;
     return isRealTeachingUser(loggedInUser) ? loggedInUser!.nama : '';
   });
 
@@ -101,7 +109,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   }, [gender]);
 
   useEffect(() => {
-    if (namaGuru && !namaGuru.toUpperCase().includes('ADMIN SUPER')) {
+    if (isValidGuruName(namaGuru)) {
       saveScopedState('pintar_presensi_guru_v1', namaGuru);
     }
   }, [namaGuru]);
@@ -125,16 +133,19 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
     if (presetKey && initialGender) setGender(initialGender);
   }, [presetKey, initialJenis, initialGender]);
 
+  // Sync only when external initialGuru or loggedInUser prop changes — never fight user dropdown clicks
   useEffect(() => {
-    if (initialGuru) {
-      setNamaGuru(initialGuru);
-    } else if (isRealTeachingUser(loggedInUser) && (!namaGuru || namaGuru.toUpperCase().includes('ADMIN SUPER'))) {
-      setNamaGuru(loggedInUser!.nama);
+    if (isValidGuruName(initialGuru)) {
+      setNamaGuru(initialGuru!.trim());
+    } else if (isRealTeachingUser(loggedInUser)) {
+      setNamaGuru((prev) => (isValidGuruName(prev) ? prev : loggedInUser!.nama));
       if (loggedInUser!.genderScope === 'Putri' || loggedInUser!.genderScope === 'Putra') {
         setGender(loggedInUser!.genderScope);
       }
+    } else {
+      setNamaGuru((prev) => (isValidGuruName(prev) ? prev : ''));
     }
-  }, [initialGuru, loggedInUser, namaGuru]);
+  }, [initialGuru, loggedInUser]);
 
   // Load filtered teacher list whenever jenis or gender changes
   useEffect(() => {
@@ -223,7 +234,8 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
 
   // Load target rooms / classes whenever guru, jenis, gender, or tanggal changes
   useEffect(() => {
-    if (!namaGuru.trim() || namaGuru.toUpperCase().includes('ADMIN SUPER') || !tanggal) {
+    if (!isValidGuruName(namaGuru) || !tanggal) {
+      setLoadingTargets(false);
       setTargetOptions([]);
       setSelectedTarget('');
       setSiswaList([]);
@@ -740,7 +752,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
                   </span>
                   <span aria-hidden="true">·</span>
                   <span>{selectedTarget ? selectedTarget.split('|')[1] : 'Pilih guru dan jadwal di panel kontrol'}</span>
-                  {namaGuru && (
+                  {isValidGuruName(namaGuru) && (
                     <>
                       <span aria-hidden="true">·</span>
                       <span className="font-semibold text-slate-800">Pengampu/Pembina: {namaGuru}</span>

@@ -58,20 +58,32 @@ export function savePersistedModule(moduleId: string): void {
   }
 }
 
+export function isAdminSuperName(nama?: string | null): boolean {
+  if (!nama) return false;
+  const up = nama.trim().toUpperCase();
+  return up.includes('ADMIN SUPER') || up === 'ADMIN SIM';
+}
+
 export function loadPersistedQuickGuru(fallback = ''): string {
   try {
     const saved = localStorage.getItem(QUICK_GURU_KEY);
-    if (saved) return saved;
+    if (saved && !isAdminSuperName(saved)) return saved;
+    if (saved && isAdminSuperName(saved)) {
+      localStorage.removeItem(QUICK_GURU_KEY);
+    }
   } catch {
     // Ignore
   }
-  return fallback;
+  return isAdminSuperName(fallback) ? '' : fallback;
 }
 
 export function savePersistedQuickGuru(nama: string): void {
   try {
-    if (nama) localStorage.setItem(QUICK_GURU_KEY, nama);
-    else localStorage.removeItem(QUICK_GURU_KEY);
+    if (nama && !isAdminSuperName(nama)) {
+      localStorage.setItem(QUICK_GURU_KEY, nama);
+    } else {
+      localStorage.removeItem(QUICK_GURU_KEY);
+    }
   } catch {
     // Ignore
   }

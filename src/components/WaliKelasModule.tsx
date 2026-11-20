@@ -168,11 +168,18 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
   const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
   const [loadingPortfolio, setLoadingPortfolio] = useState(false);
 
+  const isRealPembinaUser = (u?: TeacherPublic | null): boolean =>
+    Boolean(u?.nama && u.peran !== 'Admin Super' && u.peran !== 'Admin SIM' && !u.nama.toUpperCase().includes('ADMIN SUPER'));
+
   // Input mode & Pembina identity
   const [inputMode, setInputMode] = useState<'single' | 'batch'>('single');
   const [metaMinimized, setMetaMinimized] = useState<boolean>(false);
-  const [pembinaNama, setPembinaNama] = useState<string>(unlockedTeacher?.nama || '');
-  const [pembinaPeran, setPembinaPeran] = useState<string>(unlockedTeacher?.peran || 'Wali Kelas');
+  const [pembinaNama, setPembinaNama] = useState<string>(
+    isRealPembinaUser(unlockedTeacher) ? unlockedTeacher!.nama : ''
+  );
+  const [pembinaPeran, setPembinaPeran] = useState<string>(
+    isRealPembinaUser(unlockedTeacher) ? unlockedTeacher!.peran : 'Wali Kelas'
+  );
   const [formJalur, setFormJalur] = useState<PembinaanJalur>(() =>
     initialJalur ||
     (unlockedTeacher?.peran === 'Musyrif' ||
@@ -301,7 +308,7 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
   }, [presetKey, initialJalur, initialWilayah]);
 
   useEffect(() => {
-    if (unlockedTeacher) {
+    if (isRealPembinaUser(unlockedTeacher) && unlockedTeacher) {
       setPembinaNama(unlockedTeacher.nama);
       setPembinaPeran(unlockedTeacher.peran);
       if (

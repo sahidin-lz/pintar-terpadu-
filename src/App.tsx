@@ -265,7 +265,9 @@ export default function App() {
   );
   const [quickGuru, setQuickGuru] = useState<string>(() => {
     const u = loadPersistedUser();
-    return loadPersistedQuickGuru(u?.nama || '');
+    const fallbackName =
+      u && u.peran !== 'Admin Super' && u.peran !== 'Admin SIM' ? u.nama : '';
+    return loadPersistedQuickGuru(fallbackName);
   });
   const [presensiPreset, setPresensiPreset] = useState<{
     key: number;
@@ -566,10 +568,9 @@ export default function App() {
   const handleLoginSuccess = (teacher: TeacherPublic) => {
     setUnlockedTeacher(teacher);
     persistSessionUser(teacher);
-    setQuickGuru(teacher.nama);
-    setActiveModule(
-      teacher.peran === 'Admin Super' || teacher.peran === 'Admin SIM' ? 'import' : 'akunguru',
-    );
+    const isAdmin = teacher.peran === 'Admin Super' || teacher.peran === 'Admin SIM';
+    setQuickGuru(isAdmin ? '' : teacher.nama);
+    setActiveModule(isAdmin ? 'import' : 'akunguru');
     setEntryMode('app');
     loadBootstrap();
   };
@@ -577,10 +578,9 @@ export default function App() {
   const handleAccountCreated = (teacher: TeacherPublic) => {
     setUnlockedTeacher(teacher);
     persistSessionUser(teacher);
-    setQuickGuru(teacher.nama);
-    setActiveModule(
-      teacher.peran === 'Admin Super' || teacher.peran === 'Admin SIM' ? 'import' : 'akunguru',
-    );
+    const isAdmin = teacher.peran === 'Admin Super' || teacher.peran === 'Admin SIM';
+    setQuickGuru(isAdmin ? '' : teacher.nama);
+    setActiveModule(isAdmin ? 'import' : 'akunguru');
     setEntryMode('app');
     loadBootstrap();
   };
@@ -1021,7 +1021,9 @@ export default function App() {
               onUnlock={(t) => {
                 setUnlockedTeacher(t);
                 persistSessionUser(t);
-                if (t) setQuickGuru(t.nama);
+                if (t && t.peran !== 'Admin Super' && t.peran !== 'Admin SIM') {
+                  setQuickGuru(t.nama);
+                }
               }}
               onOpenQuickPresensi={(nama) => {
                 setQuickGuru(nama);
