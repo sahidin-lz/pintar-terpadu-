@@ -29,7 +29,13 @@ import {
   getTodayDateStr,
   shiftDateStr,
 } from '../utils/exportHelpers';
-import { loadScopedState, loadSubTab, saveScopedState, saveSubTab } from '../utils/sessionPersistence';
+import {
+  emitDataMutated,
+  loadScopedState,
+  loadSubTab,
+  saveScopedState,
+  saveSubTab,
+} from '../utils/sessionPersistence';
 
 interface PresensiModuleProps {
   initialGuru?: string;
@@ -48,6 +54,13 @@ interface TargetOption {
   label: string;
   grup: string;
   mapel: string;
+  filledToday?: boolean;
+  isBatchAll?: boolean;
+}
+
+interface EnrichedRoomDetail extends RoomMapping {
+  filledToday?: boolean;
+  studentCount?: number;
 }
 
 export const PresensiModule: React.FC<PresensiModuleProps> = ({
@@ -116,6 +129,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   const [targetOptions, setTargetOptions] = useState<TargetOption[]>([]);
   const [selectedTarget, setSelectedTarget] = useState<string>('');
   const [loadingTargets, setLoadingTargets] = useState<boolean>(false);
+  const [targetRefreshTick, setTargetRefreshTick] = useState<number>(0);
 
   const [siswaList, setSiswaList] = useState<StudentFormEntry[]>([]);
   const [materi, setMateri] = useState<string>('');
@@ -232,7 +246,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
     };
   }, [jenis, gender, loggedInUser]);
 
-  // Load target rooms / classes whenever guru, jenis, gender, or tanggal changes
+  // Load target rooms / classes whenever guru, jenis, gender, tanggal, or targetRefreshTick changes
   useEffect(() => {
     if (!isValidGuruName(namaGuru) || !tanggal) {
       setLoadingTargets(false);
@@ -244,59 +258,71 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
 
     let active = true;
     setLoadingTargets(true);
-    setSelectedTarget('');
-    setSiswaList([]);
-    setMateri('');
-    setIsEditMode(false);
 
-    const url = `/api/presensi/opsi?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(gender)}&guru=${encodeURIComponent(namaGuru)}&hari=${encodeURIComponent(hari)}`;
+    const url = `/api/presensi/opsi?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(gender)}&guru=${encodeURIComponent(namaGuru)}&hari=${encodeURIComponent(hari)}&tanggal=${encodeURIComponent(tanggal)}`;
     fetch(url)
       .then((r) => r.json())
       .then((data) => {
         if (!active) return;
         const opts: TargetOption[] = [];
         if (jenis === 'Asrama' && Array.isArray(data.rooms)) {
-          const details: RoomMapping[] = Array.isArray(data.roomDetails) ? data.roomDetails : [];
-          const detailMap = new Map(details.map((d) => [d.kamar.toUpperCase(), d.musyrif]));
+          const details: EnrichedRoomDetail[] = Array.isArray(data.roomDetails) ? data.roomDetails : [];
+          const detailMap = new Map(
+            details.map((d) => [d.kamar.trim().toUpperCase(), d]),
+          );
+          const allFilled = details.length > 0 && details.every((d) => Boolean(d.filledToday));
           if (data.rooms.length > 1) {
+            const filledCount = details.filter((d) => d.filledToday).length;
             opts.push({
               value: `${data.rooms.join(',')}|KELUAR ASRAMA`,
-              label: `Semua Kamar Binaan (${data.rooms.length})`,
+              label: `Semua Kamar Binaan (${data.rooms.length})${filledCount > 0 ? ` · ${filledCount}/${data.rooms.length} Sudah Diisi` : ''}`,
               grup: data.rooms.join(','),
               mapel: 'KELUAR ASRAMA',
+              filledToday: allFilled,
+              isBatchAll: true,
             });
           }
           data.rooms.forEach((rm: string) => {
-            const wali = detailMap.get(rm.toUpperCase());
+            const detail = detailMap.get(rm.trim().toUpperCase());
+            const wali = detail?.musyrif || namaGuru;
+            const filledBadge = detail?.filledToday ? ' ✓ Sudah Presensi' : '';
             opts.push({
               value: `${rm}|KELUAR ASRAMA`,
-              label: wali ? `${rm} — Wali Asrama: ${wali}` : rm,
+              label: `${rm} — Wali Asrama: ${wali}${filledBadge}`,
               grup: rm,
               mapel: 'KELUAR ASRAMA',
+              filledToday: Boolean(detail?.filledToday),
             });
           });
         } else if (Array.isArray(data.jadwal)) {
-          data.jadwal.forEach((j: { kelas: string; mapel: string; jamKe: string }) => {
+          data.jadwal.forEach((j: { kelas: string; mapel: string; jamKe: string; filledToday?: boolean }) => {
             const jamLabel =
               j.jamKe.toLowerCase().includes('jam') ||
               j.jamKe.toLowerCase().includes('halaqah') ||
               j.jamKe.toLowerCase().includes('harian') ||
               j.jamKe.toLowerCase().includes('kelompok') ||
-              j.jamKe.toLowerCase().includes('pengampu')
+              j.jamKe.toLowerCase().includes('pengampu') ||
+              j.jamKe.toLowerCase().includes('kode')
                 ? j.jamKe
                 : `Jam ${j.jamKe}`;
+            const filledBadge = j.filledToday ? ' ✓ Sudah Presensi' : '';
             opts.push({
               value: `${j.kelas}|${j.mapel}`,
-              label: `${j.kelas} — ${j.mapel} (${jamLabel})`,
+              label: `${j.kelas} — ${j.mapel} (${jamLabel})${filledBadge}`,
               grup: j.kelas,
               mapel: j.mapel,
+              filledToday: Boolean(j.filledToday),
+              isBatchAll: j.kelas.includes(','),
             });
           });
         }
         setTargetOptions(opts);
-        if (opts.length >= 1) {
-          setSelectedTarget(opts[0].value);
-        }
+        setSelectedTarget((prev) => {
+          if (prev && opts.some((o) => o.value === prev)) {
+            return prev;
+          }
+          return opts.length >= 1 ? opts[0].value : '';
+        });
       })
       .finally(() => {
         if (active) setLoadingTargets(false);
@@ -305,7 +331,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
     return () => {
       active = false;
     };
-  }, [jenis, gender, namaGuru, tanggal, hari]);
+  }, [jenis, gender, namaGuru, tanggal, hari, targetRefreshTick]);
 
   // Load student roster when selectedTarget changes
   useEffect(() => {
@@ -387,6 +413,8 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
       } else {
         notify(data.message || 'Presensi berhasil disimpan.', 'success');
         setIsEditMode(true);
+        setTargetRefreshTick((n) => n + 1);
+        emitDataMutated();
         onSaved?.();
       }
     } catch {
@@ -672,13 +700,33 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
 
           {/* Kamar / Kelas / Halaqah */}
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              {jenis === 'Asrama'
-                ? 'Kamar Binaan (Semua / Per Kamar)'
-                : jenis === 'Al-Quran'
-                ? "Jadwal & Kode Kelas Al-Qur'an"
-                : 'Jadwal Kelas & Mapel'}
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-semibold text-slate-700">
+                {jenis === 'Asrama'
+                  ? 'Kamar Binaan (Semua / Per Kamar)'
+                  : jenis === 'Al-Quran'
+                  ? "Jadwal & Kode Kelas Al-Qur'an"
+                  : 'Jadwal Kelas & Mapel'}
+              </label>
+              {(() => {
+                const singleOpts = targetOptions.filter((o) => !o.isBatchAll);
+                if (singleOpts.length === 0) return null;
+                const filledCount = singleOpts.filter((o) => o.filledToday).length;
+                return (
+                  <span
+                    className={`text-[11px] font-bold font-mono-num ${
+                      filledCount === singleOpts.length && singleOpts.length > 0
+                        ? 'text-emerald-700'
+                        : filledCount > 0
+                        ? 'text-teal-700'
+                        : 'text-slate-500'
+                    }`}
+                  >
+                    Progres: {filledCount}/{singleOpts.length} Selesai
+                  </span>
+                );
+              })()}
+            </div>
             <select
               value={selectedTarget}
               onChange={(e) => setSelectedTarget(e.target.value)}
@@ -700,6 +748,38 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
                 </option>
               ))}
             </select>
+
+            {/* Quick Clickable Progress Chips per Kamar / Jadwal */}
+            {(() => {
+              const singleOpts = targetOptions.filter((o) => !o.isBatchAll);
+              if (singleOpts.length === 0) return null;
+              return (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {singleOpts.map((opt) => {
+                    const isSelected = selectedTarget === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => setSelectedTarget(opt.value)}
+                        className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors ${
+                          opt.filledToday
+                            ? isSelected
+                              ? 'border-emerald-600 bg-emerald-600 text-white'
+                              : 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                            : isSelected
+                            ? 'border-slate-700 bg-slate-800 text-white'
+                            : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        {opt.filledToday && <Check className="h-3 w-3 shrink-0" />}
+                        <span>{opt.grup}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Materi / Catatan */}
@@ -773,10 +853,17 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center gap-3 text-xs">
-                {isEditMode && (
-                  <span className="font-semibold text-amber-700">Mode Edit (Data Tersimpan)</span>
-                )}
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                {isEditMode ? (
+                  <span className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-800">
+                    <Check className="h-3.5 w-3.5" />
+                    Tersimpan · Terhubung ke Monitoring & Akun Guru
+                  </span>
+                ) : siswaList.length > 0 ? (
+                  <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 font-semibold text-amber-800">
+                    Belum Disimpan Hari Ini
+                  </span>
+                ) : null}
                 {syncedCount > 0 && (
                   <span className="inline-flex items-center gap-1 font-semibold text-sky-700">
                     <AlertCircle className="h-3.5 w-3.5" />

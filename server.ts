@@ -529,13 +529,14 @@ function registerApiRoutes() {
     const gender = String(req.query.gender || 'Putri') as Gender;
     const guru = String(req.query.guru || '');
     const hari = String(req.query.hari || '');
+    const tanggal = String(req.query.tanggal || '');
 
     if (jenis === 'Asrama') {
-      const rooms = store.getKamarMusyrif(guru, gender);
-      const roomDetails = store.getAllRooms().filter((r) => r.gender === gender);
+      const roomDetails = store.getRoomDetailsForPresensi(guru, gender, tanggal);
+      const rooms = roomDetails.map((r) => r.kamar);
       return res.json({ rooms, roomDetails });
     }
-    const jadwal = store.getOpsiJadwalPresensi(jenis, hari, guru, gender);
+    const jadwal = store.getOpsiJadwalPresensi(jenis, hari, guru, gender, tanggal);
     return res.json({ jadwal });
   });
 
