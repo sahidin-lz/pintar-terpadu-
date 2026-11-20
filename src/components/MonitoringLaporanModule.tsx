@@ -17,7 +17,24 @@ import {
   Users,
   BookOpen,
   ShieldCheck,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Eye,
 } from 'lucide-react';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import type {
   AnalyticsTerpadu,
   DashboardStats,
@@ -54,6 +71,27 @@ interface Props {
   notify: (msg: string, type?: 'success' | 'error' | 'info') => void;
 }
 
+type ClassSortKey =
+  | 'kelas'
+  | 'gender'
+  | 'waliKelas'
+  | 'totalSantri'
+  | 'persenHadir'
+  | 'cakupanPembinaanPct'
+  | 'wajibPct'
+  | 'netPoin';
+
+type StudentSortKey =
+  | 'nama'
+  | 'kelas'
+  | 'ht'
+  | 'sia'
+  | 'persenHadir'
+  | 'totalCatatan'
+  | 'wajibPct'
+  | 'sunnahPct'
+  | 'netPoin';
+
 export const MonitoringLaporanModule: React.FC<Props> = ({
   options,
   stats: propStats,
@@ -72,6 +110,8 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
   const [monDiv, setMonDiv] = useState<'akademik' | 'alquran' | 'asrama'>(() =>
     loadSubTab('pintar_monitoring_div_v1', ['akademik', 'alquran', 'asrama'] as const, 'akademik'),
   );
+  const [monStatusFilter, setMonStatusFilter] = useState<'ALL' | 'HADIR' | 'BELUM' | 'GURU_ABSEN'>('ALL');
+  const [monSearch, setMonSearch] = useState('');
 
   useEffect(() => {
     saveSubTab('pintar_monitoring_subtab_v1', subTab);
@@ -93,6 +133,21 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
   const [statsKelas, setStatsKelas] = useState<string>('SEMUA');
   const [studentSearch, setStudentSearch] = useState<string>('');
   const [studentQuickFilter, setStudentQuickFilter] = useState<'all' | 'attention' | 'unmentored'>('all');
+
+  // Interactive Chart & Table states
+  const [divisiChartMode, setDivisiChartMode] = useState<'persen' | 'volume'>('persen');
+  const [rightChartMode, setRightChartMode] = useState<'pembinaan' | 'komposisi'>('pembinaan');
+  const [classChartMetric, setClassChartMetric] = useState<'kehadiran' | 'santri' | 'ibadah'>('kehadiran');
+  const [classSearch, setClassSearch] = useState<string>('');
+  const [classSort, setClassSort] = useState<{ key: ClassSortKey; dir: 'asc' | 'desc' }>({
+    key: 'kelas',
+    dir: 'asc',
+  });
+  const [studentSort, setStudentSort] = useState<{ key: StudentSortKey; dir: 'asc' | 'desc' }>({
+    key: 'nama',
+    dir: 'asc',
+  });
+  const [expandedStudentId, setExpandedStudentId] = useState<string | null>(null);
 
   const [stats, setStats] = useState<DashboardStats | null>(propStats ?? initialStats ?? null);
   const [analisis, setAnalisis] = useState<AnalyticsTerpadu | null>(null);
@@ -158,12 +213,29 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
   const fetchAnalisis = async (tgl: string, wilayah: WilayahFilter) => {
     setLoadingAnalisis(true);
     try {
-      const [resAn, resSt] = await Promise.all([
+      let [resAn, resSt] = await Promise.all([
         fetch(`/api/analisis?tanggal=${encodeURIComponent(tgl)}`),
         fetch(`/api/stats?wilayah=${encodeURIComponent(wilayah)}`),
       ]);
-      const dataAn = await resAn.json();
-      const dataSt = await resSt.json();
+      let dataAn = await resAn.json();
+      let dataSt = await resSt.json();
+      const totalSantriAn =
+        (dataAn?.pembinaanAnalisis?.Putra?.totalSantri || 0) +
+        (dataAn?.pembinaanAnalisis?.Putri?.totalSantri || 0);
+      const totalKbmAn =
+        (dataAn?.monitoringRingkasan?.Putra?.totalJadwalKbm || 0) +
+        (dataAn?.monitoringRingkasan?.Putri?.totalJadwalKbm || 0);
+      if (totalSantriAn === 0 && totalKbmAn === 0) {
+        const restored = await ensureServerHydratedFromMirror();
+        if (restored) {
+          [resAn, resSt] = await Promise.all([
+            fetch(`/api/analisis?tanggal=${encodeURIComponent(tgl)}`),
+            fetch(`/api/stats?wilayah=${encodeURIComponent(wilayah)}`),
+          ]);
+          dataAn = await resAn.json();
+          dataSt = await resSt.json();
+        }
+      }
       setAnalisis(dataAn);
       setStats(dataSt);
     } catch {
@@ -181,8 +253,19 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
         wilayah,
         kelas,
       });
-      const res = await fetch(`/api/laporan/ringkasan-bulanan?${qs.toString()}`);
-      const data = await res.json();
+      let res = await fetch(`/api/laporan/ringkasan-bulanan?${qs.toString()}`);
+      let data = await res.json();
+      if (
+        (data?.meta?.totalSantri || 0) === 0 &&
+        (data?.presensiSummary?.totalSesi || 0) === 0 &&
+        (!data?.classComparison || data.classComparison.length === 0)
+      ) {
+        const restored = await ensureServerHydratedFromMirror();
+        if (restored) {
+          res = await fetch(`/api/laporan/ringkasan-bulanan?${qs.toString()}`);
+          data = await res.json();
+        }
+      }
       setMonthlyReport(data);
     } catch {
       notify('Gagal memuat ringkasan bulanan wali kelas.', 'error');
@@ -281,10 +364,231 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
     }
   };
 
-  // Filtered student rows in Tab 2
+  // Live Monitoring metrics per division (respecting statsWilayah) to enrich charts
+  const liveDivisionMetrics = useMemo(() => {
+    if (!monData) {
+      return {
+        Akademik: { diisi: 0, total: 0, pct: 0 },
+        AlQuran: { diisi: 0, total: 0, pct: 0 },
+        Asrama: { diisi: 0, total: 0, pct: 0 },
+      };
+    }
+    const sides =
+      statsWilayah === 'Putra'
+        ? [monData.putra]
+        : statsWilayah === 'Putri'
+        ? [monData.putri]
+        : [monData.putra, monData.putri];
+
+    let akDiisi = 0;
+    let akTotal = 0;
+    let qDiisi = 0;
+    let qTotal = 0;
+    let asrDiisi = 0;
+    let asrTotal = 0;
+
+    sides.forEach((s) => {
+      if (!s) return;
+      const ak = [...s.akademik.kelas10, ...s.akademik.kelas11, ...s.akademik.kelas12];
+      const q = [...s.alquran.kelas10, ...s.alquran.kelas11, ...s.alquran.kelas12];
+      const asr = s.asrama || [];
+      akTotal += ak.length;
+      akDiisi += ak.filter((c) => c.status === 'HADIR').length;
+      qTotal += q.length;
+      qDiisi += q.filter((c) => c.status === 'HADIR').length;
+      asrTotal += asr.length;
+      asrDiisi += asr.filter((r) => r.status === 'HADIR').length;
+    });
+
+    return {
+      Akademik: {
+        diisi: akDiisi,
+        total: akTotal,
+        pct: akTotal > 0 ? Math.round((akDiisi / akTotal) * 100) : 0,
+      },
+      AlQuran: {
+        diisi: qDiisi,
+        total: qTotal,
+        pct: qTotal > 0 ? Math.round((qDiisi / qTotal) * 100) : 0,
+      },
+      Asrama: {
+        diisi: asrDiisi,
+        total: asrTotal,
+        pct: asrTotal > 0 ? Math.round((asrDiisi / asrTotal) * 100) : 0,
+      },
+    };
+  }, [monData, statsWilayah]);
+
+  // Chart data for Left Panel: Kehadiran & Keterisian per Divisi
+  const divisiChartData = useMemo(() => {
+    if (!monthlyReport) return [];
+    const byDiv = monthlyReport.presensiSummary.byDivisi;
+    return [
+      {
+        name: 'Akademik',
+        fullLabel: 'Akademik (KBM Kelas)',
+        persenHadir: byDiv.Akademik.persenHadir,
+        keterisianPct: liveDivisionMetrics.Akademik.pct,
+        hadirLog: byDiv.Akademik.H + byDiv.Akademik.T,
+        absenLog: byDiv.Akademik.S + byDiv.Akademik.I + byDiv.Akademik.A,
+        totalLog: byDiv.Akademik.total,
+        jadwalAktif: liveDivisionMetrics.Akademik.total,
+        jadwalTerisi: liveDivisionMetrics.Akademik.diisi,
+        S: byDiv.Akademik.S,
+        I: byDiv.Akademik.I,
+        A: byDiv.Akademik.A,
+        color: '#0d9488',
+      },
+      {
+        name: "Al-Qur'an",
+        fullLabel: "Al-Qur'an / Halaqah",
+        persenHadir: byDiv.AlQuran.persenHadir,
+        keterisianPct: liveDivisionMetrics.AlQuran.pct,
+        hadirLog: byDiv.AlQuran.H + byDiv.AlQuran.T,
+        absenLog: byDiv.AlQuran.S + byDiv.AlQuran.I + byDiv.AlQuran.A,
+        totalLog: byDiv.AlQuran.total,
+        jadwalAktif: liveDivisionMetrics.AlQuran.total,
+        jadwalTerisi: liveDivisionMetrics.AlQuran.diisi,
+        S: byDiv.AlQuran.S,
+        I: byDiv.AlQuran.I,
+        A: byDiv.AlQuran.A,
+        color: '#4f46e5',
+      },
+      {
+        name: 'Asrama',
+        fullLabel: 'Asrama / Kesantrian',
+        persenHadir: byDiv.Asrama.persenHadir,
+        keterisianPct: liveDivisionMetrics.Asrama.pct,
+        hadirLog: byDiv.Asrama.H + byDiv.Asrama.T,
+        absenLog: byDiv.Asrama.S + byDiv.Asrama.I + byDiv.Asrama.A,
+        totalLog: byDiv.Asrama.total,
+        jadwalAktif: liveDivisionMetrics.Asrama.total,
+        jadwalTerisi: liveDivisionMetrics.Asrama.diisi,
+        S: byDiv.Asrama.S,
+        I: byDiv.Asrama.I,
+        A: byDiv.Asrama.A,
+        color: '#10b981',
+      },
+      {
+        name: 'Ujian',
+        fullLabel: 'Ujian Sekolah',
+        persenHadir: byDiv.Ujian.persenHadir,
+        keterisianPct: byDiv.Ujian.persenHadir,
+        hadirLog: byDiv.Ujian.H + byDiv.Ujian.T,
+        absenLog: byDiv.Ujian.S + byDiv.Ujian.I + byDiv.Ujian.A,
+        totalLog: byDiv.Ujian.total,
+        jadwalAktif: byDiv.Ujian.total > 0 ? Math.ceil(byDiv.Ujian.total / 20) : 12,
+        jadwalTerisi: byDiv.Ujian.total > 0 ? Math.ceil((byDiv.Ujian.H + byDiv.Ujian.T) / 20) : 0,
+        S: byDiv.Ujian.S,
+        I: byDiv.Ujian.I,
+        A: byDiv.Ujian.A,
+        color: '#f59e0b',
+      },
+    ];
+  }, [monthlyReport, liveDivisionMetrics]);
+
+  // Chart data for Right Panel: Distribusi Pembinaan OR Komposisi Kelas/Wilayah
+  const rightDistributionData = useMemo(() => {
+    if (!monthlyReport) return { mode: 'komposisi' as const, items: [], total: 0 };
+    const totalCat = monthlyReport.pembinaanSummary.totalCatatan;
+    const COLORS = ['#0d9488', '#4f46e5', '#f43f5e', '#10b981', '#f59e0b', '#0284c7'];
+
+    if (rightChartMode === 'pembinaan' && totalCat > 0) {
+      const items = monthlyReport.pembinaanSummary.kategoriCounts.map((k, idx) => ({
+        name: k.kategori,
+        value: k.count,
+        pct: Math.round((k.count / Math.max(1, totalCat)) * 100),
+        color: COLORS[idx % COLORS.length],
+        unit: 'catatan',
+      }));
+      return { mode: 'pembinaan' as const, items, total: totalCat };
+    }
+
+    // Build colorful composition breakdown across Tingkat & Wilayah from classComparison or statsScopedClasses
+    const groups = new Map<string, number>();
+    const classes = monthlyReport.classComparison || [];
+    if (classes.length > 0) {
+      classes.forEach((c) => {
+        const tingkat = c.kelas.startsWith('10')
+          ? 'Kelas 10'
+          : c.kelas.startsWith('11')
+          ? 'Kelas 11'
+          : c.kelas.startsWith('12')
+          ? 'Kelas 12'
+          : 'Kelas Lain';
+        const key = `${tingkat} ${c.gender}`;
+        const val = c.totalSantri > 0 ? c.totalSantri : 1;
+        groups.set(key, (groups.get(key) || 0) + val);
+      });
+    } else {
+      statsScopedClasses.forEach((kls) => {
+        const tingkat = kls.startsWith('10')
+          ? 'Kelas 10'
+          : kls.startsWith('11')
+          ? 'Kelas 11'
+          : kls.startsWith('12')
+          ? 'Kelas 12'
+          : 'Kelas';
+        groups.set(tingkat, (groups.get(tingkat) || 0) + 1);
+      });
+    }
+
+    const totalVal = Array.from(groups.values()).reduce((a, b) => a + b, 0) || 1;
+    const unitLabel = classes.some((c) => c.totalSantri > 0) ? 'santri' : 'kelas';
+    const items = Array.from(groups.entries()).map(([name, value], idx) => ({
+      name,
+      value,
+      pct: Math.round((value / totalVal) * 100),
+      color: COLORS[idx % COLORS.length],
+      unit: unitLabel,
+    }));
+
+    return { mode: 'komposisi' as const, items, total: totalVal };
+  }, [monthlyReport, rightChartMode, statsScopedClasses]);
+
+  // Sorted & filtered classComparison for Section 3
+  const sortedClassComparison = useMemo(() => {
+    if (!monthlyReport) return [];
+    let list = [...monthlyReport.classComparison];
+    if (classSearch.trim()) {
+      const q = classSearch.trim().toLowerCase();
+      list = list.filter(
+        (c) =>
+          c.kelas.toLowerCase().includes(q) ||
+          c.waliKelas.toLowerCase().includes(q) ||
+          c.gender.toLowerCase().includes(q)
+      );
+    }
+    list.sort((a, b) => {
+      const dir = classSort.dir === 'asc' ? 1 : -1;
+      switch (classSort.key) {
+        case 'kelas':
+          return a.kelas.localeCompare(b.kelas, 'id', { numeric: true }) * dir;
+        case 'gender':
+          return a.gender.localeCompare(b.gender) * dir;
+        case 'waliKelas':
+          return a.waliKelas.localeCompare(b.waliKelas) * dir;
+        case 'totalSantri':
+          return (a.totalSantri - b.totalSantri) * dir;
+        case 'persenHadir':
+          return (a.persenHadir - b.persenHadir) * dir;
+        case 'cakupanPembinaanPct':
+          return (a.cakupanPembinaanPct - b.cakupanPembinaanPct) * dir;
+        case 'wajibPct':
+          return (a.wajibPct - b.wajibPct) * dir;
+        case 'netPoin':
+          return (a.netPoin - b.netPoin) * dir;
+        default:
+          return 0;
+      }
+    });
+    return list;
+  }, [monthlyReport, classSearch, classSort]);
+
+  // Filtered & sorted student rows in Tab 2
   const filteredStudentRows = useMemo(() => {
     if (!monthlyReport) return [];
-    let list = monthlyReport.studentRows;
+    let list = [...monthlyReport.studentRows];
     if (studentSearch.trim()) {
       const q = studentSearch.trim().toLowerCase();
       list = list.filter(
@@ -307,8 +611,56 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
     } else if (studentQuickFilter === 'unmentored') {
       list = list.filter((r) => r.pembinaan.totalCatatan === 0);
     }
+    list.sort((a, b) => {
+      const dir = studentSort.dir === 'asc' ? 1 : -1;
+      switch (studentSort.key) {
+        case 'nama':
+          return a.nama.localeCompare(b.nama, 'id') * dir;
+        case 'kelas':
+          return a.kelas.localeCompare(b.kelas, 'id', { numeric: true }) * dir;
+        case 'ht':
+          return (a.presensi.H + a.presensi.T - (b.presensi.H + b.presensi.T)) * dir;
+        case 'sia':
+          return (
+            a.presensi.S + a.presensi.I + a.presensi.A - (b.presensi.S + b.presensi.I + b.presensi.A)
+          ) * dir;
+        case 'persenHadir':
+          return (a.presensi.persenHadir - b.presensi.persenHadir) * dir;
+        case 'totalCatatan':
+          return (a.pembinaan.totalCatatan - b.pembinaan.totalCatatan) * dir;
+        case 'wajibPct':
+          return (a.pembinaan.wajibPct - b.pembinaan.wajibPct) * dir;
+        case 'sunnahPct':
+          return (a.pembinaan.sunnahPct - b.pembinaan.sunnahPct) * dir;
+        case 'netPoin':
+          return (a.pembinaan.netPoin - b.pembinaan.netPoin) * dir;
+        default:
+          return 0;
+      }
+    });
     return list;
-  }, [monthlyReport, studentSearch, studentQuickFilter]);
+  }, [monthlyReport, studentSearch, studentQuickFilter, studentSort]);
+
+  const toggleClassSort = (key: ClassSortKey) => {
+    setClassSort((prev) =>
+      prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }
+    );
+  };
+
+  const toggleStudentSort = (key: StudentSortKey) => {
+    setStudentSort((prev) =>
+      prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }
+    );
+  };
+
+  const renderSortIcon = (active: boolean, dir: 'asc' | 'desc') => {
+    if (!active) return <ArrowUpDown className="h-3 w-3 text-slate-400 inline ml-1" />;
+    return dir === 'asc' ? (
+      <ArrowUp className="h-3 w-3 text-indigo-600 inline ml-1" />
+    ) : (
+      <ArrowDown className="h-3 w-3 text-indigo-600 inline ml-1" />
+    );
+  };
 
   // Direct PDF Download for Wali Kelas Monthly Summary
   const handleDownloadMonthlyWaliPdf = async (overrideKelas?: string) => {
@@ -616,57 +968,97 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
   };
 
   const renderMatrixTable = (title: string, items: MonitoringCell[]) => {
+    const filteredItems = items.filter((it) => {
+      if (monStatusFilter !== 'ALL' && it.status !== monStatusFilter) return false;
+      if (monSearch.trim()) {
+        const q = monSearch.trim().toLowerCase();
+        return (
+          it.kelas.toLowerCase().includes(q) ||
+          it.mapel.toLowerCase().includes(q) ||
+          it.guru.toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+
     const klsMap = new Map<string, MonitoringCell[]>();
-    items.forEach((it) => {
+    filteredItems.forEach((it) => {
       if (!klsMap.has(it.kelas)) klsMap.set(it.kelas, []);
       klsMap.get(it.kelas)!.push(it);
     });
+
+    const hadirCount = filteredItems.filter((c) => c.status === 'HADIR').length;
+    const totalCount = filteredItems.length;
+    const pct = totalCount > 0 ? Math.round((hadirCount / totalCount) * 100) : 0;
 
     if (klsMap.size === 0) {
       return (
         <div className="rounded-xl border border-slate-200 bg-white p-5">
           <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">{title}</h4>
-          <p className="mt-2 text-xs text-slate-500">Tidak ada jadwal aktif pada hari ini.</p>
+          <p className="mt-2 text-xs text-slate-500">
+            Tidak ada jadwal yang sesuai filter pada hari ini.
+          </p>
         </div>
       );
     }
 
     return (
       <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-        <div className="border-b border-slate-200 bg-slate-50 px-5 py-3">
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-700">{title}</h4>
+        <div className="border-b border-slate-200 bg-slate-50 px-5 py-3 flex flex-wrap items-center justify-between gap-2">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">{title}</h4>
+          <div className="flex items-center gap-2 text-xs font-mono-num">
+            <span className="rounded-md bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-800">
+              Terisi: {hadirCount}/{totalCount} ({pct}%)
+            </span>
+          </div>
         </div>
         <div className="divide-y divide-slate-100">
-          {Array.from(klsMap.entries()).map(([kls, cells]) => (
-            <div key={kls} className="p-4 flex flex-col gap-2.5 sm:flex-row sm:items-center">
-              <div className="w-36 shrink-0 font-semibold text-xs text-slate-900">{kls}</div>
-              <div className="flex flex-wrap gap-2">
-                {cells.map((c, idx) => {
-                  const style =
-                    c.status === 'HADIR'
-                      ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                      : c.status === 'GURU_ABSEN'
-                      ? 'border-amber-200 bg-amber-50 text-amber-900'
-                      : 'border-rose-200 bg-rose-50 text-rose-900';
-                  return (
-                    <div key={idx} className={`rounded-lg border px-3 py-2 text-xs ${style}`}>
-                      <div className="font-mono-num font-bold flex items-center gap-1.5">
-                        {c.status === 'HADIR' ? (
-                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                        ) : c.status === 'GURU_ABSEN' ? (
-                          <UserX className="h-3.5 w-3.5 text-amber-600" />
-                        ) : (
-                          <AlertTriangle className="h-3.5 w-3.5 text-rose-600" />
-                        )}
-                        Jam {c.jam} · {c.mapel}
-                      </div>
-                      <div className="mt-0.5 text-[11px] opacity-80">{c.guru}</div>
+          {Array.from(klsMap.entries()).map(([kls, cells]) => {
+            const klsHadir = cells.filter((c) => c.status === 'HADIR').length;
+            return (
+              <div key={kls} className="p-4 flex flex-col gap-2.5 sm:flex-row sm:items-center hover:bg-slate-50/70 transition-colors">
+                <div className="w-40 shrink-0">
+                  <div className="font-bold text-xs text-slate-900">{kls}</div>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <div className="h-1.5 w-20 overflow-hidden rounded-full bg-slate-200">
+                      <div
+                        style={{ width: `${cells.length > 0 ? Math.round((klsHadir / cells.length) * 100) : 0}%` }}
+                        className="h-full bg-emerald-500"
+                      />
                     </div>
-                  );
-                })}
+                    <span className="font-mono-num text-[10px] font-semibold text-slate-500">
+                      {klsHadir}/{cells.length}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {cells.map((c, idx) => {
+                    const style =
+                      c.status === 'HADIR'
+                        ? 'border-emerald-300 bg-emerald-50/90 text-emerald-950 shadow-2xs'
+                        : c.status === 'GURU_ABSEN'
+                        ? 'border-amber-300 bg-amber-50/90 text-amber-950'
+                        : 'border-rose-200 bg-rose-50/80 text-rose-950';
+                    return (
+                      <div key={idx} className={`rounded-lg border px-3 py-2 text-xs transition-transform hover:-translate-y-0.5 ${style}`}>
+                        <div className="font-mono-num font-bold flex items-center gap-1.5">
+                          {c.status === 'HADIR' ? (
+                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                          ) : c.status === 'GURU_ABSEN' ? (
+                            <UserX className="h-3.5 w-3.5 text-amber-600" />
+                          ) : (
+                            <AlertTriangle className="h-3.5 w-3.5 text-rose-600" />
+                          )}
+                          Jam {c.jam} · {c.mapel}
+                        </div>
+                        <div className="mt-0.5 text-[11px] opacity-85">{c.guru}</div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
@@ -733,6 +1125,9 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                 const akHadir = akCells.filter((c) => c.status === 'HADIR').length;
                 const qHadir = qCells.filter((c) => c.status === 'HADIR').length;
                 const asrHadir = asr.filter((r) => r.status === 'HADIR').length;
+                const akPct = akCells.length > 0 ? Math.round((akHadir / akCells.length) * 100) : 0;
+                const qPct = qCells.length > 0 ? Math.round((qHadir / qCells.length) * 100) : 0;
+                const asrPct = asr.length > 0 ? Math.round((asrHadir / asr.length) * 100) : 0;
                 const active = monGender === g;
                 return (
                   <button
@@ -742,8 +1137,8 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                     className={`text-left rounded-xl border p-4 transition-all ${
                       active
                         ? g === 'putri'
-                          ? 'border-rose-300 bg-rose-50/50'
-                          : 'border-sky-300 bg-sky-50/50'
+                          ? 'border-rose-300 bg-rose-50/50 ring-2 ring-rose-200/60'
+                          : 'border-sky-300 bg-sky-50/50 ring-2 ring-sky-200/60'
                         : 'border-slate-200 bg-white hover:bg-slate-50'
                     }`}
                   >
@@ -761,21 +1156,39 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                     </div>
                     <div className="mt-3 grid grid-cols-3 gap-2 font-mono-num text-xs">
                       <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
-                        <div className="text-[10px] text-slate-500">Akademik</div>
-                        <div className="font-bold text-slate-900">
+                        <div className="flex items-center justify-between text-[10px] text-slate-500">
+                          <span>Akademik</span>
+                          <span className="font-bold text-teal-700">{akPct}%</span>
+                        </div>
+                        <div className="font-bold text-slate-900 mt-0.5">
                           {akHadir}/{akCells.length}
                         </div>
-                      </div>
-                      <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
-                        <div className="text-[10px] text-slate-500">Al-Qur&apos;an</div>
-                        <div className="font-bold text-slate-900">
-                          {qHadir}/{qCells.length}
+                        <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                          <div style={{ width: `${akPct}%` }} className="h-full bg-teal-600" />
                         </div>
                       </div>
                       <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
-                        <div className="text-[10px] text-slate-500">Kamar Asrama</div>
-                        <div className="font-bold text-slate-900">
+                        <div className="flex items-center justify-between text-[10px] text-slate-500">
+                          <span>Al-Qur&apos;an</span>
+                          <span className="font-bold text-indigo-700">{qPct}%</span>
+                        </div>
+                        <div className="font-bold text-slate-900 mt-0.5">
+                          {qHadir}/{qCells.length}
+                        </div>
+                        <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                          <div style={{ width: `${qPct}%` }} className="h-full bg-indigo-600" />
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+                        <div className="flex items-center justify-between text-[10px] text-slate-500">
+                          <span>Kamar Asrama</span>
+                          <span className="font-bold text-emerald-700">{asrPct}%</span>
+                        </div>
+                        <div className="font-bold text-slate-900 mt-0.5">
                           {asrHadir}/{asr.length}
+                        </div>
+                        <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                          <div style={{ width: `${asrPct}%` }} className="h-full bg-emerald-600" />
                         </div>
                       </div>
                     </div>
@@ -785,72 +1198,111 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
             </div>
           )}
 
-          <div className="rounded-xl border border-slate-200 bg-white p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="inline-flex rounded-lg bg-slate-100 p-1">
-                {(['putri', 'putra'] as const).map((g) => (
-                  <button
-                    key={g}
-                    type="button"
-                    onClick={() => setMonGender(g)}
-                    className={`rounded-md px-3.5 py-1.5 text-xs font-semibold ${
-                      monGender === g
-                        ? g === 'putri'
-                          ? 'bg-rose-600 text-white shadow-sm'
-                          : 'bg-sky-600 text-white shadow-sm'
-                        : 'text-slate-600'
-                    }`}
-                  >
-                    Wilayah {g === 'putri' ? 'Putri' : 'Putra'}
-                  </button>
-                ))}
+          <div className="rounded-xl border border-slate-200 bg-white p-4 flex flex-col gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="inline-flex rounded-lg bg-slate-100 p-1">
+                  {(['putri', 'putra'] as const).map((g) => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => setMonGender(g)}
+                      className={`rounded-md px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap ${
+                        monGender === g
+                          ? g === 'putri'
+                            ? 'bg-rose-600 text-white shadow-sm'
+                            : 'bg-sky-600 text-white shadow-sm'
+                          : 'text-slate-600'
+                      }`}
+                    >
+                      Wilayah {g === 'putri' ? 'Putri' : 'Putra'}
+                    </button>
+                  ))}
+                </div>
+                <div className="inline-flex rounded-lg bg-slate-100 p-1">
+                  {(
+                    [
+                      { id: 'akademik', label: 'Akademik' },
+                      { id: 'alquran', label: "Al-Qur'an" },
+                      { id: 'asrama', label: 'Asrama' },
+                    ] as const
+                  ).map((d) => (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => setMonDiv(d.id)}
+                      className={`rounded-md px-3 py-1.5 text-xs font-semibold whitespace-nowrap ${
+                        monDiv === d.id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="inline-flex rounded-lg bg-slate-100 p-1">
-                {(
-                  [
-                    { id: 'akademik', label: 'Akademik' },
-                    { id: 'alquran', label: "Al-Qur'an" },
-                    { id: 'asrama', label: 'Asrama' },
-                  ] as const
-                ).map((d) => (
-                  <button
-                    key={d.id}
-                    type="button"
-                    onClick={() => setMonDiv(d.id)}
-                    className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
-                      monDiv === d.id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
-                    }`}
-                  >
-                    {d.label}
-                  </button>
-                ))}
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setTglMonitoring((d) => shiftDateStr(d, -1))}
+                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <input
+                  type="date"
+                  value={tglMonitoring}
+                  onChange={(e) => setTglMonitoring(e.target.value)}
+                  className="h-9 rounded-lg border border-slate-200 px-2.5 text-xs font-mono-num font-semibold"
+                />
+                <button
+                  type="button"
+                  onClick={() => setTglMonitoring((d) => shiftDateStr(d, 1))}
+                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+                <span className="ml-2 text-xs font-semibold text-slate-600 whitespace-nowrap">
+                  {getNamaHariFromDate(tglMonitoring)}
+                </span>
               </div>
             </div>
 
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setTglMonitoring((d) => shiftDateStr(d, -1))}
-                className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <input
-                type="date"
-                value={tglMonitoring}
-                onChange={(e) => setTglMonitoring(e.target.value)}
-                className="h-9 rounded-lg border border-slate-200 px-2.5 text-xs font-mono-num font-semibold"
-              />
-              <button
-                type="button"
-                onClick={() => setTglMonitoring((d) => shiftDateStr(d, 1))}
-                className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
-              <span className="ml-2 text-xs font-semibold text-slate-600">
-                {getNamaHariFromDate(tglMonitoring)}
-              </span>
+            {/* Interactive Filter & Search Bar for Matriks Live */}
+            <div className="flex flex-col gap-2 pt-2 border-t border-slate-100 sm:flex-row sm:items-center sm:justify-between">
+              <div className="inline-flex flex-wrap rounded-lg bg-slate-100 p-1 gap-1">
+                {(
+                  [
+                    { id: 'ALL', label: 'Semua Status' },
+                    { id: 'HADIR', label: 'Sudah Diisi' },
+                    { id: 'BELUM', label: 'Belum Diisi' },
+                    { id: 'GURU_ABSEN', label: 'Guru/Musyrif Absen' },
+                  ] as const
+                ).map((st) => (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => setMonStatusFilter(st.id)}
+                    className={`rounded-md px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors ${
+                      monStatusFilter === st.id
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" />
+                <input
+                  type="text"
+                  value={monSearch}
+                  onChange={(e) => setMonSearch(e.target.value)}
+                  placeholder="Cari kelas, mapel, guru, kamar..."
+                  className="h-7 w-full sm:w-64 rounded-lg border border-slate-200 pl-8 pr-3 text-xs"
+                />
+              </div>
             </div>
           </div>
 
@@ -858,30 +1310,48 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
             <div className="h-48 animate-pulse rounded-xl bg-slate-200" />
           ) : monDiv === 'asrama' ? (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {monData[monGender].asrama.map((rm) => (
-                <div key={rm.kamar} className="rounded-xl border border-slate-200 bg-white p-4">
-                  <div className="text-sm font-semibold text-slate-900">{rm.kamar}</div>
-                  <div className="mt-0.5 text-xs text-slate-500">{rm.musyrif}</div>
-                  <div className="mt-3 text-xs font-semibold">
-                    {rm.status === 'HADIR' ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-700">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        Sudah Diisi
-                      </span>
-                    ) : rm.status === 'GURU_ABSEN' ? (
-                      <span className="inline-flex items-center gap-1 text-amber-700">
-                        <UserX className="h-3.5 w-3.5" />
-                        Musyrif Absen
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-rose-700">
-                        <AlertTriangle className="h-3.5 w-3.5" />
-                        Belum Diisi
-                      </span>
-                    )}
+              {monData[monGender].asrama
+                .filter((rm) => {
+                  if (monStatusFilter !== 'ALL' && rm.status !== monStatusFilter) return false;
+                  if (monSearch.trim()) {
+                    const q = monSearch.trim().toLowerCase();
+                    return rm.kamar.toLowerCase().includes(q) || rm.musyrif.toLowerCase().includes(q);
+                  }
+                  return true;
+                })
+                .map((rm) => (
+                  <div
+                    key={rm.kamar}
+                    className={`rounded-xl border p-4 transition-all ${
+                      rm.status === 'HADIR'
+                        ? 'border-emerald-200 bg-emerald-50/40'
+                        : rm.status === 'GURU_ABSEN'
+                        ? 'border-amber-200 bg-amber-50/40'
+                        : 'border-slate-200 bg-white'
+                    }`}
+                  >
+                    <div className="text-sm font-semibold text-slate-900">{rm.kamar}</div>
+                    <div className="mt-0.5 text-xs text-slate-500">{rm.musyrif}</div>
+                    <div className="mt-3 text-xs font-semibold">
+                      {rm.status === 'HADIR' ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-0.5 text-emerald-800">
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          Sudah Diisi
+                        </span>
+                      ) : rm.status === 'GURU_ABSEN' ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-2 py-0.5 text-amber-800">
+                          <UserX className="h-3.5 w-3.5" />
+                          Musyrif Absen
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-rose-100 px-2 py-0.5 text-rose-800">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          Belum Diisi
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
             </div>
           ) : (
             <div className="space-y-4">
@@ -1048,7 +1518,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {/* Card 1: Kehadiran Kumulatif */}
-              <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="rounded-xl border border-slate-200 border-t-4 border-t-emerald-500 bg-white p-4 shadow-2xs">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-slate-600">Tingkat Kehadiran</span>
                   <span className="rounded-md bg-emerald-50 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-emerald-800">
@@ -1062,6 +1532,12 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                   <div className="font-mono-num text-xs font-semibold text-emerald-700">
                     H+T: {monthlyReport.presensiSummary.H + monthlyReport.presensiSummary.T}
                   </div>
+                </div>
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    style={{ width: `${monthlyReport.presensiSummary.persenHadir}%` }}
+                    className="h-full bg-emerald-500 transition-all"
+                  />
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-1.5 text-center font-mono-num text-[11px]">
                   <div className="rounded-md bg-amber-50 py-1 text-amber-800">
@@ -1077,7 +1553,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
               </div>
 
               {/* Card 2: Cakupan Pembinaan Wali Kelas */}
-              <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="rounded-xl border border-slate-200 border-t-4 border-t-teal-600 bg-white p-4 shadow-2xs">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-slate-600">Cakupan Pembinaan</span>
                   <span className="rounded-md bg-teal-50 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-teal-800">
@@ -1097,6 +1573,20 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                     {monthlyReport.pembinaanSummary.santriDibina}/{monthlyReport.meta.totalSantri} santri
                   </div>
                 </div>
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    style={{
+                      width: `${
+                        monthlyReport.meta.totalSantri === 0
+                          ? 0
+                          : Math.round(
+                              (monthlyReport.pembinaanSummary.santriDibina / monthlyReport.meta.totalSantri) * 100
+                            )
+                      }%`,
+                    }}
+                    className="h-full bg-teal-600 transition-all"
+                  />
+                </div>
                 <div className="mt-3 flex items-center justify-between text-[11px] text-slate-600">
                   <span>Wali:</span>
                   <span className="font-semibold text-slate-900 truncate max-w-[160px]">
@@ -1106,7 +1596,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
               </div>
 
               {/* Card 3: Ketaatan Sholat Wajib & Ibadah Sunnah */}
-              <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="rounded-xl border border-slate-200 border-t-4 border-t-sky-500 bg-white p-4 shadow-2xs">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-slate-600">Indeks Ibadah Santri</span>
                   <span className="rounded-md bg-sky-50 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-sky-800">
@@ -1121,11 +1611,17 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                     Sunnah: {monthlyReport.pembinaanSummary.persenIbadahSunnah}%
                   </div>
                 </div>
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    style={{ width: `${monthlyReport.pembinaanSummary.persenSholatWajib}%` }}
+                    className="h-full bg-sky-500 transition-all"
+                  />
+                </div>
                 <div className="mt-3 grid grid-cols-3 gap-1.5 text-center font-mono-num text-[10px]">
-                  <div className="rounded-md bg-slate-100 py-1 text-slate-700">
+                  <div className="rounded-md bg-emerald-50 py-1 text-emerald-800">
                     Mandiri: <strong>{monthlyReport.pembinaanSummary.prioritasCounts.Mandiri}</strong>
                   </div>
-                  <div className="rounded-md bg-slate-100 py-1 text-slate-700">
+                  <div className="rounded-md bg-sky-50 py-1 text-sky-800">
                     Rutin: <strong>{monthlyReport.pembinaanSummary.prioritasCounts.Rutin}</strong>
                   </div>
                   <div className="rounded-md bg-rose-50 py-1 text-rose-800">
@@ -1135,10 +1631,10 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
               </div>
 
               {/* Card 4: Poin Karakter & Status Tindak Lanjut */}
-              <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="rounded-xl border border-slate-200 border-t-4 border-t-indigo-600 bg-white p-4 shadow-2xs">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-slate-600">Poin &amp; Tindak Lanjut</span>
-                  <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-slate-700">
+                  <span className="rounded-md bg-indigo-50 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-indigo-800">
                     Karakter
                   </span>
                 </div>
@@ -1156,6 +1652,22 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                     +{monthlyReport.pembinaanSummary.totalPrestasi} / -{monthlyReport.pembinaanSummary.totalPelanggaran}
                   </div>
                 </div>
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.max(
+                          15,
+                          50 + monthlyReport.pembinaanSummary.netPoin
+                        )
+                      )}%`,
+                    }}
+                    className={`h-full ${
+                      monthlyReport.pembinaanSummary.netPoin >= 0 ? 'bg-indigo-600' : 'bg-rose-500'
+                    }`}
+                  />
+                </div>
                 <div className="mt-3 grid grid-cols-3 gap-1.5 text-center font-mono-num text-[10px]">
                   <div className="rounded-md bg-emerald-50 py-1 text-emerald-800">
                     Selesai: <strong>{monthlyReport.pembinaanSummary.statusCounts.Selesai}</strong>
@@ -1171,48 +1683,124 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
             </div>
           )}
 
-          {/* SECTION 2: VISUAL ANALYTICS DASHBOARD (DIVISI PRESENSI & KATEGORI PEMBINAAN) */}
+          {/* SECTION 2: VISUAL ANALYTICS DASHBOARD WITH RECHARTS (DIVISI PRESENSI & DISTRIBUSI) */}
           {monthlyReport && (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              {/* Left: Presensi per Divisi */}
+              {/* Left: Presensi & Keterisian per Divisi with Recharts BarChart */}
               <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <h3 className="text-sm font-semibold text-slate-900">
-                      Analisis Kehadiran per Divisi ({monthlyReport.meta.kelas})
+                    <h3 className="text-sm font-bold text-slate-900">
+                      Analisis Kehadiran &amp; Jadwal per Divisi ({monthlyReport.meta.kelas})
                     </h3>
                     <p className="text-xs text-slate-500">
-                      Perbandingan capaian kehadiran Akademik (KBM), Al-Qur&apos;an, Asrama, dan Ujian.
+                      Grafik capaian kehadiran santri &amp; target sesi jadwal Akademik, Al-Qur&apos;an, Asrama, dan Ujian.
                     </p>
                   </div>
-                  <BarChart3 className="h-4 w-4 text-teal-700" />
+                  <div className="inline-flex rounded-lg bg-slate-100 p-0.5 self-start sm:self-auto">
+                    {(
+                      [
+                        { id: 'persen', label: '% Capaian' },
+                        { id: 'volume', label: 'Volume Sesi' },
+                      ] as const
+                    ).map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setDivisiChartMode(m.id)}
+                        className={`rounded-md px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap ${
+                          divisiChartMode === m.id
+                            ? 'bg-white text-slate-900 shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="space-y-3.5">
-                  {(
-                    [
-                      { key: 'Akademik', label: 'Akademik (KBM Kelas)', data: monthlyReport.presensiSummary.byDivisi.Akademik },
-                      { key: 'AlQuran', label: "Al-Qur'an / Halaqah", data: monthlyReport.presensiSummary.byDivisi.AlQuran },
-                      { key: 'Asrama', label: 'Asrama / Kesantrian', data: monthlyReport.presensiSummary.byDivisi.Asrama },
-                      { key: 'Ujian', label: 'Ujian Sekolah', data: monthlyReport.presensiSummary.byDivisi.Ujian },
-                    ] as const
-                  ).map((row) => {
-                    const ht = row.data.H + row.data.T;
-                    const total = Math.max(1, row.data.total);
-                    const pct = (n: number) => `${((n / total) * 100).toFixed(1)}%`;
+                {/* Recharts BarChart */}
+                <div className="h-56 w-full rounded-xl border border-slate-100 bg-slate-50/50 p-3">
+                  <ResponsiveContainer width="100%" height="100%">
+                    {divisiChartMode === 'persen' ? (
+                      <BarChart data={divisiChartData} margin={{ top: 8, right: 12, left: -16, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#334155', fontWeight: 600 }} />
+                        <YAxis domain={[0, 100]} unit="%" tick={{ fontSize: 11, fill: '#64748b' }} />
+                        <Tooltip
+                          contentStyle={{
+                            borderRadius: '10px',
+                            border: '1px solid #e2e8f0',
+                            fontSize: '12px',
+                          }}
+                        />
+                        <Legend wrapperStyle={{ fontSize: '11px' }} />
+                        <Bar dataKey="persenHadir" name="% Hadir Santri" radius={[6, 6, 0, 0]}>
+                          {divisiChartData.map((entry, idx) => (
+                            <Cell key={`cell-hadir-${idx}`} fill={entry.color} />
+                          ))}
+                        </Bar>
+                        <Bar
+                          dataKey="keterisianPct"
+                          name="% Jadwal/Kamar Terisi"
+                          fill="#0ea5e9"
+                          radius={[6, 6, 0, 0]}
+                        />
+                      </BarChart>
+                    ) : (
+                      <BarChart data={divisiChartData} margin={{ top: 8, right: 12, left: -16, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#334155', fontWeight: 600 }} />
+                        <YAxis tick={{ fontSize: 11, fill: '#64748b' }} />
+                        <Tooltip
+                          contentStyle={{
+                            borderRadius: '10px',
+                            border: '1px solid #e2e8f0',
+                            fontSize: '12px',
+                          }}
+                        />
+                        <Legend wrapperStyle={{ fontSize: '11px' }} />
+                        <Bar dataKey="jadwalAktif" name="Target Jadwal/Kamar" fill="#6366f1" radius={[6, 6, 0, 0]} />
+                        <Bar dataKey="jadwalTerisi" name="Sesi Terisi Hari Ini" fill="#10b981" radius={[6, 6, 0, 0]} />
+                        <Bar dataKey="hadirLog" name="Log Hadir Santri" fill="#0d9488" radius={[6, 6, 0, 0]} />
+                      </BarChart>
+                    )}
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Detailed Colorful Progress Rows */}
+                <div className="space-y-3">
+                  {divisiChartData.map((row) => {
+                    const displayPct = row.totalLog > 0 ? row.persenHadir : row.keterisianPct;
                     return (
-                      <div key={row.key} className="space-y-1.5">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold text-slate-800">{row.label}</span>
-                          <span className="font-mono-num text-slate-600">
-                            <strong>{row.data.persenHadir}% Hadir</strong> ({ht}/{row.data.total}) · S:{row.data.S} · I:{row.data.I} · A:{row.data.A}
+                      <div key={row.name} className="space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="inline-block h-2.5 w-2.5 rounded-full"
+                              style={{ backgroundColor: row.color }}
+                            />
+                            <span className="font-semibold text-slate-800">{row.fullLabel}</span>
+                          </div>
+                          <span className="font-mono-num text-slate-600 text-[11px]">
+                            <strong className="text-slate-900">{row.persenHadir}% Hadir</strong> ({row.hadirLog}/
+                            {row.totalLog} log) · Jadwal:{' '}
+                            <strong className="text-teal-700">
+                              {row.jadwalTerisi}/{row.jadwalAktif}
+                            </strong>{' '}
+                            · S:{row.S} I:{row.I} A:{row.A}
                           </span>
                         </div>
-                        <div className="flex h-3.5 w-full overflow-hidden rounded-md bg-slate-100">
-                          <div style={{ width: pct(ht) }} className="bg-emerald-600" title={`Hadir+Telat: ${ht}`} />
-                          <div style={{ width: pct(row.data.S) }} className="bg-amber-500" title={`Sakit: ${row.data.S}`} />
-                          <div style={{ width: pct(row.data.I) }} className="bg-sky-500" title={`Izin: ${row.data.I}`} />
-                          <div style={{ width: pct(row.data.A) }} className="bg-rose-600" title={`Alfa: ${row.data.A}`} />
+                        <div className="flex h-3 w-full overflow-hidden rounded-full bg-slate-100">
+                          <div
+                            style={{
+                              width: `${Math.max(displayPct, row.jadwalAktif > 0 ? 6 : 0)}%`,
+                              backgroundColor: row.color,
+                            }}
+                            className="transition-all"
+                            title={`${row.fullLabel}: ${displayPct}%`}
+                          />
                         </div>
                       </div>
                     );
@@ -1220,34 +1808,104 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Right: Distribusi Kategori Pembinaan */}
+              {/* Right: Distribusi Kategori Pembinaan & Komposisi Santri with Recharts Donut Chart */}
               <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <h3 className="text-sm font-semibold text-slate-900">
-                      Distribusi Kategori Pembinaan &amp; Karakter
+                    <h3 className="text-sm font-bold text-slate-900">
+                      Distribusi Pembinaan, Karakter &amp; Komposisi Kelas
                     </h3>
                     <p className="text-xs text-slate-500">
-                      Proporsi catatan pembinaan berdasarkan fokus pengawasan Wali Kelas &amp; Musyrif/ah.
+                      {rightDistributionData.mode === 'pembinaan'
+                        ? 'Proporsi catatan pembinaan berdasarkan fokus pengawasan Wali Kelas & Musyrif/ah.'
+                        : 'Distribusi populasi santri & kelas binaan per tingkat dan wilayah asrama.'}
                     </p>
                   </div>
-                  <ShieldCheck className="h-4 w-4 text-teal-700" />
+                  <div className="inline-flex rounded-lg bg-slate-100 p-0.5 self-start sm:self-auto">
+                    {(
+                      [
+                        { id: 'pembinaan', label: 'Kategori Binaan' },
+                        { id: 'komposisi', label: 'Komposisi Kelas' },
+                      ] as const
+                    ).map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setRightChartMode(m.id)}
+                        className={`rounded-md px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap ${
+                          rightChartMode === m.id
+                            ? 'bg-white text-slate-900 shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="space-y-3">
-                  {monthlyReport.pembinaanSummary.kategoriCounts.map((kat) => {
+                {/* Recharts Donut Chart + Legend List */}
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-12 items-center rounded-xl border border-slate-100 bg-slate-50/50 p-3">
+                  <div className="h-52 sm:col-span-6">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={rightDistributionData.items}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={42}
+                          outerRadius={74}
+                          paddingAngle={3}
+                        >
+                          {rightDistributionData.items.map((entry, index) => (
+                            <Cell key={`pie-cell-${index}`} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          contentStyle={{
+                            borderRadius: '10px',
+                            border: '1px solid #e2e8f0',
+                            fontSize: '12px',
+                          }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="sm:col-span-6 space-y-2">
+                    {rightDistributionData.items.map((item) => (
+                      <div key={item.name} className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="flex items-center gap-1.5 font-semibold text-slate-800 truncate">
+                            <span
+                              className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
+                              style={{ backgroundColor: item.color }}
+                            />
+                            {item.name}
+                          </span>
+                          <span className="font-mono-num text-[11px] font-semibold text-slate-700 whitespace-nowrap">
+                            {item.value} {item.unit} ({item.pct}%)
+                          </span>
+                        </div>
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200/80">
+                          <div
+                            style={{ width: `${Math.max(item.pct, 4)}%`, backgroundColor: item.color }}
+                            className="h-full rounded-full transition-all"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Category breakdown bars for Pembinaan */}
+                <div className="space-y-2.5">
+                  {monthlyReport.pembinaanSummary.kategoriCounts.map((kat, idx) => {
                     const totalCat = Math.max(1, monthlyReport.pembinaanSummary.totalCatatan);
                     const pctNum = Math.round((kat.count / totalCat) * 100);
-                    const barColor =
-                      kat.kategori === 'Kedisiplinan'
-                        ? 'bg-rose-600'
-                        : kat.kategori === 'Prestasi'
-                        ? 'bg-emerald-600'
-                        : kat.kategori === 'Kesehatan'
-                        ? 'bg-amber-500'
-                        : kat.kategori === 'Pemantauan Ibadah'
-                        ? 'bg-teal-600'
-                        : 'bg-sky-600';
+                    const colors = ['bg-teal-600', 'bg-sky-600', 'bg-rose-600', 'bg-emerald-600', 'bg-amber-500'];
+                    const barColor = colors[idx % colors.length];
                     return (
                       <div key={kat.kategori} className="space-y-1">
                         <div className="flex items-center justify-between text-xs">
@@ -1256,8 +1914,11 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                             {kat.count} catatan ({pctNum}%)
                           </span>
                         </div>
-                        <div className="h-3 w-full overflow-hidden rounded-md bg-slate-100">
-                          <div style={{ width: `${pctNum}%` }} className={`h-full ${barColor}`} />
+                        <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+                          <div
+                            style={{ width: `${kat.count > 0 ? Math.max(pctNum, 5) : 3}%` }}
+                            className={`h-full ${barColor} opacity-${kat.count > 0 ? '100' : '30'}`}
+                          />
                         </div>
                       </div>
                     );
@@ -1266,21 +1927,21 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
 
                 {monthlyReport.pembinaanSummary.jalurCounts && (
                   <div className="border-t border-slate-100 pt-3 grid grid-cols-3 gap-2 text-xs">
-                    <div className="rounded-lg bg-slate-50 px-2.5 py-2">
-                      <div className="text-[10px] text-slate-500">Wali Kelas (Mingguan)</div>
-                      <div className="font-mono-num font-bold text-slate-900">
+                    <div className="rounded-lg border border-teal-100 bg-teal-50/60 px-2.5 py-2">
+                      <div className="text-[10px] font-semibold text-teal-800">Wali Kelas (Mingguan)</div>
+                      <div className="font-mono-num font-bold text-teal-950">
                         {monthlyReport.pembinaanSummary.jalurCounts.waliKelasMingguan}
                       </div>
                     </div>
-                    <div className="rounded-lg bg-slate-50 px-2.5 py-2">
-                      <div className="text-[10px] text-slate-500">Guru Wali (Tentatif)</div>
-                      <div className="font-mono-num font-bold text-slate-900">
+                    <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-2.5 py-2">
+                      <div className="text-[10px] font-semibold text-indigo-800">Guru Wali (Tentatif)</div>
+                      <div className="font-mono-num font-bold text-indigo-950">
                         {monthlyReport.pembinaanSummary.jalurCounts.guruWaliTentatif}
                       </div>
                     </div>
-                    <div className="rounded-lg bg-slate-50 px-2.5 py-2">
-                      <div className="text-[10px] text-slate-500">Room Visit (Tentatif)</div>
-                      <div className="font-mono-num font-bold text-slate-900">
+                    <div className="rounded-lg border border-amber-100 bg-amber-50/60 px-2.5 py-2">
+                      <div className="text-[10px] font-semibold text-amber-800">Room Visit (Tentatif)</div>
+                      <div className="font-mono-num font-bold text-amber-950">
                         {monthlyReport.pembinaanSummary.jalurCounts.roomVisitAsrama}
                       </div>
                     </div>
@@ -1290,58 +1951,227 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
             </div>
           )}
 
-          {/* SECTION 3: MATRIKS PERBANDINGAN ANTAR KELAS (DASBOR ANALISIS KELAS) */}
+          {/* SECTION 3: GRAFIK & MATRIKS INTERAKTIF PERBANDINGAN ANTAR KELAS */}
           {monthlyReport && monthlyReport.classComparison.length > 0 && (
             <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-              <div className="border-b border-slate-200 px-5 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="border-b border-slate-200 px-5 py-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-900">
-                    Matriks Analisis Perbandingan Antar Kelas ({monthlyReport.classComparison.length} Kelas)
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Grafik &amp; Matriks Interaktif Perbandingan Antar Kelas ({sortedClassComparison.length} Kelas)
                   </h3>
                   <p className="text-xs text-slate-500">
-                    Klik tombol <strong>Pilih Kelas</strong> untuk memfilter tabel santri di bawah atau <strong>Unduh PDF</strong> untuk langsung mengunduh laporan bulanan Wali Kelas.
+                    Klik batang grafik atau baris tabel untuk memfilter santri per kelas, atau klik judul kolom untuk mengurutkan data.
                   </p>
                 </div>
-                {statsKelas !== 'SEMUA' && (
-                  <button
-                    type="button"
-                    onClick={() => setStatsKelas('SEMUA')}
-                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 whitespace-nowrap shrink-0"
-                  >
-                    Tampilkan Semua Kelas
-                  </button>
-                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
+                    {(
+                      [
+                        { id: 'kehadiran', label: '% Hadir & Binaan' },
+                        { id: 'santri', label: 'Populasi Santri' },
+                        { id: 'ibadah', label: '% Sholat Wajib' },
+                      ] as const
+                    ).map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setClassChartMetric(m.id)}
+                        className={`rounded-md px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap ${
+                          classChartMetric === m.id
+                            ? 'bg-white text-slate-900 shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" />
+                    <input
+                      type="text"
+                      value={classSearch}
+                      onChange={(e) => setClassSearch(e.target.value)}
+                      placeholder="Cari kelas / wali kelas..."
+                      className="h-7 rounded-lg border border-slate-200 pl-8 pr-3 text-xs"
+                    />
+                  </div>
+                  {statsKelas !== 'SEMUA' && (
+                    <button
+                      type="button"
+                      onClick={() => setStatsKelas('SEMUA')}
+                      className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-100 whitespace-nowrap shrink-0"
+                    >
+                      Reset Filter ({statsKelas})
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="overflow-x-auto">
+
+              {/* Interactive Full-Width Recharts BarChart for Class Comparison */}
+              <div className="border-b border-slate-100 bg-slate-50/40 px-5 py-4">
+                <div className="h-60 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={sortedClassComparison}
+                      margin={{ top: 10, right: 16, left: -16, bottom: 20 }}
+                      onClick={(state) => {
+                        const clicked = (state as { activeLabel?: string } | null)?.activeLabel;
+                        if (clicked) {
+                          setStatsKelas((prev) => (prev === clicked ? 'SEMUA' : clicked));
+                        }
+                      }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis
+                        dataKey="kelas"
+                        tick={{ fontSize: 10, fill: '#334155', fontWeight: 600 }}
+                        angle={-25}
+                        textAnchor="end"
+                        interval={0}
+                      />
+                      <YAxis
+                        tick={{ fontSize: 11, fill: '#64748b' }}
+                        domain={classChartMetric === 'santri' ? [0, 'auto'] : [0, 100]}
+                        unit={classChartMetric === 'santri' ? '' : '%'}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          borderRadius: '10px',
+                          border: '1px solid #e2e8f0',
+                          fontSize: '12px',
+                        }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }} />
+                      {classChartMetric === 'kehadiran' && (
+                        <>
+                          <Bar dataKey="persenHadir" name="% Kehadiran" fill="#10b981" radius={[4, 4, 0, 0]} />
+                          <Bar
+                            dataKey="cakupanPembinaanPct"
+                            name="% Cakupan Binaan"
+                            fill="#0d9488"
+                            radius={[4, 4, 0, 0]}
+                          />
+                        </>
+                      )}
+                      {classChartMetric === 'santri' && (
+                        <>
+                          <Bar dataKey="totalSantri" name="Total Santri" radius={[4, 4, 0, 0]}>
+                            {sortedClassComparison.map((entry, idx) => (
+                              <Cell
+                                key={`cls-cell-${idx}`}
+                                fill={entry.gender === 'Putri' ? '#e11d48' : '#0284c7'}
+                              />
+                            ))}
+                          </Bar>
+                          <Bar dataKey="santriDibina" name="Santri Terbina" fill="#10b981" radius={[4, 4, 0, 0]} />
+                        </>
+                      )}
+                      {classChartMetric === 'ibadah' && (
+                        <Bar dataKey="wajibPct" name="% Sholat Wajib 5 Waktu" fill="#4f46e5" radius={[4, 4, 0, 0]} />
+                      )}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto max-h-[420px]">
                 <table className="w-full text-left text-xs">
-                  <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                  <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-slate-600">
                     <tr>
-                      <th className="px-4 py-3 font-semibold">Kelas</th>
-                      <th className="px-3 py-3 font-semibold">Wilayah</th>
-                      <th className="px-3 py-3 font-semibold">Wali Kelas</th>
-                      <th className="px-3 py-3 text-right font-semibold">Santri</th>
-                      <th className="px-3 py-3 text-right font-semibold">% Hadir</th>
-                      <th className="px-3 py-3 text-right font-semibold">Cakupan Binaan</th>
-                      <th className="px-3 py-3 text-right font-semibold">Sholat Wajib</th>
-                      <th className="px-3 py-3 text-right font-semibold">Net Poin</th>
+                      <th className="px-4 py-3 font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleClassSort('kelas')}
+                          className="inline-flex items-center font-semibold hover:text-slate-900"
+                        >
+                          Kelas {renderSortIcon(classSort.key === 'kelas', classSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-3 font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleClassSort('gender')}
+                          className="inline-flex items-center font-semibold hover:text-slate-900"
+                        >
+                          Wilayah {renderSortIcon(classSort.key === 'gender', classSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-3 font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleClassSort('waliKelas')}
+                          className="inline-flex items-center font-semibold hover:text-slate-900"
+                        >
+                          Wali Kelas {renderSortIcon(classSort.key === 'waliKelas', classSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-3 text-right font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleClassSort('totalSantri')}
+                          className="inline-flex items-center justify-end font-semibold hover:text-slate-900"
+                        >
+                          Santri {renderSortIcon(classSort.key === 'totalSantri', classSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-3 text-right font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleClassSort('persenHadir')}
+                          className="inline-flex items-center justify-end font-semibold hover:text-slate-900"
+                        >
+                          % Hadir {renderSortIcon(classSort.key === 'persenHadir', classSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-3 text-right font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleClassSort('cakupanPembinaanPct')}
+                          className="inline-flex items-center justify-end font-semibold hover:text-slate-900"
+                        >
+                          Cakupan Binaan {renderSortIcon(classSort.key === 'cakupanPembinaanPct', classSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-3 text-right font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleClassSort('wajibPct')}
+                          className="inline-flex items-center justify-end font-semibold hover:text-slate-900"
+                        >
+                          Sholat Wajib {renderSortIcon(classSort.key === 'wajibPct', classSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-3 text-right font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleClassSort('netPoin')}
+                          className="inline-flex items-center justify-end font-semibold hover:text-slate-900"
+                        >
+                          Net Poin {renderSortIcon(classSort.key === 'netPoin', classSort.dir)}
+                        </button>
+                      </th>
                       <th className="px-4 py-3 text-right font-semibold">Aksi Wali Kelas</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-mono-num">
-                    {monthlyReport.classComparison.map((c) => {
+                    {sortedClassComparison.map((c) => {
                       const isSelected = statsKelas === c.kelas;
                       return (
                         <tr
                           key={c.kelas}
-                          className={isSelected ? 'bg-teal-50/70' : 'hover:bg-slate-50'}
+                          onClick={() => setStatsKelas(isSelected ? 'SEMUA' : c.kelas)}
+                          className={`cursor-pointer transition-colors ${
+                            isSelected ? 'bg-teal-50/90 font-semibold' : 'hover:bg-indigo-50/40'
+                          }`}
                         >
                           <td className="px-4 py-2.5 font-sans font-bold text-slate-900">{c.kelas}</td>
                           <td className="px-3 py-2.5 font-sans">
                             <span
                               className={`inline-block rounded-md px-2 py-0.5 text-[11px] font-semibold ${
                                 c.gender === 'Putri'
-                                  ? 'bg-rose-50 text-rose-800'
-                                  : 'bg-sky-50 text-sky-800'
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : 'bg-sky-100 text-sky-800'
                               }`}
                             >
                               {c.gender}
@@ -1352,18 +2182,34 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                             {c.totalSantri}
                           </td>
                           <td className="px-3 py-2.5 text-right">
-                            <span className="font-bold text-emerald-700">{c.persenHadir}%</span>
-                            <span className="ml-1 text-[11px] text-slate-400">
-                              ({c.totalHadir}/{c.totalHadir + c.totalAbsen})
-                            </span>
+                            <div className="flex items-center justify-end gap-2">
+                              <div className="hidden sm:block h-1.5 w-14 overflow-hidden rounded-full bg-slate-200">
+                                <div
+                                  style={{ width: `${c.persenHadir}%` }}
+                                  className="h-full bg-emerald-500"
+                                />
+                              </div>
+                              <span className="font-bold text-emerald-700">{c.persenHadir}%</span>
+                              <span className="text-[11px] text-slate-400">
+                                ({c.totalHadir}/{c.totalHadir + c.totalAbsen})
+                              </span>
+                            </div>
                           </td>
                           <td className="px-3 py-2.5 text-right">
-                            <span className="font-semibold text-teal-800">{c.cakupanPembinaanPct}%</span>
-                            <span className="ml-1 text-[11px] text-slate-400">
-                              ({c.santriDibina}/{c.totalSantri})
-                            </span>
+                            <div className="flex items-center justify-end gap-2">
+                              <div className="hidden sm:block h-1.5 w-14 overflow-hidden rounded-full bg-slate-200">
+                                <div
+                                  style={{ width: `${c.cakupanPembinaanPct}%` }}
+                                  className="h-full bg-teal-600"
+                                />
+                              </div>
+                              <span className="font-semibold text-teal-800">{c.cakupanPembinaanPct}%</span>
+                              <span className="text-[11px] text-slate-400">
+                                ({c.santriDibina}/{c.totalSantri})
+                              </span>
+                            </div>
                           </td>
-                          <td className="px-3 py-2.5 text-right font-semibold text-slate-800">
+                          <td className="px-3 py-2.5 text-right font-semibold text-indigo-700">
                             {c.wajibPct}%
                           </td>
                           <td
@@ -1373,7 +2219,10 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                           >
                             {c.netPoin > 0 ? `+${c.netPoin}` : c.netPoin}
                           </td>
-                          <td className="px-4 py-2.5 text-right font-sans">
+                          <td
+                            className="px-4 py-2.5 text-right font-sans"
+                            onClick={(e) => e.stopPropagation()}
+                          >
                             <div className="inline-flex items-center gap-1.5">
                               <button
                                 type="button"
@@ -1405,16 +2254,16 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
             </div>
           )}
 
-          {/* SECTION 4: TABEL RINGKASAN BULANAN WALI KELAS PER SANTRI (PRESENSI + PEMBINAAN) */}
+          {/* SECTION 4: TABEL INTERAKTIF RINGKASAN BULANAN WALI KELAS PER SANTRI */}
           {monthlyReport && (
             <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
               <div className="border-b border-slate-200 p-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-900">
-                    Tabel Ringkasan Bulanan Wali Kelas: Presensi &amp; Pembinaan Santri ({filteredStudentRows.length} Santri)
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Tabel Interaktif Ringkasan Bulanan Wali Kelas: Presensi &amp; Pembinaan Santri ({filteredStudentRows.length} Santri)
                   </h3>
                   <p className="text-xs text-slate-500">
-                    {monthlyReport.meta.bulanLabel} · Kelas: <strong>{monthlyReport.meta.kelas}</strong> · Wali Kelas: <strong>{monthlyReport.meta.waliKelas}</strong>
+                    {monthlyReport.meta.bulanLabel} · Kelas: <strong>{monthlyReport.meta.kelas}</strong> · Wali Kelas: <strong>{monthlyReport.meta.waliKelas}</strong> · Klik baris santri untuk melihat rincian per divisi.
                   </p>
                 </div>
 
@@ -1462,21 +2311,93 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="overflow-x-auto max-h-[520px]">
+              <div className="overflow-x-auto max-h-[560px]">
                 <table className="w-full text-left text-xs">
                   <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-slate-600">
                     <tr>
                       <th className="px-3 py-2.5 font-semibold">No</th>
                       <th className="px-3 py-2.5 font-semibold">NIS</th>
-                      <th className="px-3 py-2.5 font-semibold">Nama Santri</th>
-                      <th className="px-3 py-2.5 font-semibold">Kelas &amp; Kamar</th>
-                      <th className="px-3 py-2.5 text-right font-semibold">H+T</th>
-                      <th className="px-3 py-2.5 text-right font-semibold">S/I/A</th>
-                      <th className="px-3 py-2.5 text-right font-semibold">% Hadir</th>
-                      <th className="px-3 py-2.5 text-right font-semibold">Binaan</th>
-                      <th className="px-3 py-2.5 text-right font-semibold">Wajib %</th>
-                      <th className="px-3 py-2.5 text-right font-semibold">Sunnah %</th>
-                      <th className="px-3 py-2.5 text-right font-semibold">Poin</th>
+                      <th className="px-3 py-2.5 font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleStudentSort('nama')}
+                          className="inline-flex items-center font-semibold hover:text-slate-900"
+                        >
+                          Nama Santri {renderSortIcon(studentSort.key === 'nama', studentSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-2.5 font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleStudentSort('kelas')}
+                          className="inline-flex items-center font-semibold hover:text-slate-900"
+                        >
+                          Kelas &amp; Kamar {renderSortIcon(studentSort.key === 'kelas', studentSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-2.5 text-right font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleStudentSort('ht')}
+                          className="inline-flex items-center justify-end font-semibold hover:text-slate-900"
+                        >
+                          H+T {renderSortIcon(studentSort.key === 'ht', studentSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-2.5 text-right font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleStudentSort('sia')}
+                          className="inline-flex items-center justify-end font-semibold hover:text-slate-900"
+                        >
+                          S/I/A {renderSortIcon(studentSort.key === 'sia', studentSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-2.5 text-right font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleStudentSort('persenHadir')}
+                          className="inline-flex items-center justify-end font-semibold hover:text-slate-900"
+                        >
+                          % Hadir {renderSortIcon(studentSort.key === 'persenHadir', studentSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-2.5 text-right font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleStudentSort('totalCatatan')}
+                          className="inline-flex items-center justify-end font-semibold hover:text-slate-900"
+                        >
+                          Binaan {renderSortIcon(studentSort.key === 'totalCatatan', studentSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-2.5 text-right font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleStudentSort('wajibPct')}
+                          className="inline-flex items-center justify-end font-semibold hover:text-slate-900"
+                        >
+                          Wajib % {renderSortIcon(studentSort.key === 'wajibPct', studentSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-2.5 text-right font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleStudentSort('sunnahPct')}
+                          className="inline-flex items-center justify-end font-semibold hover:text-slate-900"
+                        >
+                          Sunnah % {renderSortIcon(studentSort.key === 'sunnahPct', studentSort.dir)}
+                        </button>
+                      </th>
+                      <th className="px-3 py-2.5 text-right font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => toggleStudentSort('netPoin')}
+                          className="inline-flex items-center justify-end font-semibold hover:text-slate-900"
+                        >
+                          Poin {renderSortIcon(studentSort.key === 'netPoin', studentSort.dir)}
+                        </button>
+                      </th>
                       <th className="px-3 py-2.5 font-semibold">Status &amp; Catatan Terakhir</th>
                     </tr>
                   </thead>
@@ -1488,70 +2409,155 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                         </td>
                       </tr>
                     ) : (
-                      filteredStudentRows.map((st, idx) => (
-                        <tr key={st.id} className="hover:bg-slate-50">
-                          <td className="px-3 py-2.5 text-slate-400">{idx + 1}</td>
-                          <td className="px-3 py-2.5 text-slate-600">{st.nis}</td>
-                          <td className="px-3 py-2.5 font-sans font-semibold text-slate-900">
-                            <div>{st.nama}</div>
-                            <div className="text-[10px] font-normal text-slate-500">
-                              Wali: {st.waliKelas}
-                            </div>
-                          </td>
-                          <td className="px-3 py-2.5 font-sans">
-                            <div className="font-semibold text-slate-800">{st.kelas}</div>
-                            <div className="text-[10px] text-slate-500">{st.kamar}</div>
-                          </td>
-                          <td className="px-3 py-2.5 text-right font-semibold text-emerald-700">
-                            {st.presensi.H + st.presensi.T}
-                          </td>
-                          <td className="px-3 py-2.5 text-right text-slate-600">
-                            {st.presensi.S}/{st.presensi.I}/
-                            <span className={st.presensi.A > 0 ? 'font-bold text-rose-700' : ''}>
-                              {st.presensi.A}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2.5 text-right font-bold text-slate-900">
-                            {st.presensi.persenHadir}%
-                          </td>
-                          <td className="px-3 py-2.5 text-right font-semibold text-teal-800">
-                            {st.pembinaan.totalCatatan}x
-                          </td>
-                          <td className="px-3 py-2.5 text-right font-semibold text-slate-800">
-                            {st.pembinaan.wajibPct}%
-                          </td>
-                          <td className="px-3 py-2.5 text-right text-slate-600">
-                            {st.pembinaan.sunnahPct}%
-                          </td>
-                          <td
-                            className={`px-3 py-2.5 text-right font-bold ${
-                              st.pembinaan.netPoin >= 0 ? 'text-emerald-700' : 'text-rose-700'
-                            }`}
-                          >
-                            {st.pembinaan.netPoin > 0 ? `+${st.pembinaan.netPoin}` : st.pembinaan.netPoin}
-                          </td>
-                          <td className="px-3 py-2.5 font-sans">
-                            <div className="flex items-center gap-1.5">
-                              <span
-                                className={`inline-block rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
-                                  st.pembinaan.statusTerakhir === 'Eskalasi'
-                                    ? 'bg-rose-50 text-rose-800'
-                                    : st.pembinaan.statusTerakhir === 'Proses'
-                                    ? 'bg-amber-50 text-amber-800'
-                                    : st.pembinaan.statusTerakhir === 'Selesai'
-                                    ? 'bg-emerald-50 text-emerald-800'
-                                    : 'bg-slate-100 text-slate-600'
+                      filteredStudentRows.map((st, idx) => {
+                        const isExpanded = expandedStudentId === st.id;
+                        return (
+                          <React.Fragment key={st.id}>
+                            <tr
+                              onClick={() => setExpandedStudentId(isExpanded ? null : st.id)}
+                              className={`cursor-pointer transition-colors ${
+                                isExpanded ? 'bg-indigo-50/70' : 'hover:bg-slate-50'
+                              }`}
+                            >
+                              <td className="px-3 py-2.5 text-slate-400">{idx + 1}</td>
+                              <td className="px-3 py-2.5 text-slate-600">{st.nis}</td>
+                              <td className="px-3 py-2.5 font-sans font-semibold text-slate-900">
+                                <div className="flex items-center gap-1.5">
+                                  <span>{st.nama}</span>
+                                  <Eye className="h-3 w-3 text-indigo-500 opacity-75 shrink-0" />
+                                </div>
+                                <div className="text-[10px] font-normal text-slate-500">
+                                  Wali: {st.waliKelas}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2.5 font-sans">
+                                <span
+                                  className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                    st.gender === 'Putri'
+                                      ? 'bg-rose-50 text-rose-800'
+                                      : 'bg-sky-50 text-sky-800'
+                                  }`}
+                                >
+                                  {st.kelas}
+                                </span>
+                                <div className="text-[10px] text-slate-500 mt-0.5">{st.kamar}</div>
+                              </td>
+                              <td className="px-3 py-2.5 text-right font-semibold text-emerald-700">
+                                {st.presensi.H + st.presensi.T}
+                              </td>
+                              <td className="px-3 py-2.5 text-right text-slate-600">
+                                <span className="text-amber-700">{st.presensi.S}</span>/
+                                <span className="text-sky-700">{st.presensi.I}</span>/
+                                <span className={st.presensi.A > 0 ? 'font-bold text-rose-700' : ''}>
+                                  {st.presensi.A}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2.5 text-right">
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <div className="hidden sm:block h-1.5 w-12 overflow-hidden rounded-full bg-slate-200">
+                                    <div
+                                      style={{ width: `${st.presensi.persenHadir}%` }}
+                                      className={`h-full ${
+                                        st.presensi.persenHadir >= 85
+                                          ? 'bg-emerald-500'
+                                          : st.presensi.persenHadir >= 70
+                                          ? 'bg-amber-500'
+                                          : 'bg-rose-500'
+                                      }`}
+                                    />
+                                  </div>
+                                  <span className="font-bold text-slate-900">{st.presensi.persenHadir}%</span>
+                                </div>
+                              </td>
+                              <td className="px-3 py-2.5 text-right font-semibold text-teal-800">
+                                {st.pembinaan.totalCatatan}x
+                              </td>
+                              <td className="px-3 py-2.5 text-right font-semibold text-indigo-700">
+                                {st.pembinaan.wajibPct}%
+                              </td>
+                              <td className="px-3 py-2.5 text-right text-slate-600">
+                                {st.pembinaan.sunnahPct}%
+                              </td>
+                              <td
+                                className={`px-3 py-2.5 text-right font-bold ${
+                                  st.pembinaan.netPoin >= 0 ? 'text-emerald-700' : 'text-rose-700'
                                 }`}
                               >
-                                {st.pembinaan.statusTerakhir}
-                              </span>
-                              <span className="truncate max-w-[200px] text-[11px] text-slate-600">
-                                {st.pembinaan.catatanTerakhir}
-                              </span>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
+                                {st.pembinaan.netPoin > 0 ? `+${st.pembinaan.netPoin}` : st.pembinaan.netPoin}
+                              </td>
+                              <td className="px-3 py-2.5 font-sans">
+                                <div className="flex items-center gap-1.5">
+                                  <span
+                                    className={`inline-block rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
+                                      st.pembinaan.statusTerakhir === 'Eskalasi'
+                                        ? 'bg-rose-100 text-rose-800'
+                                        : st.pembinaan.statusTerakhir === 'Proses'
+                                        ? 'bg-amber-100 text-amber-800'
+                                        : st.pembinaan.statusTerakhir === 'Selesai'
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : 'bg-slate-100 text-slate-600'
+                                    }`}
+                                  >
+                                    {st.pembinaan.statusTerakhir}
+                                  </span>
+                                  <span className="truncate max-w-[200px] text-[11px] text-slate-600">
+                                    {st.pembinaan.catatanTerakhir}
+                                  </span>
+                                </div>
+                              </td>
+                            </tr>
+                            {isExpanded && (
+                              <tr className="bg-indigo-50/30 font-sans">
+                                <td colSpan={12} className="px-4 py-3">
+                                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-4 text-xs">
+                                    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                                      <div className="text-[10px] font-semibold text-slate-500 uppercase">
+                                        Presensi per Divisi
+                                      </div>
+                                      <div className="mt-1.5 flex items-center justify-between font-mono-num">
+                                        <span>Akademik: <strong>{st.presensi.akademikPct}%</strong></span>
+                                        <span>Al-Qur&apos;an: <strong>{st.presensi.alquranPct}%</strong></span>
+                                        <span>Asrama: <strong>{st.presensi.asramaPct}%</strong></span>
+                                      </div>
+                                    </div>
+                                    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                                      <div className="text-[10px] font-semibold text-slate-500 uppercase">
+                                        Pembimbing &amp; Asrama
+                                      </div>
+                                      <div className="mt-1 text-slate-800">
+                                        Wali Kelas: <strong>{st.waliKelas}</strong>
+                                      </div>
+                                      <div className="text-slate-600 text-[11px]">
+                                        Musyrif/ah: <strong>{st.musyrif}</strong> ({st.kamar})
+                                      </div>
+                                    </div>
+                                    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                                      <div className="text-[10px] font-semibold text-slate-500 uppercase">
+                                        Status &amp; Poin Karakter
+                                      </div>
+                                      <div className="mt-1 flex items-center gap-2 font-mono-num">
+                                        <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold text-indigo-800">
+                                          Status: {st.pembinaan.statusTerakhir}
+                                        </span>
+                                        <span className="text-emerald-700">+{st.pembinaan.totalPrestasi}</span>
+                                        <span className="text-rose-700">-{st.pembinaan.totalPelanggaran}</span>
+                                      </div>
+                                    </div>
+                                    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                                      <div className="text-[10px] font-semibold text-slate-500 uppercase">
+                                        Catatan Pembinaan Terakhir ({st.pembinaan.totalCatatan}x)
+                                      </div>
+                                      <div className="mt-1 text-slate-700 text-[11px]">
+                                        {st.pembinaan.catatanTerakhir}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1567,7 +2573,12 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                 const pem = analisis.pembinaanAnalisis[w];
                 const topAbsen = analisis.topAbsenPerWilayah[w];
                 return (
-                  <div key={w} className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
+                  <div
+                    key={w}
+                    className={`rounded-xl border border-slate-200 border-t-4 ${
+                      w === 'Putri' ? 'border-t-rose-500' : 'border-t-sky-500'
+                    } bg-white p-5 space-y-4`}
+                  >
                     <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                       <div>
                         <h4 className={`text-sm font-bold ${w === 'Putri' ? 'text-rose-800' : 'text-sky-800'}`}>

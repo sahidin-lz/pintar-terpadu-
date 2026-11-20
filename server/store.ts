@@ -5052,9 +5052,51 @@ class PintarStore {
       !rawKelas ||
       rawKelas === 'SEMUA' ||
       rawKelas === 'SEMUA KELAS' ||
+      matchGroupCode(k, rawKelas) ||
       normalizeStr(k) === normalizeStr(rawKelas);
 
-    const studentsInWilayah = this.db.students.filter((s) => matchW(s.gender));
+    const baseStudentsInWilayah = this.db.students.filter((s) => matchW(s.gender));
+    const knownStudentNames = new Set(baseStudentsInWilayah.map((s) => normalizeStr(s.nama)));
+    const syntheticStudents: Student[] = [];
+
+    for (const l of this.db.attendanceLogs) {
+      if (!matchW(l.gender) || !l.namaSiswa) continue;
+      const key = normalizeStr(l.namaSiswa);
+      if (!knownStudentNames.has(key)) {
+        knownStudentNames.add(key);
+        syntheticStudents.push({
+          id: `SYN_ATT_${knownStudentNames.size}`,
+          nis: '-',
+          nama: l.namaSiswa.trim().toUpperCase(),
+          gender: l.gender,
+          kelas: l.jenisPresensi === 'Belajar' ? l.kelas : '-',
+          kamar: l.jenisPresensi === 'Asrama' ? l.kelas : '-',
+          kelompokQuran: l.jenisPresensi === 'Al-Quran' ? l.kelas : '-',
+          waliKelas: l.jenisPresensi === 'Belajar' ? l.guru : '',
+          musyrif: l.jenisPresensi === 'Asrama' ? l.guru : '',
+        });
+      }
+    }
+    for (const r of this.db.pembinaanRecords) {
+      if (!matchW(r.gender) || !r.namaSantri) continue;
+      const key = normalizeStr(r.namaSantri);
+      if (!knownStudentNames.has(key)) {
+        knownStudentNames.add(key);
+        syntheticStudents.push({
+          id: `SYN_PB_${knownStudentNames.size}`,
+          nis: '-',
+          nama: r.namaSantri.trim().toUpperCase(),
+          gender: r.gender,
+          kelas: r.kelas || '-',
+          kamar: r.kamar || '-',
+          kelompokQuran: '-',
+          waliKelas: r.pembinaNama || '',
+          musyrif: '',
+        });
+      }
+    }
+
+    const studentsInWilayah = [...baseStudentsInWilayah, ...syntheticStudents];
     const studentsInScope = studentsInWilayah
       .filter((s) => matchK(s.kelas))
       .sort((a, b) => a.kelas.localeCompare(b.kelas, 'id', { numeric: true }) || a.nama.localeCompare(b.nama));
@@ -5065,17 +5107,24 @@ class PintarStore {
     let waliKelasLabel = 'Semua Wali Kelas';
     if (rawKelas && rawKelas !== 'SEMUA' && rawKelas !== 'SEMUA KELAS') {
       const waliTeacher = this.db.teachers.find(
-        (t) => t.waliKelasOf && normalizeStr(t.waliKelasOf) === normalizeStr(rawKelas),
+        (t) =>
+          t.waliKelasOf &&
+          t.waliKelasOf
+            .split(/[;,]/)
+            .some((wk) => matchGroupCode(wk.trim(), rawKelas) || normalizeStr(wk) === normalizeStr(rawKelas)),
       );
       const fromStudent = studentsInScope.find((s) => s.waliKelas && s.waliKelas !== '-')?.waliKelas;
-      waliKelasLabel = waliTeacher?.nama || fromStudent || 'Belum Ditentukan';
+      const fromSched = this.db.schedules.find(
+        (sc) => !isQuranScheduleItem(sc) && matchGroupCode(sc.kelas, rawKelas),
+      )?.guru;
+      waliKelasLabel = waliTeacher?.nama || fromStudent || fromSched || 'Belum Ditentukan';
     }
 
     // Filter attendance & exam logs for students in scope and period
     const scopedAttendanceLogs = this.db.attendanceLogs.filter((l) => {
       if (!matchW(l.gender) || !matchDatePeriod(l.tanggal)) return false;
       if (rawKelas && rawKelas !== 'SEMUA' && rawKelas !== 'SEMUA KELAS') {
-        return studentNameSet.has(normalizeStr(l.namaSiswa)) || normalizeStr(l.kelas) === normalizeStr(rawKelas);
+        return studentNameSet.has(normalizeStr(l.namaSiswa)) || matchGroupCode(l.kelas, rawKelas);
       }
       return true;
     });
@@ -5083,7 +5132,7 @@ class PintarStore {
     const scopedExamLogs = this.db.examLogs.filter((e) => {
       if (!matchW(e.gender) || !matchDatePeriod(e.tanggal)) return false;
       if (rawKelas && rawKelas !== 'SEMUA' && rawKelas !== 'SEMUA KELAS') {
-        return studentNameSet.has(normalizeStr(e.namaSiswa)) || normalizeStr(e.kelas) === normalizeStr(rawKelas);
+        return studentNameSet.has(normalizeStr(e.namaSiswa)) || matchGroupCode(e.kelas, rawKelas);
       }
       return true;
     });
@@ -5091,7 +5140,7 @@ class PintarStore {
     const scopedPembinaan = this.db.pembinaanRecords.filter((r) => {
       if (!matchW(r.gender) || !matchDatePeriod(r.tanggal, r.bulan)) return false;
       if (rawKelas && rawKelas !== 'SEMUA' && rawKelas !== 'SEMUA KELAS') {
-        return studentNameSet.has(normalizeStr(r.namaSantri)) || normalizeStr(r.kelas) === normalizeStr(rawKelas);
+        return studentNameSet.has(normalizeStr(r.namaSantri)) || matchGroupCode(r.kelas, rawKelas);
       }
       return true;
     });
@@ -5243,34 +5292,74 @@ class PintarStore {
         statusTerakhir: r.pembinaan.statusTerakhir === '-' ? 'Selesai' : r.pembinaan.statusTerakhir,
       }));
 
-    // Class-by-class comparison across all classes in the selected Wilayah & Month
-    const uniqueClasses = Array.from(
-      new Set(studentsInWilayah.map((s) => s.kelas.toUpperCase()).filter((k) => k && k !== '-')),
-    ).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
-
     const allWilayahLogs = this.db.attendanceLogs.filter((l) => matchW(l.gender) && matchDatePeriod(l.tanggal));
     const allWilayahPb = this.db.pembinaanRecords.filter(
       (r) => matchW(r.gender) && matchDatePeriod(r.tanggal, r.bulan),
     );
 
-    const classComparison: ClassAnalyticsComparison[] = uniqueClasses.map((kls) => {
-      const klsStudents = studentsInWilayah.filter((s) => normalizeStr(s.kelas) === normalizeStr(kls));
+    // Class-by-class comparison across all classes in the selected Wilayah & Month
+    const classCodeMap = new Map<string, { display: string; gender: Gender }>();
+    for (const s of studentsInWilayah) {
+      const k = (s.kelas || '').trim().toUpperCase();
+      if (!k || k === '-') continue;
+      const code = normGroupCode(k) || k;
+      if (!classCodeMap.has(code)) {
+        classCodeMap.set(code, { display: k, gender: s.gender });
+      }
+    }
+    for (const sc of this.db.schedules) {
+      if (isQuranScheduleItem(sc) || !matchW(sc.gender)) continue;
+      const k = (sc.kelas || '').trim().toUpperCase();
+      if (!k || k === '-') continue;
+      const code = normGroupCode(k) || k;
+      if (!classCodeMap.has(code)) {
+        classCodeMap.set(code, { display: k, gender: sc.gender });
+      }
+    }
+    for (const l of allWilayahLogs) {
+      if (l.jenisPresensi !== 'Belajar') continue;
+      const k = (l.kelas || '').trim().toUpperCase();
+      if (!k || k === '-') continue;
+      const code = normGroupCode(k) || k;
+      if (!classCodeMap.has(code)) {
+        classCodeMap.set(code, { display: k, gender: l.gender });
+      }
+    }
+
+    const uniqueClassEntries = Array.from(classCodeMap.values()).sort((a, b) =>
+      a.display.localeCompare(b.display, 'id', { numeric: true }),
+    );
+
+    const classComparison: ClassAnalyticsComparison[] = uniqueClassEntries.map(({ display: kls, gender: fallbackGender }) => {
+      const klsStudents = studentsInWilayah.filter((s) => matchGroupCode(s.kelas, kls));
       const klsNames = new Set(klsStudents.map((s) => normalizeStr(s.nama)));
       const waliTeacher = this.db.teachers.find(
-        (t) => t.waliKelasOf && normalizeStr(t.waliKelasOf) === normalizeStr(kls),
+        (t) =>
+          t.waliKelasOf &&
+          t.waliKelasOf
+            .split(/[;,]/)
+            .some((wk) => matchGroupCode(wk.trim(), kls) || normalizeStr(wk) === normalizeStr(kls)),
       );
+      const fromSchedGuru = this.db.schedules.find(
+        (sc) => !isQuranScheduleItem(sc) && matchGroupCode(sc.kelas, kls),
+      )?.guru;
       const waliName =
-        waliTeacher?.nama || klsStudents.find((s) => s.waliKelas && s.waliKelas !== '-')?.waliKelas || '-';
+        waliTeacher?.nama ||
+        klsStudents.find((s) => s.waliKelas && s.waliKelas !== '-')?.waliKelas ||
+        fromSchedGuru ||
+        '-';
 
       const klsLogs = allWilayahLogs.filter(
-        (l) => klsNames.has(normalizeStr(l.namaSiswa)) || normalizeStr(l.kelas) === normalizeStr(kls),
+        (l) => klsNames.has(normalizeStr(l.namaSiswa)) || matchGroupCode(l.kelas, kls),
       );
       const klsStat = this.buildDivisiStat(klsLogs);
 
       const klsPb = allWilayahPb.filter(
-        (r) => klsNames.has(normalizeStr(r.namaSantri)) || normalizeStr(r.kelas) === normalizeStr(kls),
+        (r) => klsNames.has(normalizeStr(r.namaSantri)) || matchGroupCode(r.kelas, kls),
       );
       const klsDibina = new Set(klsPb.map((r) => normalizeStr(r.namaSantri))).size;
+      const distinctLogStudents = new Set(klsLogs.map((l) => normalizeStr(l.namaSiswa))).size;
+      const effectiveTotalSantri = klsStudents.length > 0 ? klsStudents.length : distinctLogStudents;
 
       let kw = 0;
       let ks = 0;
@@ -5281,12 +5370,12 @@ class PintarStore {
 
       return {
         kelas: kls,
-        gender: klsStudents[0]?.gender || 'Putra',
+        gender: klsStudents[0]?.gender || fallbackGender || 'Putra',
         waliKelas: waliName,
-        totalSantri: klsStudents.length,
+        totalSantri: effectiveTotalSantri,
         santriDibina: klsDibina,
         cakupanPembinaanPct:
-          klsStudents.length === 0 ? 0 : Math.round((klsDibina / klsStudents.length) * 100),
+          effectiveTotalSantri === 0 ? 0 : Math.round((klsDibina / effectiveTotalSantri) * 100),
         persenHadir: klsStat.persenHadir,
         totalHadir: klsStat.H + klsStat.T,
         totalAbsen: klsStat.S + klsStat.I + klsStat.A,
