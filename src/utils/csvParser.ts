@@ -407,6 +407,7 @@ export interface ParsedTeacherRow {
   genderScope: 'Putra' | 'Putri' | 'Semua';
   waliKelasOf?: string;
   kamarBinaan?: string[];
+  kelompokQuranBinaan?: string[];
   whatsapp?: string;
   username?: string;
   pin?: string;
@@ -493,14 +494,25 @@ export function parseTeacherRows(
   const wilayahIdx = hasHeader ? findCol('wilayah', 'gender', 'unit', 'kampus') : -1;
   const kelasIdx = hasHeader
     ? (() => {
-        const direct = findCol('kelas binaan');
+        const direct = findCol('kelas binaan (wali kelas)', 'wali kelas dari', 'kelas binaan');
         if (direct >= 0) return direct;
         return headerCells.findIndex(
-          (h) => h.includes('kelas') && !h.includes('nama') && !h.includes('amanah'),
+          (h) =>
+            h.includes('kelas') &&
+            !h.includes('nama') &&
+            !h.includes('amanah') &&
+            !h.includes('qur') &&
+            !h.includes('guru wali'),
         );
       })()
     : -1;
   const kamarIdx = hasHeader ? findCol('kamar binaan', 'kamar', 'asrama') : -1;
+  const kelompokQuranIdx = hasHeader
+    ? findCol('kode kelas al-quran', 'kelompok al-quran', 'kelp. al-quran', 'halaqah binaan')
+    : -1;
+  const guruWaliKelasIdx = hasHeader
+    ? findCol('guru wali kelas', 'guru wali di kelas', 'siswa binaan guru wali')
+    : -1;
   const waIdx = hasHeader
     ? (() => {
         const direct = findCol('whatsapp', 'no wa', 'no. wa', 'hp', 'telp');
@@ -553,6 +565,18 @@ export function parseTeacherRows(
       : [];
     const kamarBinaan = kamarList.length > 0 ? kamarList : undefined;
 
+    const klpRaw = (kelompokQuranIdx >= 0 ? cols[kelompokQuranIdx] || '' : '').trim();
+    const klpList = klpRaw
+      ? klpRaw
+          .split(/[;,]/)
+          .map((k) => k.trim().replace(/\s+/g, ' '))
+          .filter((k) => Boolean(k && k !== '-' && k.toUpperCase() !== 'KOSONG'))
+      : [];
+    const kelompokQuranBinaan = klpList.length > 0 ? klpList : undefined;
+
+    const gwRaw = (guruWaliKelasIdx >= 0 ? cols[guruWaliKelasIdx] || '' : '').trim();
+    const hasGuruWaliAssignment = Boolean(gwRaw && gwRaw !== '-' && gwRaw.toUpperCase() !== 'KOSONG');
+
     let genderScope: 'Putra' | 'Putri' | 'Semua' = options?.forcedGender || 'Semua';
     if (rawGender) {
       if (rawGender.includes('putri') || rawGender.includes('akhwat') || rawGender === 'pi' || rawGender === 'p') {
@@ -563,7 +587,7 @@ export function parseTeacherRows(
         genderScope = 'Semua';
       }
     } else if (!options?.forcedGender) {
-      const checkText = `${nama} ${waliKelasOf || ''} ${kamarList.join(' ')}`.toUpperCase();
+      const checkText = `${nama} ${waliKelasOf || ''} ${kamarList.join(' ')} ${klpList.join(' ')}`.toUpperCase();
       if (PUTRI_NAME_MARKERS.some((m) => checkText.includes(m))) {
         genderScope = 'Putri';
       } else if (nama.includes('UST.') || checkText.includes('PUTRA') || checkText.includes('ABU BAKAR') || checkText.includes('UMAR') || checkText.includes('UTSMAN') || checkText.includes('ALI ')) {
@@ -578,6 +602,8 @@ export function parseTeacherRows(
         peran = genderScope === 'Putri' ? 'Musyrifah' : 'Musyrif';
       } else if (waliKelasOf) {
         peran = 'Wali Kelas';
+      } else if (kelompokQuranBinaan && kelompokQuranBinaan.length > 0) {
+        peran = 'Pengampu Al-Quran';
       } else {
         peran = 'Guru';
       }
@@ -600,6 +626,12 @@ export function parseTeacherRows(
     if (kamarBinaan && kamarBinaan.length > 0) {
       const mRole: UserRole = genderScope === 'Putri' ? 'Musyrifah' : 'Musyrif';
       if (peran !== mRole) peranTambahanSet.add(mRole);
+    }
+    if (kelompokQuranBinaan && kelompokQuranBinaan.length > 0 && peran !== 'Pengampu Al-Quran') {
+      peranTambahanSet.add('Pengampu Al-Quran');
+    }
+    if (hasGuruWaliAssignment && peran !== 'Guru Wali') {
+      peranTambahanSet.add('Guru Wali');
     }
     const peranTambahan = peranTambahanSet.size > 0 ? Array.from(peranTambahanSet) : undefined;
 
@@ -627,6 +659,7 @@ export function parseTeacherRows(
       genderScope,
       waliKelasOf,
       kamarBinaan,
+      kelompokQuranBinaan,
       whatsapp,
       username,
       pin,

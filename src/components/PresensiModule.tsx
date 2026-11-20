@@ -82,9 +82,15 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   );
   const [tanggal, setTanggal] = useState<string>(getTodayDateStr());
   const [teachers, setTeachers] = useState<TeacherPublic[]>([]);
-  const [namaGuru, setNamaGuru] = useState<string>(
-    () => initialGuru || loadScopedState<string>('pintar_presensi_guru_v1', '') || loggedInUser?.nama || '',
-  );
+  const isRealTeachingUser = (u?: TeacherPublic | null): boolean =>
+    Boolean(u?.nama && u.peran !== 'Admin Super' && u.peran !== 'Admin SIM');
+
+  const [namaGuru, setNamaGuru] = useState<string>(() => {
+    if (initialGuru) return initialGuru;
+    const saved = loadScopedState<string>('pintar_presensi_guru_v1', '');
+    if (saved && !saved.toUpperCase().includes('ADMIN SUPER')) return saved;
+    return isRealTeachingUser(loggedInUser) ? loggedInUser!.nama : '';
+  });
 
   useEffect(() => {
     saveSubTab('pintar_presensi_jenis_v1', jenis);
@@ -95,7 +101,9 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   }, [gender]);
 
   useEffect(() => {
-    if (namaGuru) saveScopedState('pintar_presensi_guru_v1', namaGuru);
+    if (namaGuru && !namaGuru.toUpperCase().includes('ADMIN SUPER')) {
+      saveScopedState('pintar_presensi_guru_v1', namaGuru);
+    }
   }, [namaGuru]);
   const [targetOptions, setTargetOptions] = useState<TargetOption[]>([]);
   const [selectedTarget, setSelectedTarget] = useState<string>('');
@@ -120,10 +128,10 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   useEffect(() => {
     if (initialGuru) {
       setNamaGuru(initialGuru);
-    } else if (loggedInUser?.nama && !namaGuru) {
-      setNamaGuru(loggedInUser.nama);
-      if (loggedInUser.genderScope === 'Putri' || loggedInUser.genderScope === 'Putra') {
-        setGender(loggedInUser.genderScope);
+    } else if (isRealTeachingUser(loggedInUser) && (!namaGuru || namaGuru.toUpperCase().includes('ADMIN SUPER'))) {
+      setNamaGuru(loggedInUser!.nama);
+      if (loggedInUser!.genderScope === 'Putri' || loggedInUser!.genderScope === 'Putra') {
+        setGender(loggedInUser!.genderScope);
       }
     }
   }, [initialGuru, loggedInUser, namaGuru]);
@@ -131,21 +139,91 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   // Load filtered teacher list whenever jenis or gender changes
   useEffect(() => {
     let active = true;
-    fetch(`/api/presensi/teachers?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(gender)}`)
-      .then((r) => r.json())
-      .then((list: TeacherPublic[]) => {
+
+    const loadTeachersForPresensi = async () => {
+      try {
+        const res = await fetch(
+          `/api/presensi/teachers?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(gender)}`,
+        );
+        let list: TeacherPublic[] = res.ok ? await res.json() : [];
+
+        // If serverless container cold-started empty, auto-restore from localStorage template mirror
+        if (list.length === 0) {
+          try {
+            const explicitEmpty = localStorage.getItem('pintar_db_explicit_empty_v1') === '1';
+            const mirrorRaw = localStorage.getItem('pintar_db_template_only_v2');
+            if (!explicitEmpty && mirrorRaw) {
+              const mirrorSnap = JSON.parse(mirrorRaw);
+              if (
+                (Array.isArray(mirrorSnap?.students) && mirrorSnap.students.length > 0) ||
+                (Array.isArray(mirrorSnap?.teachers) && mirrorSnap.teachers.length > 1)
+              ) {
+                const restoreRes = await fetch('/api/system/restore-snapshot', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ snapshot: mirrorSnap, mode: 'merge' }),
+                });
+                if (restoreRes.ok) {
+                  const retryRes = await fetch(
+                    `/api/presensi/teachers?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(gender)}`,
+                  );
+                  if (retryRes.ok) {
+                    list = await retryRes.json();
+                  }
+                }
+              }
+            }
+          } catch {
+            // Ignore mirror parse/restore error
+          }
+        }
+
+        // If current gender has 0 teachers but the other Wilayah has uploaded teachers, switch automatically
+        if (list.length === 0) {
+          const otherGender: Gender = gender === 'Putri' ? 'Putra' : 'Putri';
+          const otherRes = await fetch(
+            `/api/presensi/teachers?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(otherGender)}`,
+          );
+          const otherList: TeacherPublic[] = otherRes.ok ? await otherRes.json() : [];
+          if (active && otherList.length > 0) {
+            setGender(otherGender);
+            return;
+          }
+        }
+
         if (!active) return;
-        setTeachers(list);
-      })
-      .catch(() => {});
+        setTeachers(Array.isArray(list) ? list : []);
+
+        if (Array.isArray(list) && list.length > 0) {
+          setNamaGuru((prev) => {
+            if (prev && list.some((t) => t.nama === prev)) {
+              return prev;
+            }
+            if (isRealTeachingUser(loggedInUser)) {
+              const matchedUser = list.find(
+                (t) => t.nama.toUpperCase() === loggedInUser!.nama.toUpperCase(),
+              );
+              if (matchedUser) return matchedUser.nama;
+            }
+            return list[0].nama;
+          });
+        } else {
+          setNamaGuru((prev) => (prev.toUpperCase().includes('ADMIN SUPER') ? '' : prev));
+        }
+      } catch {
+        // Ignore network errors
+      }
+    };
+
+    loadTeachersForPresensi();
     return () => {
       active = false;
     };
-  }, [jenis, gender]);
+  }, [jenis, gender, loggedInUser]);
 
   // Load target rooms / classes whenever guru, jenis, gender, or tanggal changes
   useEffect(() => {
-    if (!namaGuru.trim() || !tanggal) {
+    if (!namaGuru.trim() || namaGuru.toUpperCase().includes('ADMIN SUPER') || !tanggal) {
       setTargetOptions([]);
       setSelectedTarget('');
       setSiswaList([]);
@@ -187,16 +265,24 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
           });
         } else if (Array.isArray(data.jadwal)) {
           data.jadwal.forEach((j: { kelas: string; mapel: string; jamKe: string }) => {
+            const jamLabel =
+              j.jamKe.toLowerCase().includes('jam') ||
+              j.jamKe.toLowerCase().includes('halaqah') ||
+              j.jamKe.toLowerCase().includes('harian') ||
+              j.jamKe.toLowerCase().includes('kelompok') ||
+              j.jamKe.toLowerCase().includes('pengampu')
+                ? j.jamKe
+                : `Jam ${j.jamKe}`;
             opts.push({
               value: `${j.kelas}|${j.mapel}`,
-              label: `${j.kelas} — ${j.mapel} (Jam ${j.jamKe})`,
+              label: `${j.kelas} — ${j.mapel} (${jamLabel})`,
               grup: j.kelas,
               mapel: j.mapel,
             });
           });
         }
         setTargetOptions(opts);
-        if (opts.length === 1) {
+        if (opts.length >= 1) {
           setSelectedTarget(opts[0].value);
         }
       })
@@ -532,18 +618,54 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
               className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-900 focus:border-teal-600 focus:outline-none"
             >
               <option value="">-- Pilih {roleLabel} --</option>
-              {teachers.map((t) => (
-                <option key={t.id} value={t.nama}>
-                  {t.nama}
-                </option>
-              ))}
+              {teachers.map((t) => {
+                const hint =
+                  jenis === 'Asrama' && t.kamarBinaan?.length
+                    ? ` (${t.kamarBinaan.join(', ')})`
+                    : jenis === 'Al-Quran' && t.kelompokQuranBinaan?.length
+                    ? ` (${t.kelompokQuranBinaan.join(', ')})`
+                    : jenis === 'Belajar' && t.waliKelasOf
+                    ? ` (Wali Kelas ${t.waliKelasOf})`
+                    : '';
+                return (
+                  <option key={t.id} value={t.nama}>
+                    {t.nama}
+                    {hint}
+                  </option>
+                );
+              })}
             </select>
+            {namaGuru && (() => {
+              const activeT = teachers.find((t) => t.nama === namaGuru);
+              if (!activeT) return null;
+              const allRoles = Array.from(new Set([activeT.peran, ...(activeT.peranTambahan || [])]));
+              return (
+                <div className="mt-1.5 rounded-lg border border-slate-200/80 bg-white/90 px-2.5 py-1.5 text-[11px] text-slate-600 space-y-0.5">
+                  <div className="font-semibold text-slate-800">
+                    Peran: {allRoles.join(' · ')}
+                  </div>
+                  {activeT.waliKelasOf && (
+                    <div>Wali Kelas: <span className="font-semibold text-sky-800">{activeT.waliKelasOf}</span></div>
+                  )}
+                  {activeT.kamarBinaan && activeT.kamarBinaan.length > 0 && (
+                    <div>Kamar Binaan: <span className="font-semibold text-indigo-800">{activeT.kamarBinaan.join(', ')}</span></div>
+                  )}
+                  {activeT.kelompokQuranBinaan && activeT.kelompokQuranBinaan.length > 0 && (
+                    <div>Kode Kelas Al-Qur&apos;an: <span className="font-semibold text-emerald-800">{activeT.kelompokQuranBinaan.join(', ')}</span></div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Kamar / Kelas / Halaqah */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              {jenis === 'Asrama' ? 'Kamar Binaan' : jenis === 'Al-Quran' ? "Kelompok Al-Qur'an" : 'Jadwal Kelas & Mapel'}
+              {jenis === 'Asrama'
+                ? 'Kamar Binaan (Semua / Per Kamar)'
+                : jenis === 'Al-Quran'
+                ? "Jadwal & Kode Kelas Al-Qur'an"
+                : 'Jadwal Kelas & Mapel'}
             </label>
             <select
               value={selectedTarget}
@@ -609,7 +731,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
               <div>
                 <h3 className="text-base font-bold text-slate-900">
                   {selectedTarget
-                    ? `${jenis === 'Asrama' ? 'Kamar' : jenis === 'Al-Quran' ? 'Halaqah' : 'Kelas'} ${grupAktif}`
+                    ? `${jenis === 'Asrama' ? 'Kamar' : jenis === 'Al-Quran' ? 'Kode Kelas Al-Qur’an' : 'Kelas'} ${grupAktif}`
                     : `Daftar Santri · Wilayah ${gender}`}
                 </h3>
                 <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-600">
@@ -618,6 +740,12 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
                   </span>
                   <span aria-hidden="true">·</span>
                   <span>{selectedTarget ? selectedTarget.split('|')[1] : 'Pilih guru dan jadwal di panel kontrol'}</span>
+                  {namaGuru && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="font-semibold text-slate-800">Pengampu/Pembina: {namaGuru}</span>
+                    </>
+                  )}
                   {siswaList.length > 0 && (
                     <>
                       <span aria-hidden="true">·</span>
@@ -669,7 +797,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
               <div className="py-14 text-center space-y-3">
                 <p className="text-sm font-medium text-slate-700">Belum ada daftar santri dimuat</p>
                 <p className="mx-auto max-w-md text-xs text-slate-500">
-                  Pilih nama guru/musyrif dan kamar atau jadwal di sebelah kiri. Jika jadwal belum ada atau data santri masih kosong, Anda dapat membuatnya atau mengimpor CSV.
+                  Pilih nama guru/musyrif dan kamar atau jadwal di sebelah kiri. Jika jadwal belum ada atau data santri masih kosong, Anda dapat membuatnya atau mengimpor template.
                 </p>
                 <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
                   {onOpenJadwal && (
@@ -687,7 +815,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
                       onClick={onOpenImport}
                       className="rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-800"
                     >
-                      Upload Data SIM (CSV)
+                      Upload Data SIM (Excel)
                     </button>
                   )}
                 </div>
@@ -712,8 +840,38 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
                             </span>
                             <span className="truncate text-sm font-semibold text-slate-900">{s.nama}</span>
                           </div>
-                          <div className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-500">
-                            <span>{s.kelasAsli}</span>
+                          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-slate-500">
+                            <span className="font-semibold text-slate-700">{s.kelasAsli}</span>
+                            {jenis !== 'Belajar' && s.kelas && s.kelas !== '-' && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span>Kls: {s.kelas}</span>
+                              </>
+                            )}
+                            {jenis !== 'Asrama' && s.kamar && s.kamar !== '-' && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span>Kmr: {s.kamar}</span>
+                              </>
+                            )}
+                            {jenis === 'Al-Quran' && s.pengampuQuran && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span className="text-emerald-700 font-medium">Pengampu: {s.pengampuQuran}</span>
+                              </>
+                            )}
+                            {s.waliKelas && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span>WK: {s.waliKelas}</span>
+                              </>
+                            )}
+                            {s.guruWali && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span className="text-violet-700 font-medium">GW: {s.guruWali}</span>
+                              </>
+                            )}
                             {s.syncedFromAsrama && (
                               <>
                                 <span aria-hidden="true">·</span>

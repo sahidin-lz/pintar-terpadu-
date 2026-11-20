@@ -778,6 +778,11 @@ export function parseDatabaseExcelBuffer(buffer: ArrayBuffer, fileName: string):
       if (sub.kamarBinaan && sub.kamarBinaan.length > 0) {
         existing.kamarBinaan = Array.from(new Set([...(existing.kamarBinaan || []), ...sub.kamarBinaan]));
       }
+      if (sub.kelompokQuranBinaan && sub.kelompokQuranBinaan.length > 0) {
+        existing.kelompokQuranBinaan = Array.from(
+          new Set([...(existing.kelompokQuranBinaan || []), ...sub.kelompokQuranBinaan]),
+        );
+      }
       if ((!existing.whatsapp || existing.whatsapp === '628') && sub.whatsapp) {
         existing.whatsapp = sub.whatsapp;
       }

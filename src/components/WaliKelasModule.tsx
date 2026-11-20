@@ -250,6 +250,9 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
       namaSantri: string;
       kelas: string;
       kamar: string;
+      waliKelas?: string;
+      musyrif?: string;
+      guruWali?: string;
       gender: Gender;
       ibadah: IbadahChecklist;
       catatan: string;
@@ -420,6 +423,47 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
     () => Array.from(new Set(scopedStudents.map((s) => s.kelompokQuran).filter((k) => k && k !== '-'))).sort(),
     [scopedStudents]
   );
+  const activePembinaTeacher = useMemo(() => {
+    const clean = pembinaNama.trim().toUpperCase();
+    if (clean) {
+      const exact = teachers.find((t) => t.nama.trim().toUpperCase() === clean);
+      if (exact) return exact;
+    }
+    return unlockedTeacher || null;
+  }, [teachers, pembinaNama, unlockedTeacher]);
+
+  const activePembinaClasses = useMemo(() => {
+    const set = new Set<string>();
+    const clean = (pembinaNama || activePembinaTeacher?.nama || '').trim().toUpperCase();
+    if (activePembinaTeacher?.waliKelasOf && activePembinaTeacher.waliKelasOf !== '-') {
+      set.add(activePembinaTeacher.waliKelasOf.trim());
+    }
+    if (clean) {
+      for (const s of scopedStudents) {
+        if ((s.waliKelas || '').trim().toUpperCase() === clean && s.kelas && s.kelas !== '-') {
+          set.add(s.kelas);
+        }
+      }
+    }
+    return Array.from(set);
+  }, [activePembinaTeacher, pembinaNama, scopedStudents]);
+
+  const activePembinaRooms = useMemo(() => {
+    const set = new Set<string>();
+    const clean = (pembinaNama || activePembinaTeacher?.nama || '').trim().toUpperCase();
+    for (const k of activePembinaTeacher?.kamarBinaan || []) {
+      if (k && k !== '-') set.add(k.trim());
+    }
+    if (clean) {
+      for (const s of scopedStudents) {
+        if ((s.musyrif || '').trim().toUpperCase() === clean && s.kamar && s.kamar !== '-') {
+          set.add(s.kamar);
+        }
+      }
+    }
+    return Array.from(set);
+  }, [activePembinaTeacher, pembinaNama, scopedStudents]);
+
   const uniqueGuruWali = useMemo(() => {
     const set = new Set<string>();
     for (const s of scopedStudents) {
@@ -440,11 +484,18 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
 
   // Batch group options
   const batchGroupOptions = useMemo(() => {
-    if (batchGroupType === 'kelas') return uniqueClasses;
+    if (batchGroupType === 'kelas') {
+      if (activePembinaClasses.length > 0) {
+        const rest = uniqueClasses.filter((c) => !activePembinaClasses.includes(c));
+        return [...activePembinaClasses, ...rest];
+      }
+      return uniqueClasses;
+    }
     if (batchGroupType === 'kamar') {
-      const myKamarList = (unlockedTeacher?.kamarBinaan || []).filter((k) => uniqueRooms.includes(k));
-      if (myKamarList.length > 1) {
-        return ['SEMUA_KAMAR_BINAAN', ...uniqueRooms];
+      const myKamarList = activePembinaRooms.filter((k) => uniqueRooms.includes(k));
+      const restRooms = uniqueRooms.filter((k) => !myKamarList.includes(k));
+      if (myKamarList.length > 0) {
+        return ['SEMUA_KAMAR_BINAAN', ...myKamarList, ...restRooms];
       }
       return uniqueRooms;
     }
@@ -452,33 +503,43 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
       return uniqueGuruWali.length > 0 ? uniqueGuruWali : uniqueClasses;
     }
     return uniqueHalaqah;
-  }, [batchGroupType, uniqueClasses, uniqueRooms, uniqueGuruWali, uniqueHalaqah, unlockedTeacher]);
+  }, [batchGroupType, uniqueClasses, uniqueRooms, uniqueGuruWali, uniqueHalaqah, activePembinaClasses, activePembinaRooms]);
 
   useEffect(() => {
-    if (batchGroupOptions.length > 0 && !batchGroupOptions.includes(batchGroupValue)) {
-      if (batchGroupType === 'kelas' && unlockedTeacher?.waliKelasOf && batchGroupOptions.includes(unlockedTeacher.waliKelasOf)) {
-        setBatchGroupValue(unlockedTeacher.waliKelasOf);
-      } else if (batchGroupType === 'kamar' && unlockedTeacher?.kamarBinaan?.length) {
-        if (unlockedTeacher.kamarBinaan.length > 1 && batchGroupOptions.includes('SEMUA_KAMAR_BINAAN')) {
-          setBatchGroupValue('SEMUA_KAMAR_BINAAN');
-        } else if (batchGroupOptions.includes(unlockedTeacher.kamarBinaan[0])) {
-          setBatchGroupValue(unlockedTeacher.kamarBinaan[0]);
-        } else {
-          setBatchGroupValue(batchGroupOptions[0]);
-        }
-      } else if (
-        batchGroupType === 'guruWali' &&
-        pembinaNama.trim() &&
-        batchGroupOptions.includes(pembinaNama.trim().toUpperCase())
-      ) {
-        setBatchGroupValue(pembinaNama.trim().toUpperCase());
-      } else {
-        setBatchGroupValue(batchGroupOptions[0]);
-      }
-    } else if (batchGroupOptions.length === 0) {
+    if (batchGroupOptions.length === 0) {
       setBatchGroupValue('');
+      return;
     }
-  }, [batchGroupType, batchGroupOptions, unlockedTeacher, batchGroupValue, pembinaNama]);
+    if (batchGroupType === 'kelas') {
+      if (activePembinaClasses.length > 0 && batchGroupOptions.includes(activePembinaClasses[0])) {
+        setBatchGroupValue(activePembinaClasses[0]);
+        setStudentFilterGroup(activePembinaClasses[0]);
+        return;
+      }
+    } else if (batchGroupType === 'kamar') {
+      if (activePembinaRooms.length > 1 && batchGroupOptions.includes('SEMUA_KAMAR_BINAAN')) {
+        setBatchGroupValue('SEMUA_KAMAR_BINAAN');
+        setStudentFilterGroup('KAMAR_BINAAN');
+        return;
+      } else if (activePembinaRooms.length === 1 && batchGroupOptions.includes(activePembinaRooms[0])) {
+        setBatchGroupValue(activePembinaRooms[0]);
+        setStudentFilterGroup('KAMAR_BINAAN');
+        return;
+      }
+    } else if (
+      batchGroupType === 'guruWali' &&
+      pembinaNama.trim() &&
+      batchGroupOptions.includes(pembinaNama.trim().toUpperCase())
+    ) {
+      setBatchGroupValue(pembinaNama.trim().toUpperCase());
+      setStudentFilterGroup('BINAAN_GURU_WALI');
+      return;
+    }
+
+    if (!batchGroupOptions.includes(batchGroupValue)) {
+      setBatchGroupValue(batchGroupOptions[0]);
+    }
+  }, [batchGroupType, batchGroupOptions, activePembinaClasses, activePembinaRooms, pembinaNama]);
 
   // Populate batchRows whenever batchGroupValue changes
   useEffect(() => {
@@ -486,14 +547,15 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
       setBatchRows([]);
       return;
     }
+    const activePembinaUp = (pembinaNama || activePembinaTeacher?.nama || '').trim().toUpperCase();
+    const myRoomsUp = activePembinaRooms.map((k) => k.toUpperCase());
     const groupStudents = scopedStudents.filter((s) => {
       if (batchGroupType === 'kelas') return s.kelas === batchGroupValue;
       if (batchGroupType === 'kamar') {
         if (batchGroupValue === 'SEMUA_KAMAR_BINAAN') {
-          const myRooms = (unlockedTeacher?.kamarBinaan || []).map((k) => k.toUpperCase());
           return (
-            myRooms.includes((s.kamar || '').toUpperCase()) ||
-            (unlockedTeacher?.nama && (s.musyrif || '').toUpperCase() === unlockedTeacher.nama.toUpperCase())
+            myRoomsUp.includes((s.kamar || '').toUpperCase()) ||
+            (Boolean(activePembinaUp) && (s.musyrif || '').toUpperCase() === activePembinaUp)
           );
         }
         return s.kamar === batchGroupValue;
@@ -516,13 +578,16 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
         namaSantri: s.nama,
         kelas: s.kelas,
         kamar: s.kamar,
+        waliKelas: s.waliKelas,
+        musyrif: s.musyrif,
+        guruWali: s.guruWali,
         gender: s.gender,
         ibadah: { ...DEFAULT_IBADAH },
         catatan: defaultNote,
         poin: 0,
       }))
     );
-  }, [batchGroupValue, batchGroupType, scopedStudents, uniqueGuruWali, unlockedTeacher, formJalur, formPekan]);
+  }, [batchGroupValue, batchGroupType, scopedStudents, uniqueGuruWali, activePembinaTeacher, activePembinaRooms, pembinaNama, formJalur, formPekan]);
 
   const applyBatchTemaToAll = () => {
     const clean = batchTemaKlasikal.trim();
@@ -537,8 +602,8 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
   // Filtered student options for single input (Pembinaan Khusus Satu per Satu)
   const filteredSingleStudents = useMemo(() => {
     const q = studentSearch.trim().toLowerCase();
-    const activePembinaUp = (pembinaNama || unlockedTeacher?.nama || '').trim().toUpperCase();
-    const myKamarUp = (unlockedTeacher?.kamarBinaan || []).map((k) => k.toUpperCase());
+    const activePembinaUp = (pembinaNama || activePembinaTeacher?.nama || '').trim().toUpperCase();
+    const myKamarUp = activePembinaRooms.map((k) => k.toUpperCase());
     return scopedStudents.filter((s) => {
       if (studentFilterGroup === 'BINAAN_GURU_WALI') {
         if (!activePembinaUp || (s.guruWali || '').toUpperCase() !== activePembinaUp) return false;
@@ -562,7 +627,7 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
         (s.nis || '').toLowerCase().includes(q)
       );
     });
-  }, [scopedStudents, studentSearch, studentFilterGroup, pembinaNama, unlockedTeacher]);
+  }, [scopedStudents, studentSearch, studentFilterGroup, pembinaNama, activePembinaTeacher, activePembinaRooms]);
 
   const activeSingleStudent = useMemo(
     () => scopedStudents.find((s) => s.nama === formSantri) || null,
@@ -1930,7 +1995,11 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
                     {batchGroupOptions.map((opt) => (
                       <option key={opt} value={opt}>
                         {opt === 'SEMUA_KAMAR_BINAAN'
-                          ? `Semua Kamar Binaan Saya (${(unlockedTeacher?.kamarBinaan || []).join(', ')})`
+                          ? `Semua Kamar Binaan (${activePembinaRooms.join(', ')})`
+                          : batchGroupType === 'kamar' && activePembinaRooms.includes(opt)
+                          ? `Kamar Binaan: ${opt}`
+                          : batchGroupType === 'kelas' && activePembinaClasses.includes(opt)
+                          ? `Kelas Binaan: ${opt}`
                           : opt}
                       </option>
                     ))}
@@ -2032,6 +2101,8 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
                             <div className="font-semibold text-slate-900">{row.namaSantri}</div>
                             <div className="text-[10px] text-slate-500">
                               {row.kelas} · {row.kamar}
+                              {row.waliKelas && row.waliKelas !== '-' ? ` · WK: ${row.waliKelas}` : ''}
+                              {row.guruWali && row.guruWali !== '-' ? ` · GW: ${row.guruWali}` : ''}
                             </div>
                           </td>
                           {IBADAH_FIELDS.map((f) => (

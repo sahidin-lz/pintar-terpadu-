@@ -310,7 +310,12 @@ function registerApiRoutes() {
       }
 
       const result = store.importAllInOne(body);
-      return res.json({ ...result, counts: store.getSystemCounts(), quota: store.getQuotaMetrics() });
+      return res.json({
+        ...result,
+        counts: store.getSystemCounts(),
+        quota: store.getQuotaMetrics(),
+        snapshot: store.getFullSnapshot(),
+      });
     } catch (err) {
       return res.status(500).json({ error: (err as Error).message || 'Gagal memproses import data Excel.' });
     }
@@ -530,11 +535,7 @@ function registerApiRoutes() {
       const roomDetails = store.getAllRooms().filter((r) => r.gender === gender);
       return res.json({ rooms, roomDetails });
     }
-    const jadwal = store.getJadwal(hari, guru, gender).filter((j) =>
-      jenis === 'Al-Quran'
-        ? j.mapel.toUpperCase().includes('QUR') || j.mapel.toUpperCase().includes('TAHFIDZ') || j.mapel.toUpperCase().includes('TAHSIN')
-        : !j.mapel.toUpperCase().includes('QUR')
-    );
+    const jadwal = store.getOpsiJadwalPresensi(jenis, hari, guru, gender);
     return res.json({ jadwal });
   });
 

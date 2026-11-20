@@ -707,6 +707,8 @@ interface ClientRosterRow {
   kamar: string;
   kelompokQuran: string;
   pengampuQuran: string;
+  waliKelas?: string;
+  guruWali?: string;
   gender: Gender;
 }
 
@@ -793,6 +795,8 @@ function buildCombinedRosterForClient(ctx: ClientTemplateContext): {
     kamar: s.kamar,
     kelompokQuran: s.kelompokQuran,
     pengampuQuran: s.pengampuQuran || '',
+    waliKelas: s.waliKelas || '',
+    guruWali: s.guruWali || '',
     gender: 'Putra',
   }));
 
@@ -803,6 +807,8 @@ function buildCombinedRosterForClient(ctx: ClientTemplateContext): {
     kamar: s.kamar,
     kelompokQuran: s.kelompokQuran,
     pengampuQuran: s.pengampuQuran || '',
+    waliKelas: s.waliKelas || '',
+    guruWali: s.guruWali || '',
     gender: 'Putri',
   }));
 
@@ -947,9 +953,38 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
       a.localeCompare(b, 'id', { numeric: true }),
   );
   const waliByClass = new Map<string, TeacherPublic>();
+  const guruWaliByClass = new Map<string, Set<string>>();
   for (const t of ctx.teachers) {
     if (t.peran === 'Admin Super') continue;
-    if (t.waliKelasOf) waliByClass.set(t.waliKelasOf.toUpperCase(), t);
+    if (t.waliKelasOf) {
+      for (const wk of t.waliKelasOf.split(/[;,]/).map((s) => s.trim()).filter(Boolean)) {
+        waliByClass.set(wk.toUpperCase(), t);
+      }
+    }
+  }
+  for (const r of roster) {
+    const klsUp = (r.kelas || '').trim().toUpperCase();
+    if (!klsUp || klsUp === '-') continue;
+    if (r.waliKelas && r.waliKelas !== '-' && !waliByClass.has(klsUp)) {
+      const matchedT = ctx.teachers.find((t) => t.nama.toUpperCase() === r.waliKelas!.trim().toUpperCase());
+      waliByClass.set(
+        klsUp,
+        matchedT || {
+          id: `WK_${klsUp}`,
+          username: makeUsernameClient(r.waliKelas),
+          nama: r.waliKelas.trim().toUpperCase(),
+          jabatan: 'Wali Kelas',
+          peran: 'Wali Kelas',
+          genderScope: r.gender,
+          waliKelasOf: r.kelas,
+          whatsapp: '628',
+        },
+      );
+    }
+    if (r.guruWali && r.guruWali !== '-') {
+      if (!guruWaliByClass.has(klsUp)) guruWaliByClass.set(klsUp, new Set());
+      guruWaliByClass.get(klsUp)!.add(r.guruWali.trim().toUpperCase());
+    }
   }
 
   const waliPutraBody: string[][] = [];
@@ -961,12 +996,14 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
     const classGender = classGenderMap.get(kls) || inferGenderClient(kls);
     const isPutri = classGender === 'Putri';
     const targetBody = isPutri ? waliPutriBody : waliPutraBody;
+    const gwList = Array.from(guruWaliByClass.get(kls.toUpperCase()) || []).join('; ');
     if (existing) {
       targetBody.push([
         String(targetBody.length + 1),
         sanitizeExcelText(existing.nama),
         sanitizeExcelText(kls),
         isPutri ? 'Putri' : 'Putra',
+        sanitizeExcelText(gwList || '-'),
         sanitizeExcelText(existing.whatsapp || '628'),
       ]);
       addedWaliNames.add(existing.nama.toUpperCase());
@@ -976,50 +1013,139 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
         '(Belum Ditentukan)',
         sanitizeExcelText(kls),
         isPutri ? 'Putri' : 'Putra',
+        sanitizeExcelText(gwList || '-'),
         '',
       ]);
     }
   }
 
   const waliPutraRows: string[][] = [
-    ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'WhatsApp'],
+    ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'Guru Wali di Kelas Ini (pisah ;)', 'WhatsApp'],
     ...waliPutraBody,
   ];
 
   const waliPutriRows: string[][] = [
-    ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'WhatsApp'],
+    ['No', 'Nama Wali Kelas', 'Kelas Binaan', 'Wilayah', 'Guru Wali di Kelas Ini (pisah ;)', 'WhatsApp'],
     ...waliPutriBody,
   ];
 
-  // Sheet 3C: Guru Mapel & Pengampu Al-Qur'an (tanpa kolom PIN ganda — Token Login terpusat di Master_Pegawai)
+  // Collect Pengampu Al-Qur'an -> Kode Kelas Al-Qur'an, Wali Kelas -> Kelas, and Guru Wali -> Kelas Binaan
+  const quranGroupsByTeacher = new Map<string, Set<string>>();
+  const waliKelasClassesByTeacher = new Map<string, Set<string>>();
+  const guruWaliClassesByTeacher = new Map<string, Set<string>>();
+
+  const addTeacherSet = (map: Map<string, Set<string>>, rawName?: string, val?: string) => {
+    const cleanName = (rawName || '').trim().toUpperCase();
+    const cleanVal = (val || '').trim().toUpperCase();
+    if (!cleanName || cleanName === '-' || cleanName === '(BELUM DITENTUKAN)' || !cleanVal || cleanVal === '-') return;
+    if (!map.has(cleanName)) map.set(cleanName, new Set());
+    map.get(cleanName)!.add(cleanVal);
+  };
+
+  for (const r of roster) {
+    if (r.pengampuQuran && r.kelompokQuran) addTeacherSet(quranGroupsByTeacher, r.pengampuQuran, r.kelompokQuran);
+    if (r.waliKelas && r.kelas) addTeacherSet(waliKelasClassesByTeacher, r.waliKelas, r.kelas);
+    if (r.guruWali && r.kelas) addTeacherSet(guruWaliClassesByTeacher, r.guruWali, r.kelas);
+  }
+  for (const t of ctx.teachers) {
+    for (const klp of t.kelompokQuranBinaan || []) addTeacherSet(quranGroupsByTeacher, t.nama, klp);
+    if (t.waliKelasOf) {
+      for (const wk of t.waliKelasOf.split(/[;,]/).map((s) => s.trim()).filter(Boolean)) {
+        addTeacherSet(waliKelasClassesByTeacher, t.nama, wk);
+      }
+    }
+  }
+  for (const sc of ctx.schedules) {
+    const isQ =
+      sc.kategori === 'Al-Quran' ||
+      sc.mapel.toUpperCase().includes('QUR') ||
+      sc.mapel.toUpperCase().includes('HALAQAH') ||
+      sc.mapel.toUpperCase().includes('TAHFIDZ');
+    if (isQ && sc.guru && sc.kelas) addTeacherSet(quranGroupsByTeacher, sc.guru, sc.kelas);
+  }
+
+  // Sheet 3C: Guru Mapel, Pengampu Al-Qur'an, & Guru Wali (tanpa kolom PIN ganda — Token Login terpusat di Master_Pegawai)
   const guruBody: string[][] = [];
   const addedGuruNames = new Set<string>();
   for (const t of ctx.teachers) {
     if (t.peran === 'Admin Super') continue;
-    if (t.peran === 'Guru' || t.peran === 'Pengampu Al-Quran') {
+    const roles = new Set<string>([t.peran, ...(t.peranTambahan || [])]);
+    if (
+      roles.has('Guru') ||
+      roles.has('Pengampu Al-Quran') ||
+      roles.has('Guru Wali') ||
+      roles.has('Wali Kelas')
+    ) {
+      const key = t.nama.toUpperCase();
+      const qGroups = Array.from(quranGroupsByTeacher.get(key) || []).join('; ');
+      const wkClasses = Array.from(waliKelasClassesByTeacher.get(key) || []).join('; ');
+      const gwClasses = Array.from(guruWaliClassesByTeacher.get(key) || []).join('; ');
+      const primaryLabel =
+        t.peran === 'Pengampu Al-Quran'
+          ? 'Pengampu Al-Quran'
+          : t.peran === 'Guru Wali'
+          ? 'Guru Wali'
+          : t.peran === 'Wali Kelas'
+          ? 'Wali Kelas'
+          : 'Guru';
       guruBody.push([
         String(guruBody.length + 1),
         sanitizeExcelText(t.nama),
-        t.peran === 'Pengampu Al-Quran' ? 'Pengampu Al-Quran' : 'Guru',
+        primaryLabel,
         sanitizeExcelText(t.genderScope || 'Semua'),
+        sanitizeExcelText(qGroups),
+        sanitizeExcelText(wkClasses),
+        sanitizeExcelText(gwClasses),
         sanitizeExcelText(t.whatsapp || '628'),
       ]);
-      addedGuruNames.add(t.nama.toUpperCase());
+      addedGuruNames.add(key);
     }
   }
   for (const [pengampu, g] of Array.from(pengampuMap.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
-    if (addedGuruNames.has(pengampu) || addedWaliNames.has(pengampu)) continue;
+    if (addedGuruNames.has(pengampu)) continue;
+    const qGroups = Array.from(quranGroupsByTeacher.get(pengampu) || []).join('; ');
+    const wkClasses = Array.from(waliKelasClassesByTeacher.get(pengampu) || []).join('; ');
+    const gwClasses = Array.from(guruWaliClassesByTeacher.get(pengampu) || []).join('; ');
     guruBody.push([
       String(guruBody.length + 1),
       sanitizeExcelText(pengampu),
       'Pengampu Al-Quran',
       g,
+      sanitizeExcelText(qGroups),
+      sanitizeExcelText(wkClasses),
+      sanitizeExcelText(gwClasses),
       '628',
     ]);
     addedGuruNames.add(pengampu);
   }
+  for (const [gwName, gwClassesSet] of Array.from(guruWaliClassesByTeacher.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+    if (addedGuruNames.has(gwName)) continue;
+    const qGroups = Array.from(quranGroupsByTeacher.get(gwName) || []).join('; ');
+    const wkClasses = Array.from(waliKelasClassesByTeacher.get(gwName) || []).join('; ');
+    const gwClasses = Array.from(gwClassesSet).join('; ');
+    guruBody.push([
+      String(guruBody.length + 1),
+      sanitizeExcelText(gwName),
+      'Guru Wali',
+      inferGenderClient(gwName),
+      sanitizeExcelText(qGroups),
+      sanitizeExcelText(wkClasses),
+      sanitizeExcelText(gwClasses),
+      '628',
+    ]);
+    addedGuruNames.add(gwName);
+  }
   const guruRows: string[][] = [
-    ['No', 'Nama Guru / Pengampu', 'Peran / Bidang', 'Wilayah (Putra/Putri/Semua)', 'WhatsApp'],
+    [
+      'No',
+      'Nama Guru / Pengampu / Guru Wali',
+      'Peran / Bidang',
+      'Wilayah (Putra/Putri/Semua)',
+      'Kode Kelas Al-Quran Binaan (pisah ;)',
+      'Wali Kelas Dari (pisah ;)',
+      'Guru Wali Kelas Binaan (pisah ;)',
+      'WhatsApp',
+    ],
     ...guruBody,
   ];
 
@@ -1033,6 +1159,8 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
       amanahTambahan: string[];
       kelasBinaan: string;
       kamarBinaan: string;
+      kelompokQuranBinaan: string;
+      guruWaliKelas: string;
       whatsapp: string;
       username: string;
       tokenLogin: string;
@@ -1041,13 +1169,26 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
 
   for (const t of ctx.teachers) {
     if (t.peran === 'Admin Super') continue;
-    pegawaiMap.set(t.nama.toUpperCase(), {
+    const key = t.nama.toUpperCase();
+    const wkClasses =
+      t.waliKelasOf || Array.from(waliKelasClassesByTeacher.get(key) || []).join('; ');
+    const qGroups = Array.from(
+      new Set([...(t.kelompokQuranBinaan || []), ...(quranGroupsByTeacher.get(key) || [])]),
+    ).join('; ');
+    const gwClasses = Array.from(guruWaliClassesByTeacher.get(key) || []).join('; ');
+    const extraRoles = [...(t.peranTambahan || []).filter((p) => p !== t.peran)];
+    if (gwClasses && t.peran !== 'Guru Wali' && !extraRoles.includes('Guru Wali')) {
+      extraRoles.push('Guru Wali');
+    }
+    pegawaiMap.set(key, {
       nama: sanitizeExcelText(t.nama),
       wilayah: t.genderScope || 'Semua',
       amanahUtama: t.peran,
-      amanahTambahan: (t.peranTambahan || []).filter((p) => p !== t.peran),
-      kelasBinaan: sanitizeExcelText(t.waliKelasOf || ''),
+      amanahTambahan: extraRoles,
+      kelasBinaan: sanitizeExcelText(wkClasses),
       kamarBinaan: sanitizeExcelText((t.kamarBinaan || []).join('; ')),
+      kelompokQuranBinaan: sanitizeExcelText(qGroups),
+      guruWaliKelas: sanitizeExcelText(gwClasses),
       whatsapp: sanitizeExcelText(t.whatsapp || '628'),
       username: sanitizeExcelText(t.username || makeUsernameClient(t.nama)),
       tokenLogin: sanitizeExcelText(t.pin || generateClientTeacherToken(t.nama)),
@@ -1058,7 +1199,7 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
     nama: string,
     wilayah: 'Putra' | 'Putri' | 'Semua',
     role: string,
-    opts: { kelas?: string; kamar?: string; wa?: string },
+    opts: { kelas?: string; kamar?: string; kelompokQuran?: string; guruWaliKelas?: string; wa?: string },
   ) => {
     const key = nama.trim().toUpperCase();
     if (!key || key === '(BELUM DITENTUKAN)' || key === 'BELUM DIATUR' || key === '-') return;
@@ -1069,6 +1210,8 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
       }
       if (!prev.kelasBinaan && opts.kelas) prev.kelasBinaan = opts.kelas;
       if (!prev.kamarBinaan && opts.kamar) prev.kamarBinaan = opts.kamar;
+      if (!prev.kelompokQuranBinaan && opts.kelompokQuran) prev.kelompokQuranBinaan = opts.kelompokQuran;
+      if (!prev.guruWaliKelas && opts.guruWaliKelas) prev.guruWaliKelas = opts.guruWaliKelas;
       if ((!prev.whatsapp || prev.whatsapp === '628') && opts.wa) prev.whatsapp = opts.wa;
     } else {
       pegawaiMap.set(key, {
@@ -1076,8 +1219,10 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
         wilayah,
         amanahUtama: role,
         amanahTambahan: [],
-        kelasBinaan: sanitizeExcelText(opts.kelas || ''),
+        kelasBinaan: sanitizeExcelText(opts.kelas || Array.from(waliKelasClassesByTeacher.get(key) || []).join('; ')),
         kamarBinaan: sanitizeExcelText(opts.kamar || ''),
+        kelompokQuranBinaan: sanitizeExcelText(opts.kelompokQuran || Array.from(quranGroupsByTeacher.get(key) || []).join('; ')),
+        guruWaliKelas: sanitizeExcelText(opts.guruWaliKelas || Array.from(guruWaliClassesByTeacher.get(key) || []).join('; ')),
         whatsapp: sanitizeExcelText(opts.wa || '628'),
         username: sanitizeExcelText(makeUsernameClient(nama)),
         tokenLogin: sanitizeExcelText(generateClientTeacherToken(nama)),
@@ -1092,15 +1237,20 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
     upsertTemplatePegawai(r[1], 'Putri', 'Musyrifah', { kamar: r[2], wa: r[4] });
   }
   for (const r of waliPutraBody) {
-    upsertTemplatePegawai(r[1], 'Putra', 'Wali Kelas', { kelas: r[2], wa: r[4] });
+    upsertTemplatePegawai(r[1], 'Putra', 'Wali Kelas', { kelas: r[2], wa: r[5] });
   }
   for (const r of waliPutriBody) {
-    upsertTemplatePegawai(r[1], 'Putri', 'Wali Kelas', { kelas: r[2], wa: r[4] });
+    upsertTemplatePegawai(r[1], 'Putri', 'Wali Kelas', { kelas: r[2], wa: r[5] });
   }
   for (const r of guruBody) {
     const w: 'Putra' | 'Putri' | 'Semua' =
       r[3] === 'Putri' ? 'Putri' : r[3] === 'Putra' ? 'Putra' : 'Semua';
-    upsertTemplatePegawai(r[1], w, r[2] === 'Pengampu Al-Quran' ? 'Pengampu Al-Quran' : 'Guru', { wa: r[4] });
+    upsertTemplatePegawai(
+      r[1],
+      w,
+      r[2] === 'Pengampu Al-Quran' ? 'Pengampu Al-Quran' : r[2] === 'Guru Wali' ? 'Guru Wali' : 'Guru',
+      { kelompokQuran: r[4], kelas: r[5], guruWaliKelas: r[6], wa: r[7] },
+    );
   }
   for (const sc of ctx.schedules) {
     if (sc.guru) {
@@ -1108,7 +1258,7 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
         sc.guru,
         sc.gender || inferGenderClient(sc.guru),
         sc.kategori === 'Al-Quran' ? 'Pengampu Al-Quran' : 'Guru',
-        {},
+        sc.kategori === 'Al-Quran' ? { kelompokQuran: sc.kelas } : {},
       );
     }
   }
@@ -1123,6 +1273,8 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
       p.amanahTambahan.join('; '),
       p.kelasBinaan,
       p.kamarBinaan,
+      p.kelompokQuranBinaan,
+      p.guruWaliKelas,
       p.whatsapp,
       p.username,
       p.tokenLogin,
@@ -1133,10 +1285,12 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
       'No',
       'Nama Pegawai',
       'Wilayah (Putra/Putri/Semua)',
-      'Amanah Utama (Guru/Wali Kelas/Musyrif/Musyrifah/Pimpinan)',
+      'Amanah Utama (Guru/Wali Kelas/Guru Wali/Musyrif/Musyrifah/Pengampu Al-Quran/Pimpinan)',
       'Amanah Tambahan (pisah ;)',
-      'Kelas Binaan',
+      'Kelas Binaan (Wali Kelas)',
       'Kamar Binaan (pisah ;)',
+      'Kode Kelas Al-Quran Binaan (pisah ;)',
+      'Guru Wali Kelas Binaan (pisah ;)',
       'WhatsApp',
       'Username Login',
       'Token Login',
@@ -1171,18 +1325,18 @@ export function buildClientDatabaseWorkbookSpec(ctx: ClientTemplateContext): Dat
   // Sheet 0: Panduan Singkat + Ringkasan Tabel Terpisah
   const guideRows: string[][] = [
     ['TEMPLATE DATABASE MASTER SEKOLAH (.XLSX) - PINTAR TERPADU (WILAYAH PUTRA & PUTRI)'],
-    ['PUSAT TOKEN LOGIN: Kolom "Token Login" HANYA ada di sheet "Master_Pegawai". Seluruh guru, wali kelas, wali asrama, dan pimpinan menggunakan Token Login dari sheet Master_Pegawai ini.'],
-    ['Pemisahan Sheet: Siswa (1A/1B), Master_Pegawai (Pusat Akun & Token Login), Musyrif Putra (2A), Musyrifah Putri (2B), Wali Kelas Putra (3A), Wali Kelas Putri (3B), dan Guru Pengampu (3C).'],
+    ['PUSAT TOKEN LOGIN: Kolom "Token Login" HANYA ada di sheet "Master_Pegawai". Seluruh guru, wali kelas, guru wali, wali asrama, dan pimpinan menggunakan Token Login dari sheet Master_Pegawai ini.'],
+    ['Pemisahan Sheet: Siswa (1A/1B), Master_Pegawai (Pusat Akun, Kelas Wali Kelas, Kamar, Kode Al-Qur’an, Guru Wali & Token Login), Musyrif Putra (2A), Musyrifah Putri (2B), Wali Kelas Putra (3A), Wali Kelas Putri (3B), dan Guru Pengampu & Guru Wali (3C).'],
     [''],
     ['Nama Sheet', 'Isi Tabel Khusus', 'Jumlah Baris', 'Kolom Utama & Keterangan'],
     ['1A_Siswa_Putra', 'Master Santri Wilayah Putra', String(santriPutraRows.length - 1), `${putraCount} santri Putra (${putraSourceNote}).`],
     ['1B_Siswa_Putri', 'Master Santri Wilayah Putri', String(santriPutriRows.length - 1), `${putriCount} santri Putri (${putriSourceNote}).`],
-    ['Master_Pegawai', 'Daftar Induk Pegawai & Token Login', String(masterPegawaiRows.length - 1), 'No | Nama Pegawai | Wilayah | Amanah Utama | Amanah Tambahan | Kelas Binaan | Kamar Binaan | WhatsApp | Username Login | Token Login'],
+    ['Master_Pegawai', 'Daftar Induk Pegawai & Token Login', String(masterPegawaiRows.length - 1), 'No | Nama Pegawai | Wilayah | Amanah Utama | Amanah Tambahan | Kelas Binaan (Wali Kelas) | Kamar Binaan | Kode Kelas Al-Quran Binaan | Guru Wali Kelas Binaan | WhatsApp | Username Login | Token Login'],
     ['2A_Musyrif_Putra', 'Tabel Musyrif Asrama Putra', String(musyrifPutraRows.length - 1), 'No | Nama Musyrif | Kamar Binaan (pisah ;) | Wilayah | WhatsApp (Token Login terpusat di Master_Pegawai)'],
     ['2B_Musyrifah_Putri', 'Tabel Musyrifah Asrama Putri', String(musyrifahPutriRows.length - 1), 'No | Nama Musyrifah | Kamar Binaan (pisah ;) | Wilayah | WhatsApp (Token Login terpusat di Master_Pegawai)'],
-    ['3A_Wali_Kelas_Putra', 'Tabel Wali Kelas Wilayah Putra', String(waliPutraRows.length - 1), 'No | Nama Wali Kelas | Kelas Binaan | Wilayah | WhatsApp (Token Login terpusat di Master_Pegawai)'],
-    ['3B_Wali_Kelas_Putri', 'Tabel Wali Kelas Wilayah Putri', String(waliPutriRows.length - 1), 'No | Nama Wali Kelas | Kelas Binaan | Wilayah | WhatsApp (Token Login terpusat di Master_Pegawai)'],
-    ['3C_Guru_Pengampu', 'Tabel Guru Mapel & Pengampu Qur’an', String(guruRows.length - 1), 'No | Nama Guru | Peran | Wilayah (Putra/Putri/Semua) | WhatsApp (Token Login terpusat di Master_Pegawai)'],
+    ['3A_Wali_Kelas_Putra', 'Tabel Wali Kelas Wilayah Putra', String(waliPutraRows.length - 1), 'No | Nama Wali Kelas | Kelas Binaan | Wilayah | Guru Wali di Kelas Ini | WhatsApp'],
+    ['3B_Wali_Kelas_Putri', 'Tabel Wali Kelas Wilayah Putri', String(waliPutriRows.length - 1), 'No | Nama Wali Kelas | Kelas Binaan | Wilayah | Guru Wali di Kelas Ini | WhatsApp'],
+    ['3C_Guru_Pengampu', 'Tabel Guru Mapel, Pengampu Qur’an & Guru Wali', String(guruRows.length - 1), 'No | Nama Guru | Peran | Wilayah | Kode Kelas Al-Quran Binaan | Wali Kelas Dari | Guru Wali Kelas Binaan | WhatsApp'],
     ['4_Jadwal_Mengajar', 'Jadwal Akademik & Halaqah Putra/Putri', String(jadwalRows.length - 1), 'Hari: SENIN-SABTU (Senin/Jumat 6 JP, Sel-Kam 9 JP, Sabtu 7 JP).'],
     ['5_Ruang_Ujian', 'Daftar Ruangan Ujian Putra & Putri', String(ruangRows.length - 1), 'Tandai ruangan Putra / Putri / Semua.'],
     [''],

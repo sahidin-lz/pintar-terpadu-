@@ -426,6 +426,13 @@ export interface StudentFormEntry {
   setoran?: string;
   kelasAsli: string;
   syncedFromAsrama?: boolean;
+  kelas?: string;
+  kamar?: string;
+  kelompokQuran?: string;
+  pengampuQuran?: string;
+  waliKelas?: string;
+  musyrif?: string;
+  guruWali?: string;
 }
 
 export interface MonitoringCell {

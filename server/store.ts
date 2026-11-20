@@ -162,6 +162,81 @@ function normalizeStr(val: string): string {
     .replace(/\s+/g, ' ');
 }
 
+function stripHonorificName(val?: string): string {
+  const raw = String(val || '')
+    .trim()
+    .toLowerCase()
+    .replace(/["'`]/g, '');
+  if (!raw || raw === '-') return '';
+  const withoutDegrees = raw.split(',')[0] || raw;
+  return withoutDegrees
+    .replace(/^(ustadzah|ustadz|ustz|ust|bpk|ibu|pak|bu|dr|drs|hj|h|kh)\.?\s+/i, '')
+    .replace(/^(ustadzah|ustadz|ustz|ust)\.?\s+/i, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function matchTeacherName(a?: string, b?: string): boolean {
+  const na = normalizeStr(a || '');
+  const nb = normalizeStr(b || '');
+  if (!na || !nb || na === '-' || nb === '-') return false;
+  if (na === nb || na.includes(nb) || nb.includes(na)) return true;
+  const ca = stripHonorificName(a);
+  const cb = stripHonorificName(b);
+  if (!ca || !cb || ca.length < 3 || cb.length < 3) return false;
+  return ca === cb || ca.includes(cb) || cb.includes(ca);
+}
+
+function normalizeDayName(raw?: string): string {
+  const s = String(raw || '')
+    .trim()
+    .toUpperCase()
+    .replace(/['`’]/g, '');
+  if (!s) return '';
+  if (s.includes('MINGGU') || s.includes('AHAD')) return 'MINGGU';
+  if (s.includes('SENIN') || s.includes('SENEN')) return 'SENIN';
+  if (s.includes('SELASA')) return 'SELASA';
+  if (s.includes('RABU') || s.includes('RABO')) return 'RABU';
+  if (s.includes('KAMIS') || s.includes('KEMIS')) return 'KAMIS';
+  if (s.includes('JUMAT')) return 'JUMAT';
+  if (s.includes('SABTU') || s.includes('SAPTU')) return 'SABTU';
+  return s;
+}
+
+function normGroupCode(raw?: string): string {
+  const s = String(raw || '').trim().toUpperCase();
+  if (!s || s === '-' || s === 'KOSONG') return '';
+  return s
+    .replace(/^(KELAS|KAMAR|ASRAMA|HUJROH|KELOMPOK|KELP\.?|HALAQAH)\s+/i, '')
+    .replace(/[\s\-_.]+/g, '')
+    .replace(/0+(\d+)/g, '$1');
+}
+
+function matchGroupCode(a?: string, b?: string): boolean {
+  const rawA = String(a || '').trim().toUpperCase();
+  const rawB = String(b || '').trim().toUpperCase();
+  if (!rawA || !rawB || rawA === '-' || rawB === '-') return false;
+  if (rawA === rawB) return true;
+  const na = normGroupCode(rawA);
+  const nb = normGroupCode(rawB);
+  if (!na || !nb) return false;
+  return na === nb;
+}
+
+function isQuranScheduleItem(item: { mapel?: string; kategori?: string; kelas?: string }): boolean {
+  if (item.kategori === 'Al-Quran') return true;
+  const m = String(item.mapel || '').toUpperCase();
+  return (
+    m.includes('QUR') ||
+    m.includes('TAHFIDZ') ||
+    m.includes('TAHSIN') ||
+    m.includes('HALAQAH') ||
+    m.includes('TILAWAH') ||
+    m.includes('MURAJAAH')
+  );
+}
+
 function makeUsername(nama: string): string {
   return nama
     .toLowerCase()
@@ -1263,32 +1338,38 @@ class PintarStore {
     let updated = 0;
     for (const r of payload.rows) {
       const cleanGuru = (r.guru || '').trim().toUpperCase();
-      const cleanHari = (r.hari || 'SENIN').trim().toUpperCase();
+      const cleanHari = normalizeDayName(r.hari || 'SENIN') || 'SENIN';
       const cleanKelas = (r.kelas || '').trim().toUpperCase();
       const cleanMapel = (r.mapel || '').trim().toUpperCase();
       const cleanJam = (r.jamKe || '1-2').trim();
+      const cleanKat: 'Akademik' | 'Al-Quran' =
+        r.kategori === 'Al-Quran' || isQuranScheduleItem({ mapel: cleanMapel, kategori: r.kategori })
+          ? 'Al-Quran'
+          : 'Akademik';
       if (!cleanGuru || !cleanKelas || !cleanMapel) continue;
 
       const exactIdx = this.db.schedules.findIndex(
         (s) =>
-          s.hari === cleanHari &&
-          normalizeStr(s.guru) === normalizeStr(cleanGuru) &&
-          s.kelas.toUpperCase() === cleanKelas &&
+          normalizeDayName(s.hari) === cleanHari &&
+          matchTeacherName(s.guru, cleanGuru) &&
+          matchGroupCode(s.kelas, cleanKelas) &&
           s.mapel.toUpperCase() === cleanMapel &&
           s.jamKe === cleanJam
       );
       if (exactIdx >= 0) {
         this.db.schedules[exactIdx].gender = r.gender;
-        this.db.schedules[exactIdx].kategori = r.kategori;
+        this.db.schedules[exactIdx].kategori = cleanKat;
         continue;
       }
 
-      // Check if an existing schedule slot for the same Hari + Kelas + JamKe exists (edit via Excel template)
+      // Check if an existing schedule slot for the same Hari + Kelas + JamKe + Kategori exists
       const slotIdx = this.db.schedules.findIndex(
         (s) =>
-          s.hari === cleanHari &&
+          normalizeDayName(s.hari) === cleanHari &&
           s.kelas.toUpperCase() === cleanKelas &&
-          s.jamKe === cleanJam
+          s.jamKe === cleanJam &&
+          (s.kategori || 'Akademik') === cleanKat &&
+          (cleanKat !== 'Al-Quran' || matchTeacherName(s.guru, cleanGuru))
       );
       if (slotIdx >= 0) {
         this.db.schedules[slotIdx] = {
@@ -1296,7 +1377,7 @@ class PintarStore {
           guru: cleanGuru,
           mapel: cleanMapel,
           gender: r.gender,
-          kategori: r.kategori,
+          kategori: cleanKat,
           updatedAt: new Date().toISOString(),
         };
         updated++;
@@ -1309,7 +1390,7 @@ class PintarStore {
           mapel: cleanMapel,
           jamKe: cleanJam,
           gender: r.gender,
-          kategori: r.kategori,
+          kategori: cleanKat,
         });
         added++;
       }
@@ -1327,6 +1408,7 @@ class PintarStore {
       genderScope: 'Putra' | 'Putri' | 'Semua';
       waliKelasOf?: string;
       kamarBinaan?: string[];
+      kelompokQuranBinaan?: string[];
       whatsapp?: string;
       username?: string;
       pin?: string;
@@ -1339,7 +1421,7 @@ class PintarStore {
       if (!cleanNama) continue;
       const existing = this.db.teachers.find(
         (t) =>
-          normalizeStr(t.nama) === normalizeStr(cleanNama) ||
+          matchTeacherName(t.nama, cleanNama) ||
           (r.username && normalizeStr(t.username) === normalizeStr(r.username))
       );
       if (existing) {
@@ -1362,10 +1444,16 @@ class PintarStore {
         } else {
           existing.genderScope = r.genderScope;
         }
-        if (r.waliKelasOf) existing.waliKelasOf = r.waliKelasOf;
+        if (r.waliKelasOf && r.waliKelasOf !== '-') existing.waliKelasOf = r.waliKelasOf;
         if (r.kamarBinaan && r.kamarBinaan.length > 0) {
           const mergedRooms = Array.from(new Set([...(existing.kamarBinaan || []), ...r.kamarBinaan]));
           existing.kamarBinaan = mergedRooms;
+        }
+        if (r.kelompokQuranBinaan && r.kelompokQuranBinaan.length > 0) {
+          const mergedKlp = Array.from(
+            new Set([...(existing.kelompokQuranBinaan || []), ...r.kelompokQuranBinaan]),
+          );
+          existing.kelompokQuranBinaan = mergedKlp;
         }
         if (r.whatsapp && r.whatsapp !== '628') existing.whatsapp = r.whatsapp;
         if (r.username) existing.username = r.username.toLowerCase();
@@ -1394,6 +1482,7 @@ class PintarStore {
           genderScope: r.genderScope,
           waliKelasOf: r.waliKelasOf,
           kamarBinaan: r.kamarBinaan,
+          kelompokQuranBinaan: r.kelompokQuranBinaan,
           whatsapp: r.whatsapp || '',
           pin: cleanPin,
         });
@@ -1403,22 +1492,36 @@ class PintarStore {
       if (r.kamarBinaan) {
         for (const km of r.kamarBinaan) {
           const roomGender: Gender = r.genderScope === 'Putri' ? 'Putri' : inferGender(km);
-          const rm = this.db.rooms.find((x) => normalizeStr(x.kamar) === normalizeStr(km));
+          const rm = this.db.rooms.find((x) => matchGroupCode(x.kamar, km));
           if (rm) rm.musyrif = cleanNama;
           else this.db.rooms.push({ kamar: km, musyrif: cleanNama, gender: roomGender });
 
           for (const st of this.db.students) {
-            if (normalizeStr(st.kamar) === normalizeStr(km)) {
+            if (matchGroupCode(st.kamar, km)) {
               st.musyrif = cleanNama;
             }
           }
         }
       }
 
-      if (r.waliKelasOf) {
+      if (r.waliKelasOf && r.waliKelasOf !== '-') {
+        const waliClasses = r.waliKelasOf
+          .split(/[;,]/)
+          .map((x) => x.trim().toUpperCase())
+          .filter(Boolean);
         for (const st of this.db.students) {
-          if (st.kelas.toUpperCase() === r.waliKelasOf.toUpperCase()) {
+          if (waliClasses.some((wk) => matchGroupCode(st.kelas, wk))) {
             st.waliKelas = cleanNama;
+          }
+        }
+      }
+
+      if (r.kelompokQuranBinaan && r.kelompokQuranBinaan.length > 0) {
+        for (const klp of r.kelompokQuranBinaan) {
+          for (const st of this.db.students) {
+            if (matchGroupCode(st.kelompokQuran, klp) && !st.pengampuQuran) {
+              st.pengampuQuran = cleanNama;
+            }
           }
         }
       }
@@ -1482,7 +1585,7 @@ class PintarStore {
     ) => {
       if (!rawName || isPlaceholderTeacherName(rawName)) return;
       const cleanNama = rawName.trim().replace(/\s+/g, ' ').toUpperCase();
-      let rec = this.db.teachers.find((t) => normalizeStr(t.nama) === normalizeStr(cleanNama));
+      let rec = this.db.teachers.find((t) => matchTeacherName(t.nama, cleanNama));
 
       if (!rec) {
         rec = {
@@ -1529,14 +1632,14 @@ class PintarStore {
       if (opts?.kamar && opts.kamar !== '-') {
         const km = opts.kamar.trim();
         const existingRooms = rec.kamarBinaan || [];
-        if (!existingRooms.some((x) => normalizeStr(x) === normalizeStr(km))) {
+        if (!existingRooms.some((x) => matchGroupCode(x, km))) {
           rec.kamarBinaan = [...existingRooms, km];
         }
       }
       if (opts?.kelompokQuran && opts.kelompokQuran !== '-') {
         const klp = opts.kelompokQuran.trim();
         const existingKlp = rec.kelompokQuranBinaan || [];
-        if (!existingKlp.some((x) => normalizeStr(x) === normalizeStr(klp))) {
+        if (!existingKlp.some((x) => matchGroupCode(x, klp))) {
           rec.kelompokQuranBinaan = [...existingKlp, klp];
         }
       }
@@ -1589,11 +1692,7 @@ class PintarStore {
     // 4. Sync teachers from schedules (Guru Akademik & Pengampu Al-Quran)
     for (const sc of this.db.schedules) {
       if (sc.guru) {
-        const isQuran =
-          sc.kategori === 'Al-Quran' ||
-          sc.mapel.toUpperCase().includes('QUR') ||
-          sc.mapel.toUpperCase().includes('HALAQAH') ||
-          sc.mapel.toUpperCase().includes('TAHFIDZ');
+        const isQuran = isQuranScheduleItem(sc);
         ensurePegawaiInDb(
           sc.guru,
           isQuran ? 'Pengampu Al-Quran' : 'Guru',
@@ -1651,7 +1750,7 @@ class PintarStore {
           const cleanKm = km.trim();
           if (!cleanKm || cleanKm === '-') continue;
           const rGender: Gender = t.genderScope === 'Putri' ? 'Putri' : inferGender(cleanKm);
-          const rm = this.db.rooms.find((r) => normalizeStr(r.kamar) === normalizeStr(cleanKm));
+          const rm = this.db.rooms.find((r) => matchGroupCode(r.kamar, cleanKm));
           if (rm) {
             rm.musyrif = t.nama;
           } else {
@@ -1663,7 +1762,7 @@ class PintarStore {
 
     for (const st of this.db.students) {
       if (st.kamar && st.kamar !== '-') {
-        let rm = this.db.rooms.find((r) => normalizeStr(r.kamar) === normalizeStr(st.kamar));
+        let rm = this.db.rooms.find((r) => matchGroupCode(r.kamar, st.kamar));
         if (!rm) {
           rm = { kamar: st.kamar, musyrif: st.musyrif || '', gender: st.gender };
           this.db.rooms.push(rm);
@@ -1676,19 +1775,68 @@ class PintarStore {
       }
     }
 
-    // 7. Sync Wali Kelas between teachers.waliKelasOf and students.waliKelas
+    // 7. Bidirectional sync of Wali Kelas between teachers.waliKelasOf and students.waliKelas
     const waliByClass = new Map<string, string>();
     for (const t of this.db.teachers) {
       if (t.id === SUPER_ADMIN_ID) continue;
-      if (t.waliKelasOf) {
-        waliByClass.set(normalizeStr(t.waliKelasOf), t.nama);
+      if (t.waliKelasOf && t.waliKelasOf !== '-') {
+        for (const wk of t.waliKelasOf.split(/[;,]/).map((s) => s.trim()).filter(Boolean)) {
+          const code = normGroupCode(wk) || normalizeStr(wk);
+          if (code) waliByClass.set(code, t.nama);
+        }
+      }
+    }
+    for (const st of this.db.students) {
+      if (st.kelas && st.kelas !== '-' && st.waliKelas && !isPlaceholderTeacherName(st.waliKelas)) {
+        const code = normGroupCode(st.kelas) || normalizeStr(st.kelas);
+        if (code && !waliByClass.has(code)) {
+          waliByClass.set(code, st.waliKelas.trim().toUpperCase());
+        }
       }
     }
     for (const st of this.db.students) {
       if (st.kelas && st.kelas !== '-') {
-        const mappedWali = waliByClass.get(normalizeStr(st.kelas));
-        if (mappedWali) {
+        const code = normGroupCode(st.kelas) || normalizeStr(st.kelas);
+        const mappedWali = waliByClass.get(code);
+        if (mappedWali && (!st.waliKelas || isPlaceholderTeacherName(st.waliKelas))) {
           st.waliKelas = mappedWali;
+        }
+      }
+    }
+
+    // 8. Bidirectional sync of Pengampu Al-Qur'an between students.kelompokQuran, teachers.kelompokQuranBinaan, and Al-Qur'an schedules
+    const pengampuByKelompok = new Map<string, string>();
+    for (const sc of this.db.schedules) {
+      if (isQuranScheduleItem(sc) && sc.kelas && sc.kelas !== '-' && sc.guru && !isPlaceholderTeacherName(sc.guru)) {
+        const code = normGroupCode(sc.kelas) || normalizeStr(sc.kelas);
+        if (code && !pengampuByKelompok.has(code)) {
+          pengampuByKelompok.set(code, sc.guru.trim().toUpperCase());
+        }
+      }
+    }
+    for (const t of this.db.teachers) {
+      if (t.id === SUPER_ADMIN_ID) continue;
+      for (const klp of t.kelompokQuranBinaan || []) {
+        const code = normGroupCode(klp) || normalizeStr(klp);
+        if (code && !pengampuByKelompok.has(code)) {
+          pengampuByKelompok.set(code, t.nama);
+        }
+      }
+    }
+    for (const st of this.db.students) {
+      if (st.kelompokQuran && st.kelompokQuran !== '-' && st.pengampuQuran && !isPlaceholderTeacherName(st.pengampuQuran)) {
+        const code = normGroupCode(st.kelompokQuran) || normalizeStr(st.kelompokQuran);
+        if (code && !pengampuByKelompok.has(code)) {
+          pengampuByKelompok.set(code, st.pengampuQuran.trim().toUpperCase());
+        }
+      }
+    }
+    for (const st of this.db.students) {
+      if (st.kelompokQuran && st.kelompokQuran !== '-') {
+        const code = normGroupCode(st.kelompokQuran) || normalizeStr(st.kelompokQuran);
+        const mappedPengampu = pengampuByKelompok.get(code);
+        if (mappedPengampu && (!st.pengampuQuran || isPlaceholderTeacherName(st.pengampuQuran))) {
+          st.pengampuQuran = mappedPengampu;
         }
       }
     }
@@ -1714,6 +1862,7 @@ class PintarStore {
       genderScope: 'Putra' | 'Putri' | 'Semua';
       waliKelasOf?: string;
       kamarBinaan?: string[];
+      kelompokQuranBinaan?: string[];
       whatsapp?: string;
       username?: string;
       pin?: string;
@@ -1757,11 +1906,19 @@ class PintarStore {
       this.db.schedules = [];
     }
 
+    const scheduleResult =
+      payload.scheduleRows && payload.scheduleRows.length > 0
+        ? this.importSchedulesBulk({
+            rows: payload.scheduleRows,
+            replaceExisting: false,
+          })
+        : { added: 0, updated: 0 };
+
     const santriResult =
       payload.santriRows && payload.santriRows.length > 0
         ? this.importSantriSim({
             rows: payload.santriRows,
-            replaceExisting: payload.replaceExisting,
+            replaceExisting: false,
             autoCreateAccounts: payload.autoCreateAccounts ?? true,
             autoCreateQuranSchedules: payload.autoCreateQuranSchedules ?? true,
             defaultPin: payload.defaultPin || '1234',
@@ -1778,14 +1935,6 @@ class PintarStore {
     const teacherResult =
       filteredTeachers.length > 0
         ? this.importTeachersBulk({ rows: filteredTeachers })
-        : { added: 0, updated: 0 };
-
-    const scheduleResult =
-      payload.scheduleRows && payload.scheduleRows.length > 0
-        ? this.importSchedulesBulk({
-            rows: payload.scheduleRows,
-            replaceExisting: payload.replaceExisting,
-          })
         : { added: 0, updated: 0 };
 
     let roomsAdded = 0;
@@ -2708,81 +2857,394 @@ class PintarStore {
   // ==============================================================
   public getPublicTeachers(jenis?: string, gender?: string): TeacherPublic[] {
     return this.getCached(`teachers_${jenis || 'all'}_${gender || 'all'}`, () => {
-      return this.db.teachers
-        .filter((t) => {
-          if (gender && gender !== 'Semua' && t.genderScope !== 'Semua' && t.genderScope !== gender) {
-            return false;
-          }
-          if (!jenis || jenis === 'Semua') return true;
-          if (t.peran === 'Admin Super') return false;
-          const jab = `${t.peran} ${(t.peranTambahan || []).join(' ')} ${t.jabatan}`.toLowerCase();
-          if (jenis === 'Asrama') return jab.includes('musyrif') || jab.includes('asrama') || (t.kamarBinaan && t.kamarBinaan.length > 0);
-          if (jenis === 'Al-Quran') return jab.includes('qur') || jab.includes('guru') || jab.includes('musyrif') || (t.kelompokQuranBinaan && t.kelompokQuranBinaan.length > 0);
-          return jab.includes('guru') || jab.includes('wali');
-        })
-        .map((t) => ({
-          ...t,
-          pin:
-            t.id === SUPER_ADMIN_ID
-              ? SUPER_ADMIN_PIN
-              : !t.pin || t.pin === '1234'
-              ? generateTeacherAccessToken(t.nama)
-              : t.pin,
-        }))
-        .sort((a, b) => a.nama.localeCompare(b.nama));
+      const nonSuperTeachers = this.db.teachers.filter((t) => t.peran !== 'Admin Super');
+      if (
+        nonSuperTeachers.length === 0 &&
+        (this.db.students.length > 0 || this.db.schedules.length > 0 || this.db.rooms.length > 0)
+      ) {
+        this.reconcileDatabaseRelations();
+      }
+
+      const mapTeacherPublic = (t: TeacherRecord): TeacherPublic => ({
+        ...t,
+        pin:
+          t.id === SUPER_ADMIN_ID
+            ? SUPER_ADMIN_PIN
+            : !t.pin || t.pin === '1234'
+            ? generateTeacherAccessToken(t.nama)
+            : t.pin,
+      });
+
+      const hasGenderDataForTeacher = (t: TeacherRecord, g: string): boolean => {
+        if (!g || g === 'Semua') return true;
+        if (t.genderScope === 'Semua' || t.genderScope === g) return true;
+        if (this.db.schedules.some((sc) => sc.gender === g && matchTeacherName(sc.guru, t.nama))) return true;
+        if (this.db.rooms.some((rm) => rm.gender === g && matchTeacherName(rm.musyrif, t.nama))) return true;
+        if (
+          this.db.students.some(
+            (st) =>
+              st.gender === g &&
+              (matchTeacherName(st.musyrif, t.nama) ||
+                matchTeacherName(st.waliKelas, t.nama) ||
+                matchTeacherName(st.pengampuQuran, t.nama) ||
+                matchTeacherName(st.guruWali, t.nama)),
+          )
+        ) {
+          return true;
+        }
+        return false;
+      };
+
+      const filtered = this.db.teachers.filter((t) => {
+        if (!hasGenderDataForTeacher(t, gender || 'Semua')) {
+          return false;
+        }
+        if (!jenis || jenis === 'Semua') return true;
+        if (t.peran === 'Admin Super') return false;
+
+        const jab = `${t.peran} ${(t.peranTambahan || []).join(' ')} ${t.jabatan}`.toLowerCase();
+
+        if (jenis === 'Asrama') {
+          const hasRoom =
+            (t.kamarBinaan && t.kamarBinaan.length > 0) ||
+            this.db.rooms.some(
+              (rm) => (!gender || gender === 'Semua' || rm.gender === gender) && matchTeacherName(rm.musyrif, t.nama),
+            ) ||
+            this.db.students.some(
+              (st) => (!gender || gender === 'Semua' || st.gender === gender) && matchTeacherName(st.musyrif, t.nama),
+            );
+          return jab.includes('musyrif') || jab.includes('asrama') || Boolean(hasRoom);
+        }
+
+        if (jenis === 'Al-Quran') {
+          const hasQuran =
+            (t.kelompokQuranBinaan && t.kelompokQuranBinaan.length > 0) ||
+            this.db.students.some(
+              (st) =>
+                (!gender || gender === 'Semua' || st.gender === gender) &&
+                matchTeacherName(st.pengampuQuran, t.nama),
+            ) ||
+            this.db.schedules.some(
+              (sc) =>
+                (!gender || gender === 'Semua' || sc.gender === gender) &&
+                isQuranScheduleItem(sc) &&
+                matchTeacherName(sc.guru, t.nama),
+            );
+          return (
+            Boolean(hasQuran) ||
+            jab.includes('qur') ||
+            jab.includes('guru') ||
+            jab.includes('musyrif') ||
+            jab.includes('wali')
+          );
+        }
+
+        // jenis === 'Belajar' (Akademik)
+        const hasAcademicSchedule =
+          Boolean(t.waliKelasOf) ||
+          this.db.schedules.some(
+            (sc) =>
+              (!gender || gender === 'Semua' || sc.gender === gender) &&
+              !isQuranScheduleItem(sc) &&
+              matchTeacherName(sc.guru, t.nama),
+          ) ||
+          this.db.students.some(
+            (st) =>
+              (!gender || gender === 'Semua' || st.gender === gender) &&
+              matchTeacherName(st.waliKelas, t.nama),
+          );
+        return (
+          Boolean(hasAcademicSchedule) ||
+          jab.includes('guru') ||
+          jab.includes('wali') ||
+          jab.includes('musyrif') ||
+          jab.includes('pengampu')
+        );
+      });
+
+      // Fallback: if strict role+gender filter yielded 0 teachers while we DO have teachers in DB,
+      // return all non-Super-Admin teachers matching gender (or all non-Super-Admin teachers) so dropdown is never empty
+      const resultList =
+        filtered.length > 0
+          ? filtered
+          : this.db.teachers.filter(
+              (t) =>
+                t.peran !== 'Admin Super' &&
+                (!gender || gender === 'Semua' || t.genderScope === 'Semua' || t.genderScope === gender),
+            );
+      const finalTeachers =
+        resultList.length > 0
+          ? resultList
+          : this.db.teachers.filter((t) => t.peran !== 'Admin Super');
+
+      return finalTeachers.map(mapTeacherPublic).sort((a, b) => a.nama.localeCompare(b.nama));
     });
   }
 
   public getKamarMusyrif(namaGuru: string, gender: Gender): string[] {
     const req = normalizeStr(namaGuru);
     if (!req) return [];
+
+    // 1. Rooms from teacher's kamarBinaan in Master_Pegawai
+    const matchedTeachers = this.db.teachers.filter((t) => matchTeacherName(t.nama, namaGuru));
+    const fromTeacherRecord: string[] = [];
+    for (const t of matchedTeachers) {
+      for (const km of t.kamarBinaan || []) {
+        const cleanKm = km.trim();
+        if (cleanKm && cleanKm !== '-') {
+          fromTeacherRecord.push(cleanKm);
+        }
+      }
+    }
+
+    // 2. Rooms from this.db.rooms assigned to this musyrif
     const fromRooms = this.db.rooms
       .filter(
         (r) =>
+          r.kamar &&
+          r.kamar !== '-' &&
           r.gender === gender &&
           r.musyrif &&
-          (normalizeStr(r.musyrif).includes(req) || req.includes(normalizeStr(r.musyrif)))
+          matchTeacherName(r.musyrif, namaGuru),
       )
-      .map((r) => r.kamar);
+      .map((r) => r.kamar.trim());
+
+    // 3. Rooms from this.db.students assigned to this musyrif
     const fromStudents = this.db.students
       .filter(
         (s) =>
           s.gender === gender &&
-          s.musyrif &&
           s.kamar &&
-          (normalizeStr(s.musyrif).includes(req) || req.includes(normalizeStr(s.musyrif)))
+          s.kamar !== '-' &&
+          s.musyrif &&
+          matchTeacherName(s.musyrif, namaGuru),
       )
-      .map((s) => s.kamar);
+      .map((s) => s.kamar.trim());
 
-    const unique = Array.from(new Set([...fromRooms, ...fromStudents]));
-    // If musyrif has no specific room bound yet, fall back to all rooms of that gender so they can still pick any room
-    if (unique.length === 0) {
-      return Array.from(new Set(this.db.rooms.filter((r) => r.gender === gender).map((r) => r.kamar))).sort((a, b) =>
-        a.localeCompare(b)
-      );
+    // Deduplicate by normalized room code while preserving display name from students/rooms
+    const roomMap = new Map<string, string>();
+    for (const km of [...fromRooms, ...fromStudents, ...fromTeacherRecord]) {
+      const code = normGroupCode(km);
+      if (code && !roomMap.has(code)) {
+        roomMap.set(code, km);
+      }
     }
-    return unique.sort((a, b) => a.localeCompare(b));
+
+    // If musyrif has no specific room bound yet, fall back to all rooms of that gender (from both rooms & students)
+    if (roomMap.size === 0) {
+      const allGenderRooms = [
+        ...this.db.rooms.filter((r) => r.gender === gender && r.kamar && r.kamar !== '-').map((r) => r.kamar.trim()),
+        ...this.db.students.filter((s) => s.gender === gender && s.kamar && s.kamar !== '-').map((s) => s.kamar.trim()),
+      ];
+      for (const km of allGenderRooms) {
+        const code = normGroupCode(km);
+        if (code && !roomMap.has(code)) {
+          roomMap.set(code, km);
+        }
+      }
+    }
+
+    return Array.from(roomMap.values()).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
   }
 
   public getJadwal(hari: string, namaGuru: string, gender: Gender) {
-    const reqHari = normalizeStr(hari);
+    const reqHari = normalizeDayName(hari);
     const reqGuru = normalizeStr(namaGuru);
     if (!reqGuru) return [];
     const seen = new Set<string>();
     const results: Array<{ kelas: string; mapel: string; jamKe: string }> = [];
     for (const item of this.db.schedules) {
       if (item.gender !== gender) continue;
-      if (normalizeStr(item.hari) !== reqHari) continue;
-      const rowGuru = normalizeStr(item.guru);
-      if (rowGuru.includes(reqGuru) || reqGuru.includes(rowGuru)) {
-        const key = `${item.kelas}|${item.mapel}`;
+      if (reqHari && normalizeDayName(item.hari) !== reqHari) continue;
+      if (matchTeacherName(item.guru, namaGuru)) {
+        const key = `${normGroupCode(item.kelas) || item.kelas}|${item.mapel.toUpperCase()}`;
         if (!seen.has(key)) {
           seen.add(key);
           results.push({ kelas: item.kelas, mapel: item.mapel, jamKe: item.jamKe });
         }
       }
     }
-    return results.sort((a, b) => a.kelas.localeCompare(b.kelas) || a.mapel.localeCompare(b.mapel));
+    return results.sort((a, b) => a.kelas.localeCompare(b.kelas, 'id', { numeric: true }) || a.mapel.localeCompare(b.mapel));
+  }
+
+  public getOpsiJadwalPresensi(
+    jenis: PresensiType,
+    hari: string,
+    namaGuru: string,
+    gender: Gender,
+  ): Array<{ kelas: string; mapel: string; jamKe: string }> {
+    const reqHari = normalizeDayName(hari);
+    if (!normalizeStr(namaGuru)) return [];
+
+    const seen = new Set<string>();
+    const results: Array<{ kelas: string; mapel: string; jamKe: string }> = [];
+    const addResult = (kelas: string, mapel: string, jamKe: string) => {
+      const cleanKelas = String(kelas || '').trim().toUpperCase();
+      const cleanMapel = String(mapel || '').trim().toUpperCase();
+      if (!cleanKelas || cleanKelas === '-' || !cleanMapel) return;
+      const key = `${normGroupCode(cleanKelas) || cleanKelas}|${cleanMapel}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        results.push({ kelas: cleanKelas, mapel: cleanMapel, jamKe: jamKe || '1-2' });
+      }
+    };
+
+    if (jenis === 'Al-Quran') {
+      // 1. From schedules (4_Jadwal_Mengajar) on reqHari first, then other days
+      const allQuranSchedulesForTeacher = this.db.schedules.filter(
+        (sc) => isQuranScheduleItem(sc) && matchTeacherName(sc.guru, namaGuru),
+      );
+      const genderMatchedQuranSchedules = allQuranSchedulesForTeacher.filter((sc) => sc.gender === gender);
+      const quranSchedules =
+        genderMatchedQuranSchedules.length > 0 ? genderMatchedQuranSchedules : allQuranSchedulesForTeacher;
+
+      for (const sc of quranSchedules.filter((s) => !reqHari || normalizeDayName(s.hari) === reqHari)) {
+        addResult(sc.kelas, sc.mapel || "HALAQAH AL-QUR'AN", sc.jamKe);
+      }
+
+      // 2. From students' kelompokQuran & pengampuQuran (Kode per Kelas Al-Qur'an)
+      const teacherGroupsFromStudents = new Map<string, string>();
+      let hasDirectStudentsWithoutGroup = false;
+      for (const st of this.db.students) {
+        if (st.gender !== gender) continue;
+        if (st.pengampuQuran && matchTeacherName(st.pengampuQuran, namaGuru)) {
+          const klp = (st.kelompokQuran || '').trim();
+          if (klp && klp !== '-') {
+            const code = normGroupCode(klp) || klp.toUpperCase();
+            if (!teacherGroupsFromStudents.has(code)) {
+              teacherGroupsFromStudents.set(code, klp.toUpperCase());
+            }
+          } else {
+            hasDirectStudentsWithoutGroup = true;
+          }
+        }
+      }
+
+      // 3. From teacher's kelompokQuranBinaan
+      for (const t of this.db.teachers) {
+        if (matchTeacherName(t.nama, namaGuru)) {
+          for (const klp of t.kelompokQuranBinaan || []) {
+            const clean = klp.trim();
+            if (clean && clean !== '-') {
+              const code = normGroupCode(clean) || clean.toUpperCase();
+              if (!teacherGroupsFromStudents.has(code)) {
+                teacherGroupsFromStudents.set(code, clean.toUpperCase());
+              }
+            }
+          }
+        }
+      }
+
+      // Also include any kode kelas Al-Qur'an from the teacher's Al-Qur'an schedules
+      for (const sc of quranSchedules) {
+        const clean = (sc.kelas || '').trim();
+        if (clean && clean !== '-') {
+          const code = normGroupCode(clean) || clean.toUpperCase();
+          if (!teacherGroupsFromStudents.has(code)) {
+            teacherGroupsFromStudents.set(code, clean.toUpperCase());
+          }
+        }
+      }
+
+      const distinctTeacherGroups = Array.from(teacherGroupsFromStudents.values());
+      if (distinctTeacherGroups.length > 1) {
+        addResult(
+          distinctTeacherGroups.join(','),
+          "HALAQAH AL-QUR'AN",
+          `Semua Kode Kelas Al-Qur'an (${distinctTeacherGroups.length})`,
+        );
+      }
+      for (const klp of distinctTeacherGroups) {
+        addResult(klp, "HALAQAH AL-QUR'AN", 'Kode Kelas Al-Qur’an');
+      }
+      if (hasDirectStudentsWithoutGroup) {
+        addResult(`HALAQAH ${namaGuru.trim().toUpperCase()}`, "HALAQAH AL-QUR'AN", 'Halaqah');
+      }
+
+      // 4. Schedules for this teacher on other days of the week
+      for (const sc of quranSchedules.filter((s) => reqHari && normalizeDayName(s.hari) !== reqHari)) {
+        addResult(sc.kelas, sc.mapel || "HALAQAH AL-QUR'AN", `${sc.hari} · ${sc.jamKe}`);
+      }
+
+      // 5. Fallback: if this teacher has no specific halaqah bound yet, provide all Kode Kelas Al-Qur'an in this gender
+      if (results.length === 0) {
+        for (const st of this.db.students) {
+          if (st.gender !== gender) continue;
+          const klp = (st.kelompokQuran || '').trim();
+          if (klp && klp !== '-') {
+            addResult(klp.toUpperCase(), "HALAQAH AL-QUR'AN", st.pengampuQuran ? `Pengampu: ${st.pengampuQuran}` : 'Kode Kelas Al-Qur’an');
+          } else if (st.pengampuQuran && st.pengampuQuran !== '-') {
+            addResult(`HALAQAH ${st.pengampuQuran.toUpperCase()}`, "HALAQAH AL-QUR'AN", 'Halaqah');
+          }
+        }
+        for (const sc of this.db.schedules.filter((s) => s.gender === gender && isQuranScheduleItem(s))) {
+          addResult(sc.kelas, sc.mapel || "HALAQAH AL-QUR'AN", `${sc.hari} · ${sc.jamKe}`);
+        }
+      }
+
+      return results;
+    }
+
+    // jenis === 'Belajar' (Akademik)
+    const teacherAcademicSchedules = this.db.schedules.filter(
+      (sc) => !isQuranScheduleItem(sc) && matchTeacherName(sc.guru, namaGuru),
+    );
+    const genderMatchedSchedules = teacherAcademicSchedules.filter((sc) => sc.gender === gender);
+    const activeTeacherSchedules =
+      genderMatchedSchedules.length > 0 ? genderMatchedSchedules : teacherAcademicSchedules;
+
+    // 1. Schedules on the selected day (hari)
+    for (const sc of activeTeacherSchedules) {
+      if (!reqHari || normalizeDayName(sc.hari) === reqHari) {
+        addResult(sc.kelas, sc.mapel, sc.jamKe);
+      }
+    }
+
+    // 2. Schedules for this teacher on other days of the week (so teacher can still fill attendance on any day)
+    for (const sc of activeTeacherSchedules) {
+      if (reqHari && normalizeDayName(sDay(sc.hari)) !== reqHari) {
+        addResult(sc.kelas, sc.mapel, `${sc.hari} · ${sc.jamKe}`);
+      }
+    }
+
+    // 3. Teacher's Wali Kelas class (from Master_Pegawai / 3A / 3B or students.waliKelas)
+    for (const t of this.db.teachers) {
+      if (matchTeacherName(t.nama, namaGuru) && t.waliKelasOf && t.waliKelasOf !== '-') {
+        for (const wk of t.waliKelasOf.split(/[;,]/).map((s) => s.trim()).filter(Boolean)) {
+          addResult(wk, 'KBM / KELAS BINAAN', 'Harian');
+        }
+      }
+    }
+    for (const st of this.db.students) {
+      if (st.gender === gender && st.kelas && st.kelas !== '-' && st.waliKelas && matchTeacherName(st.waliKelas, namaGuru)) {
+        addResult(st.kelas, 'KBM / KELAS BINAAN', 'Harian');
+      }
+    }
+
+    // 4. Fallback: if this teacher has no schedules in 4_Jadwal_Mengajar yet, show all classes in this Wilayah
+    if (results.length === 0) {
+      for (const sc of this.db.schedules.filter(
+        (s) => s.gender === gender && !isQuranScheduleItem(s) && (!reqHari || normalizeDayName(s.hari) === reqHari),
+      )) {
+        addResult(sc.kelas, sc.mapel, `${sc.jamKe} (${sc.guru})`);
+      }
+      const distinctClasses = Array.from(
+        new Set(
+          this.db.students
+            .filter((st) => st.gender === gender && st.kelas && st.kelas !== '-')
+            .map((st) => st.kelas.trim().toUpperCase()),
+        ),
+      ).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
+      for (const kls of distinctClasses) {
+        addResult(kls, 'KBM AKADEMIK', 'Harian');
+      }
+    }
+
+    function sDay(raw?: string): string {
+      return raw || '';
+    }
+
+    return results;
   }
 
   public getSiswaForm(params: {
@@ -2797,8 +3259,7 @@ class PintarStore {
     const targetArr = targetGrup
       .split(',')
       .map((t) => t.trim().toUpperCase())
-      .filter(Boolean);
-    const reqGuru = normalizeStr(guru);
+      .filter((t) => Boolean(t) && t !== '-');
 
     const asramaToday =
       jenisPresensi !== 'Asrama'
@@ -2807,17 +3268,59 @@ class PintarStore {
           )
         : [];
 
+    const doesStudentMatchTarget = (s: Student): boolean => {
+      if (targetArr.length === 0) return false;
+      if (jenisPresensi === 'Asrama') {
+        return targetArr.some((t) => matchGroupCode(s.kamar, t));
+      }
+      if (jenisPresensi === 'Al-Quran') {
+        const matchesKelompok = targetArr.some((t) => matchGroupCode(s.kelompokQuran, t));
+        const matchesHalaqahPengampu = targetArr.some((t) => {
+          const stripped = t.replace(/^HALAQAH\s+/i, '').trim();
+          return stripped && s.pengampuQuran && matchTeacherName(s.pengampuQuran, stripped);
+        });
+        const matchesKelas = targetArr.some((t) => matchGroupCode(s.kelas, t));
+        return matchesKelompok || matchesHalaqahPengampu || matchesKelas;
+      }
+      // jenisPresensi === 'Belajar' (Akademik)
+      return targetArr.some((t) => matchGroupCode(s.kelas, t));
+    };
+
+    let candidateStudents = this.db.students.filter(
+      (s) => s.gender === gender && doesStudentMatchTarget(s),
+    );
+    // Fallback if gender tag on student differed from selected Wilayah
+    if (candidateStudents.length === 0) {
+      candidateStudents = this.db.students.filter((s) => doesStudentMatchTarget(s));
+    }
+
+    // For Al-Quran: if targetGrup directly matches kode kelas Al-Qur'an (s.kelompokQuran),
+    // only scope down by pengampuQuran when multiple distinct pengampu share that exact same kelompokQuran code
+    if (jenisPresensi === 'Al-Quran' && candidateStudents.length > 0 && guru.trim()) {
+      const distinctPengampuInCandidates = new Set(
+        candidateStudents
+          .map((s) => (s.pengampuQuran || '').trim())
+          .filter((p) => p && p !== '-')
+          .map((p) => stripHonorificName(p) || normalizeStr(p)),
+      );
+      if (distinctPengampuInCandidates.size > 1) {
+        const scopedToPengampu = candidateStudents.filter(
+          (s) => s.pengampuQuran && matchTeacherName(s.pengampuQuran, guru),
+        );
+        if (scopedToPengampu.length > 0) {
+          candidateStudents = scopedToPengampu;
+        }
+      }
+    }
+
     const studentMap = new Map<string, StudentFormEntry>();
-    for (const s of this.db.students) {
-      if (s.gender !== gender) continue;
+    for (const s of candidateStudents) {
       const valSiswa =
         jenisPresensi === 'Asrama'
-          ? s.kamar.toUpperCase()
+          ? (s.kamar || '-').toUpperCase()
           : jenisPresensi === 'Al-Quran'
-          ? s.kelompokQuran.toUpperCase()
-          : s.kelas.toUpperCase();
-      const matched = targetArr.some((t) => valSiswa === t || valSiswa.includes(t) || t.includes(valSiswa));
-      if (!matched) continue;
+          ? (s.kelompokQuran && s.kelompokQuran !== '-' ? s.kelompokQuran : s.kelas || '-').toUpperCase()
+          : (s.kelas || '-').toUpperCase();
 
       let defaultStatus: AttendanceStatus = 'H';
       let defaultKet = '';
@@ -2841,6 +3344,13 @@ class PintarStore {
         setoran: '',
         kelasAsli: valSiswa,
         syncedFromAsrama,
+        kelas: s.kelas || '-',
+        kamar: s.kamar || '-',
+        kelompokQuran: s.kelompokQuran || '-',
+        pengampuQuran: s.pengampuQuran || '',
+        waliKelas: s.waliKelas || '',
+        musyrif: s.musyrif || '',
+        guruWali: s.guruWali || '',
       });
     }
 
@@ -2849,11 +3359,12 @@ class PintarStore {
 
     for (const log of this.db.attendanceLogs) {
       if (log.jenisPresensi !== jenisPresensi || log.gender !== gender || log.tanggal !== tanggal) continue;
-      const logGuru = normalizeStr(log.guru);
-      if (!logGuru.includes(reqGuru) && !reqGuru.includes(logGuru)) continue;
+      if (!matchTeacherName(log.guru, guru)) continue;
 
       const logGrp = log.kelas.toUpperCase();
-      const matchesGroup = targetArr.includes(logGrp) || logGrp === targetGrup.trim().toUpperCase();
+      const matchesGroup =
+        targetArr.some((t) => matchGroupCode(logGrp, t)) ||
+        matchGroupCode(logGrp, targetGrup);
       if (!matchesGroup) continue;
       if (jenisPresensi !== 'Al-Quran' && log.mapel.toUpperCase() !== mapel.trim().toUpperCase()) continue;
 
@@ -4672,13 +5183,12 @@ class PintarStore {
   // ==============================================================
   public getTeacherPersonalRecap(namaGuru: string, tanggal: string) {
     const req = normalizeStr(namaGuru);
-    const teacher = this.db.teachers.find((t) => normalizeStr(t.nama) === req || normalizeStr(t.username) === req);
+    const teacher =
+      this.db.teachers.find((t) => normalizeStr(t.nama) === req || normalizeStr(t.username) === req) ||
+      this.db.teachers.find((t) => matchTeacherName(t.nama, namaGuru));
     if (!teacher) return null;
 
-    const myLogs = this.db.attendanceLogs.filter((l) => {
-      const lg = normalizeStr(l.guru);
-      return lg.includes(req) || req.includes(lg);
-    });
+    const myLogs = this.db.attendanceLogs.filter((l) => matchTeacherName(l.guru, teacher.nama));
 
     const sessionMap = new Map<
       string,
@@ -4718,17 +5228,15 @@ class PintarStore {
 
     const sessions = Array.from(sessionMap.values()).sort((a, b) => b.tanggal.localeCompare(a.tanggal));
     const todayDay = NAMA_HARI[new Date(`${tanggal}T00:00:00`).getDay()];
-    const allMySchedules = this.db.schedules.filter(
-      (s) => normalizeStr(s.guru).includes(req) || req.includes(normalizeStr(s.guru))
-    );
+    const allMySchedules = this.db.schedules.filter((s) => matchTeacherName(s.guru, teacher.nama));
     const todaySchedules = allMySchedules
-      .filter((s) => s.hari === todayDay)
+      .filter((s) => normalizeDayName(s.hari) === todayDay)
       .map((s) => {
         const filled = sessions.some(
           (ses) =>
             ses.tanggal === tanggal &&
-            ses.kelas.toUpperCase() === s.kelas.toUpperCase() &&
-            (s.kategori === 'Al-Quran' || s.mapel.toUpperCase().includes('QUR')
+            matchGroupCode(ses.kelas, s.kelas) &&
+            (isQuranScheduleItem(s)
               ? ses.jenisPresensi === 'Al-Quran'
               : ses.mapel.toUpperCase() === s.mapel.toUpperCase())
         );
@@ -4755,7 +5263,7 @@ class PintarStore {
     >();
 
     for (const sc of allMySchedules) {
-      if (sc.kategori === 'Al-Quran' || sc.mapel.toUpperCase().includes('QUR')) continue;
+      if (isQuranScheduleItem(sc)) continue;
       const key = `${sc.kelas.toUpperCase()}|${sc.mapel.toUpperCase()}`;
       if (!pacingKeyMap.has(key)) {
         pacingKeyMap.set(key, {
@@ -4774,7 +5282,7 @@ class PintarStore {
       if (ses.jenisPresensi !== 'Belajar') continue;
       const key = `${ses.kelas.toUpperCase()}|${ses.mapel.toUpperCase()}`;
       if (!pacingKeyMap.has(key)) {
-        const inferredSt = this.db.students.find((st) => normalizeStr(st.kelas) === normalizeStr(ses.kelas));
+        const inferredSt = this.db.students.find((st) => matchGroupCode(st.kelas, ses.kelas));
         pacingKeyMap.set(key, {
           kelas: ses.kelas.toUpperCase(),
           mapel: ses.mapel.toUpperCase(),
@@ -4887,21 +5395,26 @@ class PintarStore {
       .sort((a, b) => b.A - a.A || a.kehadiranPct - b.kehadiranPct)
       .slice(0, 15);
 
-    const boundRoomNames = new Set<string>(teacher.kamarBinaan || []);
+    const boundRoomNames = new Set<string>((teacher.kamarBinaan || []).filter((k) => k && k !== '-'));
     const matchedRooms = this.db.rooms.filter(
       (r) =>
-        (r.musyrif && (normalizeStr(r.musyrif).includes(req) || req.includes(normalizeStr(r.musyrif)))) ||
-        Array.from(boundRoomNames).some((bk) => normalizeStr(bk) === normalizeStr(r.kamar))
+        (r.musyrif && matchTeacherName(r.musyrif, teacher.nama)) ||
+        Array.from(boundRoomNames).some((bk) => matchGroupCode(bk, r.kamar))
     );
     matchedRooms.forEach((r) => boundRoomNames.add(r.kamar));
+    for (const st of this.db.students) {
+      if (st.kamar && st.kamar !== '-' && st.musyrif && matchTeacherName(st.musyrif, teacher.nama)) {
+        boundRoomNames.add(st.kamar);
+      }
+    }
 
     const myRooms = Array.from(boundRoomNames).map((kamarName) => {
-      const rmObj = this.db.rooms.find((r) => normalizeStr(r.kamar) === normalizeStr(kamarName));
+      const rmObj = this.db.rooms.find((r) => matchGroupCode(r.kamar, kamarName));
       const filled = this.db.attendanceLogs.some(
         (l) =>
           l.tanggal === tanggal &&
           l.jenisPresensi === 'Asrama' &&
-          normalizeStr(l.kelas) === normalizeStr(kamarName)
+          matchGroupCode(l.kelas, kamarName)
       );
       return {
         kamar: kamarName,
@@ -4912,11 +5425,11 @@ class PintarStore {
     });
 
     const myExams = this.db.examLogs.filter(
-      (e) => normalizeStr(e.pengawas1).includes(req) || normalizeStr(e.pengawas2).includes(req)
+      (e) => matchTeacherName(e.pengawas1, teacher.nama) || matchTeacherName(e.pengawas2, teacher.nama)
     );
     const examSessionsCount = new Set(myExams.map((e) => `${e.tanggal}|${e.ruangan}|${e.mapel}`)).size;
 
-    const myAbsences = this.db.teacherAbsences.filter((a) => normalizeStr(a.namaGuru).includes(req));
+    const myAbsences = this.db.teacherAbsences.filter((a) => matchTeacherName(a.namaGuru, teacher.nama));
 
     const calcStudentIbadahStats = (records: PembinaanRecord[]) => {
       if (records.length === 0) return { wajibPct: 0, sunnahPct: 0 };
@@ -4979,7 +5492,10 @@ class PintarStore {
     };
 
     // --- 2. WALI KELAS PROGRESS (PER KELAS) ---
-    const waliKelasTarget = teacher.waliKelasOf?.trim() || '';
+    const waliKelasTargets = (teacher.waliKelasOf || '')
+      .split(/[;,]/)
+      .map((s) => s.trim())
+      .filter((s) => s && s !== '-');
     const availableClasses = Array.from(
       new Set(
         this.db.students
@@ -4989,12 +5505,16 @@ class PintarStore {
       ),
     ).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
 
-    // Include students from waliKelasTarget AND students where student.waliKelas === teacher.nama
+    // Include students from waliKelasTargets AND students where student.waliKelas matches teacher.nama
     const waliStudents = this.db.students.filter(
       (s) =>
-        (waliKelasTarget && normalizeStr(s.kelas) === normalizeStr(waliKelasTarget)) ||
-        (s.waliKelas && normalizeStr(s.waliKelas) === req),
+        waliKelasTargets.some((wk) => matchGroupCode(s.kelas, wk)) ||
+        (s.waliKelas && matchTeacherName(s.waliKelas, teacher.nama)),
     );
+    const resolvedWaliClasses = Array.from(
+      new Set([...waliKelasTargets, ...waliStudents.map((s) => s.kelas)].filter((k) => k && k !== '-')),
+    );
+    const waliKelasTarget = resolvedWaliClasses.join(', ');
 
     // Also build a per-class directory so Wali Kelas can switch or inspect per class
     const allClassStudentsForWali = this.db.students.filter(
@@ -5041,8 +5561,9 @@ class PintarStore {
 
     const waliPembinaanAll = this.db.pembinaanRecords.filter(
       (p) =>
-        (waliKelasTarget && normalizeStr(p.kelas) === normalizeStr(waliKelasTarget)) ||
-        normalizeStr(p.pembinaNama).includes(req)
+        resolvedWaliClasses.some((wk) => matchGroupCode(p.kelas, wk)) ||
+        ((p.jalurPembinaan === 'Wali Kelas' || p.pembinaPeran === 'Wali Kelas') &&
+          matchTeacherName(p.pembinaNama, teacher.nama))
     );
     const waliIbadahAvg = calcStudentIbadahStats(waliPembinaanAll);
 
@@ -5067,20 +5588,20 @@ class PintarStore {
     };
 
     // --- 3. WALI ASRAMA (MUSYRIF / MUSYRIFAH) PROGRESS (PER KAMAR / SEMUA KAMAR) ---
-    const musyrifRoomSet = new Set(myRooms.map((r) => normalizeStr(r.kamar)));
+    const musyrifRoomList = myRooms.map((r) => r.kamar);
     const musyrifStudents = this.db.students.filter(
       (s) =>
-        musyrifRoomSet.has(normalizeStr(s.kamar)) ||
-        (s.musyrif && (normalizeStr(s.musyrif).includes(req) || req.includes(normalizeStr(s.musyrif))))
+        musyrifRoomList.some((rk) => matchGroupCode(s.kamar, rk)) ||
+        (s.musyrif && matchTeacherName(s.musyrif, teacher.nama))
     );
     const musyrifPembinaanAll = this.db.pembinaanRecords.filter(
       (p) =>
-        musyrifRoomSet.has(normalizeStr(p.kamar)) ||
+        musyrifRoomList.some((rk) => matchGroupCode(p.kamar, rk)) ||
         ((p.pembinaPeran === 'Musyrif' ||
           p.pembinaPeran === 'Musyrifah' ||
           p.pembinaPeran === 'Wali Asrama' ||
           p.jalurPembinaan === 'Room Visit Asrama') &&
-          normalizeStr(p.pembinaNama).includes(req))
+          matchTeacherName(p.pembinaNama, teacher.nama))
     );
     const musyrifIbadahAvg = calcStudentIbadahStats(musyrifPembinaanAll);
     const asramaTodayLogs = this.db.attendanceLogs.filter(
@@ -5134,8 +5655,8 @@ class PintarStore {
     ).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
 
     const roomSummaries = musyrifKamarList.map((kamarName) => {
-      const rmStudents = musyrifSantriProgress.filter((s) => normalizeStr(s.kamar) === normalizeStr(kamarName));
-      const rmObj = myRooms.find((r) => normalizeStr(r.kamar) === normalizeStr(kamarName));
+      const rmStudents = musyrifSantriProgress.filter((s) => matchGroupCode(s.kamar, kamarName));
+      const rmObj = myRooms.find((r) => matchGroupCode(r.kamar, kamarName));
       return {
         kamar: kamarName,
         filledToday: Boolean(rmObj?.filled),
@@ -5182,13 +5703,13 @@ class PintarStore {
         .filter(
           (p) =>
             (p.jalurPembinaan === 'Guru Wali' || p.pembinaPeran === 'Guru Wali') &&
-            normalizeStr(p.pembinaNama).includes(req),
+            matchTeacherName(p.pembinaNama, teacher.nama),
         )
         .map((p) => normalizeStr(p.namaSantri)),
     );
     const guruWaliStudents = this.db.students.filter(
       (s) =>
-        (s.guruWali && (normalizeStr(s.guruWali) === req || normalizeStr(s.guruWali).includes(req))) ||
+        (s.guruWali && matchTeacherName(s.guruWali, teacher.nama)) ||
         guruWaliRecordNames.has(normalizeStr(s.nama)),
     );
 
@@ -5197,7 +5718,7 @@ class PintarStore {
       (p) =>
         guruWaliStudentSet.has(normalizeStr(p.namaSantri)) ||
         ((p.jalurPembinaan === 'Guru Wali' || p.pembinaPeran === 'Guru Wali') &&
-          normalizeStr(p.pembinaNama).includes(req)),
+          matchTeacherName(p.pembinaNama, teacher.nama)),
     );
     const guruWaliIbadahAvg = calcStudentIbadahStats(guruWaliPembinaanAll);
 
@@ -5566,14 +6087,36 @@ class PintarStore {
   }
 
   public getQuranHalaqahRecap(params: { guru?: string; kelompok?: string; gender?: WilayahFilter }) {
-    const reqGuru = params.guru ? normalizeStr(params.guru) : '';
-    const reqKelompok = params.kelompok && params.kelompok !== 'SEMUA' ? normalizeStr(params.kelompok) : '';
+    const reqGuruRaw = (params.guru || '').trim();
+    const reqKelompokRaw = params.kelompok && params.kelompok !== 'SEMUA' ? params.kelompok.trim() : '';
     const matchW = (g: Gender) => !params.gender || params.gender === 'Semua' || g === params.gender;
+
+    // Collect kode kelas Al-Qur'an bound to this teacher via schedules or teacher record
+    const teacherBoundKelompok = new Set<string>();
+    if (reqGuruRaw) {
+      for (const t of this.db.teachers) {
+        if (matchTeacherName(t.nama, reqGuruRaw)) {
+          for (const klp of t.kelompokQuranBinaan || []) {
+            if (klp && klp !== '-') teacherBoundKelompok.add(klp);
+          }
+        }
+      }
+      for (const sc of this.db.schedules) {
+        if (isQuranScheduleItem(sc) && matchTeacherName(sc.guru, reqGuruRaw) && sc.kelas && sc.kelas !== '-') {
+          teacherBoundKelompok.add(sc.kelas);
+        }
+      }
+    }
+    const boundKelompokList = Array.from(teacherBoundKelompok);
 
     const studentsScope = this.db.students.filter((s) => {
       if (!matchW(s.gender)) return false;
-      if (reqKelompok && normalizeStr(s.kelompokQuran) !== reqKelompok) return false;
-      if (reqGuru && s.pengampuQuran && !normalizeStr(s.pengampuQuran).includes(reqGuru)) return false;
+      if (reqKelompokRaw && !matchGroupCode(s.kelompokQuran, reqKelompokRaw)) return false;
+      if (reqGuruRaw) {
+        const matchByPengampu = Boolean(s.pengampuQuran && matchTeacherName(s.pengampuQuran, reqGuruRaw));
+        const matchByKelompok = boundKelompokList.some((klp) => matchGroupCode(s.kelompokQuran, klp));
+        if (!matchByPengampu && !matchByKelompok) return false;
+      }
       return true;
     });
 
@@ -5594,7 +6137,7 @@ class PintarStore {
         gender: st.gender,
         kelas: st.kelas,
         kelompokQuran: st.kelompokQuran || '-',
-        pengampuQuran: st.pengampuQuran || '-',
+        pengampuQuran: st.pengampuQuran || reqGuruRaw || '-',
         persenHadir: stat.persenHadir,
         totalHadir: stat.H + stat.T,
         totalAbsen: stat.S + stat.I + stat.A,

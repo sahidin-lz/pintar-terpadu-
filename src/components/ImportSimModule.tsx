@@ -777,8 +777,27 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
           teachers: { added: number; updated: number };
           schedules: { added: number; updated?: number };
           ruanganUjianAdded: number;
+          snapshot?: {
+            students?: Student[];
+            schedules?: ScheduleItem[];
+            [key: string]: unknown;
+          };
         }>(res);
         setExcelWorkbook(parsed);
+
+        if (data.snapshot) {
+          try {
+            localStorage.setItem('pintar_db_template_only_v2', JSON.stringify(data.snapshot));
+          } catch {
+            // ignore storage errors
+          }
+          if (Array.isArray(data.snapshot.students)) {
+            setAdminStudents(data.snapshot.students);
+          }
+          if (Array.isArray(data.snapshot.schedules)) {
+            setAdminSchedules(data.snapshot.schedules);
+          }
+        }
 
         if (auth.currentUser) {
           fetch('/api/firebase/snapshot')
@@ -880,7 +899,26 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
         teachers: { added: number; updated: number };
         schedules: { added: number; updated?: number };
         ruanganUjianAdded: number;
+        snapshot?: {
+          students?: Student[];
+          schedules?: ScheduleItem[];
+          [key: string]: unknown;
+        };
       }>(res);
+
+      if (data.snapshot) {
+        try {
+          localStorage.setItem('pintar_db_template_only_v2', JSON.stringify(data.snapshot));
+        } catch {
+          // ignore storage errors
+        }
+        if (Array.isArray(data.snapshot.students)) {
+          setAdminStudents(data.snapshot.students);
+        }
+        if (Array.isArray(data.snapshot.schedules)) {
+          setAdminSchedules(data.snapshot.schedules);
+        }
+      }
 
       // If signed into Firebase Google Auth, automatically sync uploaded data to Firestore (sim-pintar)
       if (auth.currentUser) {
