@@ -1324,16 +1324,16 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     return (
       <div className="mx-auto max-w-xl py-4">
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="bg-gradient-to-r from-[#0B1324] via-[#102A43] to-teal-800 px-6 py-6 text-white">
+          <div className="bg-gradient-to-r from-teal-600 via-emerald-600 to-sky-600 px-6 py-6 text-white">
             <div className="flex items-center gap-3.5">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal-500/25 border border-teal-300/30 text-teal-200">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/20 border border-white/30 text-white">
                 <Lock className="h-5 w-5" />
               </div>
               <div>
                 <h2 className="font-display text-lg font-bold tracking-tight">
                   Panel Admin Super &amp; Database Excel SIM
                 </h2>
-                <p className="text-xs text-slate-200 mt-0.5">
+                <p className="text-xs text-teal-50 mt-0.5">
                   Khusus Admin Super untuk mengunduh 1 template Excel Database terpadu dan mengupload seluruh data sekolah sekaligus.
                 </p>
               </div>
@@ -1453,16 +1453,16 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   return (
     <div className="space-y-6">
       {/* Super Admin Hero Banner */}
-      <div className="rounded-xl bg-gradient-to-r from-[#0B1324] via-[#102A43] to-teal-800 px-5 py-4 text-white flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="rounded-xl bg-gradient-to-r from-teal-600 via-emerald-600 to-sky-600 px-5 py-4 text-white shadow-sm flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-500/25 border border-teal-300/30 text-teal-200 shrink-0">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20 border border-white/30 text-white shrink-0 shadow-2xs">
             <ShieldCheck className="h-5 w-5" />
           </div>
           <div>
             <div className="text-sm font-bold tracking-tight">
-              Admin Super Aktif · <span className="font-mono-num text-teal-300">{currentUser?.username}</span>
+              Admin Super Aktif · <span className="font-mono-num text-amber-200">{currentUser?.username}</span>
             </div>
-            <p className="text-xs text-slate-200 mt-0.5">
+            <p className="text-xs text-teal-50 mt-0.5">
               Satu template Excel Database (`.xlsx`) terpadu untuk mengupload seluruh data sekolah dalam satu kali proses.
             </p>
           </div>
@@ -1477,7 +1477,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
               });
               notify(`Kartu Akses Login PDF (${staffDirectory.length} pegawai) berhasil diunduh.`, 'success');
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-400 px-3.5 py-2 text-xs font-bold text-slate-950 hover:bg-amber-300 whitespace-nowrap shrink-0 shadow-xs"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-300 px-3.5 py-2 text-xs font-bold text-slate-950 hover:bg-amber-200 whitespace-nowrap shrink-0 shadow-xs"
           >
             <KeyRound className="h-3.5 w-3.5" />
             Unduh Kartu Akses Login (PDF)
@@ -1488,7 +1488,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
               downloadPegawaiTokenTablePdf(staffDirectory, 'Semua Wilayah');
               notify('Daftar Token & PIN Pegawai (PDF Tabel) berhasil diunduh.', 'success');
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-teal-300/40 bg-teal-500/20 px-3 py-2 text-xs font-semibold text-teal-100 hover:bg-teal-500/30 whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/30 bg-white/15 px-3 py-2 text-xs font-semibold text-white hover:bg-white/25 whitespace-nowrap shrink-0"
           >
             <FileText className="h-3.5 w-3.5" />
             Daftar Token Pegawai (PDF)
@@ -1496,7 +1496,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
           <button
             type="button"
             onClick={loadWorkbookSpec}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white hover:bg-white/20 whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/30 bg-white/15 px-3 py-2 text-xs font-semibold text-white hover:bg-white/25 whitespace-nowrap shrink-0"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loadingSpec ? 'animate-spin' : ''}`} />
             Segarkan Data Template

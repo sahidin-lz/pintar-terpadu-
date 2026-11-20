@@ -309,7 +309,7 @@ export const LoginPortal: React.FC<LoginPortalProps> = ({
             onClick={() => onBackToPublic('presensi')}
             className="inline-flex items-center gap-2.5 text-left whitespace-nowrap shrink-0 group"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#0B1324] text-teal-300">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-teal-600 to-sky-600 text-white shadow-2xs">
               <Users className="h-4 w-4" />
             </span>
             <span className="font-display text-base font-bold tracking-tight text-slate-900 group-hover:text-teal-700 transition-colors">
@@ -356,82 +356,82 @@ export const LoginPortal: React.FC<LoginPortalProps> = ({
       <main className="flex-1 flex items-center py-8 px-4 sm:px-6 lg:px-8">
         <div className="mx-auto w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
           {/* Left Access Guide & Live Overview Panel */}
-          <div className="lg:col-span-5 rounded-xl bg-[#0B1324] p-6 sm:p-8 text-white flex flex-col justify-between">
+          <div className="lg:col-span-5 rounded-xl bg-gradient-to-br from-teal-600 via-emerald-600 to-sky-600 p-6 sm:p-8 text-white shadow-sm flex flex-col justify-between">
             <div className="space-y-6">
               <div>
-                <div className="text-xs font-semibold text-teal-300 tracking-tight">
+                <div className="text-xs font-semibold text-amber-200 tracking-tight">
                   Boarding School Wilayah Putra &amp; Putri
                 </div>
                 <h1 className="mt-1.5 font-display text-2xl font-bold text-white leading-snug">
                   Portal Login Guru &amp; Admin Super
                 </h1>
-                <p className="mt-2 text-xs text-slate-300 leading-relaxed">
+                <p className="mt-2 text-xs text-teal-50 leading-relaxed">
                   Kelola rekapan mengajar pribadi, progres pembinaan wali kelas &amp; musyrif, serta administrasi database terpadu.
                 </p>
               </div>
 
               {/* Clear separation between Public vs Authenticated */}
-              <div className="space-y-3 border-t border-white/10 pt-5 text-xs">
-                <div className="rounded-lg bg-white/5 border border-white/10 p-3.5 space-y-1">
-                  <div className="font-semibold text-emerald-300">
+              <div className="space-y-3 border-t border-white/20 pt-5 text-xs">
+                <div className="rounded-lg bg-white/15 border border-white/20 p-3.5 space-y-1">
+                  <div className="font-semibold text-amber-200">
                     01. Halaman Tanpa Login (Terbuka)
                   </div>
-                  <p className="text-slate-300 leading-relaxed">
+                  <p className="text-teal-50 leading-relaxed">
                     Input Presensi, Input Pembinaan Harian, Ujian, Piket/Inval, Jadwal, serta <b>Monitoring Live &amp; Laporan Progres (PDF/CSV)</b> dapat dibuka langsung tanpa login.
                   </p>
                 </div>
-                <div className="rounded-lg bg-white/5 border border-white/10 p-3.5 space-y-1">
-                  <div className="font-semibold text-sky-300">
+                <div className="rounded-lg bg-white/15 border border-white/20 p-3.5 space-y-1">
+                  <div className="font-semibold text-sky-100">
                     02. Login Guru, Wali Kelas &amp; Musyrif/ah
                   </div>
-                  <p className="text-slate-300 leading-relaxed">
+                  <p className="text-teal-50 leading-relaxed">
                     Membuka rekapan sesi pribadi, progres kelas binaan, progres kamar asrama, Portofolio Santri 1 Tahun, dan Database Pembinaan.
                   </p>
                 </div>
-                <div className="rounded-lg bg-white/5 border border-white/10 p-3.5 space-y-1">
-                  <div className="font-semibold text-amber-300">
+                <div className="rounded-lg bg-white/15 border border-white/20 p-3.5 space-y-1">
+                  <div className="font-semibold text-amber-200">
                     03. Login Admin Super
                   </div>
-                  <p className="text-slate-300 leading-relaxed">
+                  <p className="text-teal-50 leading-relaxed">
                     Mengelola 1 file Template Excel Database (`.xlsx`), upload master santri Putra/Putri &amp; akun pembina sekaligus, ruang ujian, dan reset data.
                   </p>
                 </div>
               </div>
 
               {isDatabaseEmpty && (
-                <div className="rounded-lg border border-amber-300/30 bg-amber-500/15 p-3.5 text-xs text-amber-100 space-y-1">
+                <div className="rounded-lg border border-amber-300/40 bg-amber-400/20 p-3.5 text-xs text-amber-50 space-y-1">
                   <div className="font-semibold text-amber-200">Database Santri Masih Kosong (0 Santri)</div>
-                  <p className="text-amber-100/90 leading-relaxed">
+                  <p className="text-amber-50 leading-relaxed">
                     Silakan masuk di tab <b>Admin Super</b> untuk mengunduh template Excel dan mengunggah data santri Putra &amp; Putri.
                   </p>
                 </div>
               )}
             </div>
 
-            <div className="mt-6 pt-5 border-t border-white/10 space-y-3">
+            <div className="mt-6 pt-5 border-t border-white/20 space-y-3">
               <div className="grid grid-cols-3 gap-2.5">
-                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                  <div className="text-[11px] text-slate-400">Santri</div>
+                <div className="rounded-lg border border-white/20 bg-white/15 p-3">
+                  <div className="text-[11px] text-teal-100">Santri</div>
                   <div className="mt-0.5 font-mono-num text-lg font-bold text-white">
                     {counts?.students ?? 0}
                   </div>
-                  <div className="font-mono-num text-[10px] text-teal-300">
+                  <div className="font-mono-num text-[10px] text-amber-200">
                     Pa:{counts?.byWilayah?.Putra.students ?? 0} · Pi:{counts?.byWilayah?.Putri.students ?? 0}
                   </div>
                 </div>
-                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                  <div className="text-[11px] text-slate-400">Akun</div>
+                <div className="rounded-lg border border-white/20 bg-white/15 p-3">
+                  <div className="text-[11px] text-teal-100">Akun</div>
                   <div className="mt-0.5 font-mono-num text-lg font-bold text-white">
                     {counts?.teachers ?? 0}
                   </div>
-                  <div className="font-mono-num text-[10px] text-slate-400">Terdaftar</div>
+                  <div className="font-mono-num text-[10px] text-teal-100">Terdaftar</div>
                 </div>
-                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                  <div className="text-[11px] text-slate-400">Jadwal</div>
+                <div className="rounded-lg border border-white/20 bg-white/15 p-3">
+                  <div className="text-[11px] text-teal-100">Jadwal</div>
                   <div className="mt-0.5 font-mono-num text-lg font-bold text-white">
                     {counts?.schedules ?? 0}
                   </div>
-                  <div className="font-mono-num text-[10px] text-slate-400">Aktif</div>
+                  <div className="font-mono-num text-[10px] text-teal-100">Aktif</div>
                 </div>
               </div>
 
@@ -439,25 +439,25 @@ export const LoginPortal: React.FC<LoginPortalProps> = ({
                 <button
                   type="button"
                   onClick={() => onBackToPublic('presensi')}
-                  className="inline-flex items-center justify-center gap-1 rounded-lg bg-white/10 px-2.5 py-2 text-[11px] font-semibold text-white hover:bg-white/20 transition-colors"
+                  className="inline-flex items-center justify-center gap-1 rounded-lg bg-white/20 px-2.5 py-2 text-[11px] font-semibold text-white hover:bg-white/30 transition-colors"
                 >
-                  <BookCheck className="h-3.5 w-3.5 text-emerald-300" />
+                  <BookCheck className="h-3.5 w-3.5 text-amber-200" />
                   Presensi
                 </button>
                 <button
                   type="button"
                   onClick={() => onBackToPublic('walikelas')}
-                  className="inline-flex items-center justify-center gap-1 rounded-lg bg-white/10 px-2.5 py-2 text-[11px] font-semibold text-white hover:bg-white/20 transition-colors"
+                  className="inline-flex items-center justify-center gap-1 rounded-lg bg-white/20 px-2.5 py-2 text-[11px] font-semibold text-white hover:bg-white/30 transition-colors"
                 >
-                  <ShieldCheck className="h-3.5 w-3.5 text-violet-300" />
+                  <ShieldCheck className="h-3.5 w-3.5 text-amber-200" />
                   Pembinaan
                 </button>
                 <button
                   type="button"
                   onClick={() => onBackToPublic('monitoring')}
-                  className="inline-flex items-center justify-center gap-1 rounded-lg bg-white/10 px-2.5 py-2 text-[11px] font-semibold text-white hover:bg-white/20 transition-colors"
+                  className="inline-flex items-center justify-center gap-1 rounded-lg bg-white/20 px-2.5 py-2 text-[11px] font-semibold text-white hover:bg-white/30 transition-colors"
                 >
-                  <BarChart3 className="h-3.5 w-3.5 text-sky-300" />
+                  <BarChart3 className="h-3.5 w-3.5 text-amber-200" />
                   Monitoring
                 </button>
               </div>

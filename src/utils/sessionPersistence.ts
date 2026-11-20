@@ -187,24 +187,33 @@ export function saveSnapshotToLocalMirror(snap: Record<string, unknown> | null |
 
 let hydrationInFlight: Promise<boolean> | null = null;
 let hasHydratedInSession = false;
+let lastHydrationTimestamp = 0;
 
-export function ensureServerHydratedFromMirror(): Promise<boolean> {
+export function getLocalMirrorSnapshot(): Record<string, unknown> | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const mirrorRaw =
+      localStorage.getItem(DB_MIRROR_KEY) || localStorage.getItem(LEGACY_BUNDLED_MIRROR_KEY);
+    if (!mirrorRaw) return null;
+    const parsed = JSON.parse(mirrorRaw) as Record<string, unknown>;
+    return scoreSnapshotObject(parsed) > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function ensureServerHydratedFromMirror(forceIfServerEmpty = false): Promise<boolean> {
   if (typeof window === 'undefined') return Promise.resolve(false);
-  if (hasHydratedInSession) return Promise.resolve(false);
+  const now = Date.now();
+  if (hasHydratedInSession && (!forceIfServerEmpty || now - lastHydrationTimestamp < 4000)) {
+    return Promise.resolve(false);
+  }
   if (hydrationInFlight) return hydrationInFlight;
 
   hydrationInFlight = (async () => {
     try {
-      const mirrorRaw =
-        localStorage.getItem(DB_MIRROR_KEY) || localStorage.getItem(LEGACY_BUNDLED_MIRROR_KEY);
-      if (!mirrorRaw) {
-        hasHydratedInSession = true;
-        return false;
-      }
-
-      const mirrorSnap = JSON.parse(mirrorRaw) as Record<string, unknown>;
-      const mirrorScore = scoreSnapshotObject(mirrorSnap);
-      if (mirrorScore <= 0) {
+      const mirrorSnap = getLocalMirrorSnapshot();
+      if (!mirrorSnap) {
         hasHydratedInSession = true;
         return false;
       }
@@ -217,16 +226,14 @@ export function ensureServerHydratedFromMirror(): Promise<boolean> {
       }
 
       hasHydratedInSession = true;
+      lastHydrationTimestamp = Date.now();
       const restoreRes = await fetch('/api/system/restore-snapshot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ snapshot: mirrorSnap, mode: 'merge' }),
       });
 
-      if (restoreRes.ok) {
-        return true;
-      }
-      return false;
+      return restoreRes.ok;
     } catch {
       return false;
     } finally {

@@ -3389,9 +3389,9 @@ export const LabkomRuangModule: React.FC<Props> = ({
           </div>
 
           {/* Summary Header */}
-          <div className="bg-slate-900 rounded-xl p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div className="bg-gradient-to-r from-sky-600 via-teal-600 to-emerald-600 rounded-xl p-6 text-white shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
-              <div className="text-xs font-semibold text-teal-300">
+              <div className="text-xs font-semibold text-amber-200">
                 {filterSemester === 'ALL'
                   ? 'Semua Semester'
                   : filterSemester === 'GANJIL'
@@ -3408,13 +3408,13 @@ export const LabkomRuangModule: React.FC<Props> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-4 w-full md:w-auto justify-start md:justify-end">
-              <div className="bg-white/10 px-4 py-2.5 rounded-lg text-center min-w-[96px]">
+              <div className="bg-white/15 border border-white/25 px-4 py-2.5 rounded-lg text-center min-w-[96px]">
                 <div className="text-2xl font-bold font-mono-num">{rekapData.guruAktif.length}</div>
-                <div className="text-[10px] uppercase text-slate-300">Guru Aktif</div>
+                <div className="text-[10px] uppercase text-teal-50">Guru Aktif</div>
               </div>
-              <div className="bg-white/10 px-4 py-2.5 rounded-lg text-center min-w-[96px]">
+              <div className="bg-white/15 border border-white/25 px-4 py-2.5 rounded-lg text-center min-w-[96px]">
                 <div className="text-2xl font-bold font-mono-num">{rekapData.totalPemakaian}</div>
-                <div className="text-[10px] uppercase text-slate-300">
+                <div className="text-[10px] uppercase text-teal-50">
                   Total {isLab ? 'JP' : 'Sesi'}
                 </div>
               </div>

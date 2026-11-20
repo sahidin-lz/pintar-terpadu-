@@ -302,7 +302,7 @@ export default function App() {
       const serverSnapScore = scoreSnapshotObject(snap);
       if (serverSnapScore <= 0) return;
 
-      // Never overwrite a richer local mirror with a smaller/empty snapshot
+      // Never overwrite a richer local mirror with a smaller/empty snapshot from a cold serverless instance
       try {
         const existingRaw =
           localStorage.getItem(DB_MIRROR_KEY) || localStorage.getItem(LEGACY_BUNDLED_MIRROR_KEY);
@@ -310,7 +310,16 @@ export default function App() {
           const existingSnap = JSON.parse(existingRaw) as Record<string, unknown>;
           const existingStudents = Array.isArray(existingSnap.students) ? existingSnap.students.length : 0;
           const serverStudents = Array.isArray(snap.students) ? snap.students.length : 0;
-          if (existingStudents > 0 && serverStudents === 0) {
+          const existingSchedules = Array.isArray(existingSnap.schedules) ? existingSnap.schedules.length : 0;
+          const serverSchedules = Array.isArray(snap.schedules) ? snap.schedules.length : 0;
+          const existingTeachers = Array.isArray(existingSnap.teachers) ? existingSnap.teachers.length : 0;
+          const serverTeachers = Array.isArray(snap.teachers) ? snap.teachers.length : 0;
+
+          if (
+            (existingStudents > 0 && serverStudents === 0) ||
+            (existingSchedules > 0 && serverSchedules === 0) ||
+            (existingTeachers > 1 && serverTeachers <= 1)
+          ) {
             return;
           }
         }
@@ -343,7 +352,7 @@ export default function App() {
       // Whenever a Vercel/GitHub deployment or dev server restarts empty (or with fewer records than the user's uploaded template mirror),
       // automatically restore the user's uploaded template data to the server.
       const serverScore = scoreCounts(data.counts);
-      if (!options?.skipRestoreCheck && (!restoredOnceRef.current || serverScore === 0)) {
+      if (!options?.skipRestoreCheck && (!restoredOnceRef.current || serverScore === 0 || (data.counts.schedules || 0) === 0)) {
         restoredOnceRef.current = true;
         try {
           const mirrorRaw =
@@ -352,12 +361,13 @@ export default function App() {
             const mirrorSnap = JSON.parse(mirrorRaw) as Record<string, unknown>;
             const mirrorScore = scoreSnapshotObject(mirrorSnap);
             const mirrorHasLogs =
+              (Array.isArray(mirrorSnap.schedules) && mirrorSnap.schedules.length > (data.counts.schedules || 0)) ||
               (Array.isArray(mirrorSnap.attendanceLogs) && mirrorSnap.attendanceLogs.length > (data.counts.attendanceLogs || 0)) ||
               (Array.isArray(mirrorSnap.pembinaanRecords) && mirrorSnap.pembinaanRecords.length > (data.counts.pembinaanRecords || 0)) ||
               (Array.isArray(mirrorSnap.examLogs) && mirrorSnap.examLogs.length > (data.counts.examLogs || 0));
 
             if (mirrorScore > serverScore || mirrorHasLogs) {
-              const restored = await ensureServerHydratedFromMirror();
+              const restored = await ensureServerHydratedFromMirror(true);
               if (restored) {
                 const refreshed = await fetch('/api/bootstrap');
                 if (refreshed.ok) {
@@ -632,32 +642,32 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex">
+    <div className="min-h-screen bg-[#f4f7fb] text-slate-900 flex">
       {/* Click-to-open Menu Backdrop */}
       {menuOpen && (
         <div
-          className="fixed inset-0 z-30 bg-slate-900/25 backdrop-blur-[1px]"
+          className="fixed inset-0 z-30 bg-slate-900/20 backdrop-blur-[1px]"
           onClick={() => setMenuOpen(false)}
         />
       )}
 
       {/* SIM PINTAR Professional Slide-Out Menu Drawer */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-80 bg-white border-r border-slate-200 shadow-2xl text-slate-800 flex flex-col transition-transform duration-200 ease-out ${
+        className={`fixed inset-y-0 left-0 z-40 w-80 bg-white border-r border-slate-200/90 shadow-xl text-slate-800 flex flex-col transition-transform duration-200 ease-out ${
           menuOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         aria-hidden={!menuOpen}
       >
-        <div className="flex h-16 items-center justify-between px-4 border-b border-slate-800 bg-gradient-to-r from-slate-900 via-teal-950 to-slate-900 text-white">
+        <div className="flex h-16 items-center justify-between px-4 border-b border-teal-500/30 bg-gradient-to-r from-teal-600 via-emerald-600 to-sky-600 text-white">
           <div className="flex items-center gap-3 min-w-0">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-teal-500 text-white shadow-sm shrink-0">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/20 border border-white/30 text-white shadow-2xs shrink-0">
               <Users className="h-4 w-4" />
             </span>
             <div className="min-w-0">
               <div className="font-display text-base font-bold tracking-tight text-white truncate">
                 SIM PINTAR
               </div>
-              <div className="text-[11px] font-medium text-teal-200 truncate">
+              <div className="text-[11px] font-medium text-teal-50 truncate">
                 Wilayah Putra &amp; Putri Terpisah
               </div>
             </div>
@@ -665,14 +675,14 @@ export default function App() {
           <button
             type="button"
             onClick={() => setMenuOpen(false)}
-            className="rounded-lg border border-white/15 bg-white/10 p-1.5 text-slate-200 hover:bg-white/20 hover:text-white transition-colors"
+            className="rounded-lg border border-white/25 bg-white/15 p-1.5 text-white hover:bg-white/25 transition-colors"
             aria-label="Tutup menu SIM PINTAR"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200/80 bg-slate-50 text-xs">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-teal-100 bg-gradient-to-r from-teal-50/70 via-white to-sky-50/70 text-xs">
           <span className="font-display font-semibold tracking-tight text-slate-700">
             Kelompok Menu
           </span>
@@ -775,19 +785,19 @@ export default function App() {
           })}
         </nav>
 
-        <div className="border-t border-slate-200 p-3.5 bg-slate-900 text-slate-200 space-y-1">
-          <div className="font-display text-xs font-semibold tracking-tight text-white">
+        <div className="border-t border-teal-200/80 p-3.5 bg-gradient-to-br from-teal-50/90 via-emerald-50/50 to-sky-50/90 text-slate-800 space-y-1">
+          <div className="font-display text-xs font-bold tracking-tight text-teal-950">
             Ringkasan Database Aktif
           </div>
-          <div className="font-mono-num text-xs text-teal-300 font-semibold">
+          <div className="font-mono-num text-xs text-teal-700 font-bold">
             {bootstrap?.counts?.students ?? 0} Santri · {bootstrap?.counts?.teachers ?? 0} Pembina
           </div>
-          <div className="font-mono-num text-[11px] text-slate-300">
-            Putra: {bootstrap?.counts?.byWilayah?.Putra.students ?? 0} · Putri:{' '}
-            {bootstrap?.counts?.byWilayah?.Putri.students ?? 0} · Labkom:{' '}
-            {bootstrap?.counts?.labkomBookings ?? 0}
+          <div className="font-mono-num text-[11px] text-slate-700">
+            Putra: <span className="font-semibold text-sky-700">{bootstrap?.counts?.byWilayah?.Putra.students ?? 0}</span> · Putri:{' '}
+            <span className="font-semibold text-rose-700">{bootstrap?.counts?.byWilayah?.Putri.students ?? 0}</span> · Labkom:{' '}
+            <span className="font-semibold text-indigo-700">{bootstrap?.counts?.labkomBookings ?? 0}</span>
           </div>
-          <div className="text-[11px] font-medium text-slate-400">
+          <div className="text-[11px] font-medium text-slate-500">
             {getAcademicSemester().labelLengkap}
           </div>
         </div>
@@ -797,7 +807,7 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top Bar Clear: Hanya tombol Menu di kiri & Login Guru / Admin Super di kanan */}
         <header
-          className={`sticky top-0 z-20 flex h-14 sm:h-16 items-center justify-between gap-2 sm:gap-4 border-b border-slate-200/90 bg-white/95 backdrop-blur-sm px-3 sm:px-6 lg:px-8 ${MODULE_META[activeModule].headerAccent}`}
+          className={`sticky top-0 z-20 flex h-14 sm:h-16 items-center justify-between gap-2 sm:gap-4 border-b border-slate-200/80 bg-white/95 backdrop-blur-md shadow-2xs px-3 sm:px-6 lg:px-8 ${MODULE_META[activeModule].headerAccent}`}
         >
           <div className="flex items-center gap-3 min-w-0">
             <button

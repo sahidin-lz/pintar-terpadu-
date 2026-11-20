@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart3,
   Download,
@@ -60,6 +60,7 @@ import {
 import { getAcademicSemester } from '../utils/semesterHelpers';
 import {
   ensureServerHydratedFromMirror,
+  getLocalMirrorSnapshot,
   loadSubTab,
   saveSubTab,
 } from '../utils/sessionPersistence';
@@ -187,20 +188,64 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
     return options.akademik.kelas;
   }, [options, statsWilayah]);
 
+  const lastValidMonDateRef = useRef<string>('');
+  const lastValidMonDataRef = useRef<MonitoringData | null>(null);
+
+  const countScheduleCells = (d: MonitoringData | null | undefined): number => {
+    if (!d?.putra || !d?.putri) return 0;
+    return (
+      (d.putra.akademik?.kelas10?.length || 0) +
+      (d.putra.akademik?.kelas11?.length || 0) +
+      (d.putra.akademik?.kelas12?.length || 0) +
+      (d.putra.alquran?.kelas10?.length || 0) +
+      (d.putra.alquran?.kelas11?.length || 0) +
+      (d.putra.alquran?.kelas12?.length || 0) +
+      (d.putri.akademik?.kelas10?.length || 0) +
+      (d.putri.akademik?.kelas11?.length || 0) +
+      (d.putri.akademik?.kelas12?.length || 0) +
+      (d.putri.alquran?.kelas10?.length || 0) +
+      (d.putri.alquran?.kelas11?.length || 0) +
+      (d.putri.alquran?.kelas12?.length || 0)
+    );
+  };
+
+  const localMirrorHasSchedules = (): boolean => {
+    const snap = getLocalMirrorSnapshot();
+    return Boolean(snap && Array.isArray(snap.schedules) && snap.schedules.length > 0);
+  };
+
   const fetchMonitoring = async (tgl: string, silent = false) => {
-    if (!monData && !silent) setLoadingMon(true);
+    if (!lastValidMonDataRef.current && !silent) setLoadingMon(true);
     try {
       let res = await fetch(`/api/monitoring?tanggal=${encodeURIComponent(tgl)}`);
-      let data = await res.json();
-      if (
-        (!data?.putra?.asrama || data.putra.asrama.length === 0) &&
-        (!data?.putri?.asrama || data.putri.asrama.length === 0)
-      ) {
-        const restored = await ensureServerHydratedFromMirror();
+      let data = (await res.json()) as MonitoringData;
+
+      const scheduleCount = countScheduleCells(data);
+      const roomCount = (data?.putra?.asrama?.length || 0) + (data?.putri?.asrama?.length || 0);
+
+      // Detect unhydrated Vercel serverless container (0 rooms OR 0 schedules when local mirror has schedules)
+      if (roomCount === 0 || (scheduleCount === 0 && localMirrorHasSchedules())) {
+        const restored = await ensureServerHydratedFromMirror(true);
         if (restored) {
           res = await fetch(`/api/monitoring?tanggal=${encodeURIComponent(tgl)}`);
-          data = await res.json();
+          data = (await res.json()) as MonitoringData;
         }
+      }
+
+      const finalScheduleCount = countScheduleCells(data);
+      // Anti-Flicker Guard: Never overwrite an already populated schedule matrix for the same date with an empty 0/0 cold-start response
+      if (
+        finalScheduleCount === 0 &&
+        lastValidMonDateRef.current === tgl &&
+        lastValidMonDataRef.current &&
+        countScheduleCells(lastValidMonDataRef.current) > 0
+      ) {
+        return;
+      }
+
+      if (finalScheduleCount > 0) {
+        lastValidMonDateRef.current = tgl;
+        lastValidMonDataRef.current = data;
       }
       setMonData(data);
     } catch {
@@ -225,8 +270,8 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
       const totalKbmAn =
         (dataAn?.monitoringRingkasan?.Putra?.totalJadwalKbm || 0) +
         (dataAn?.monitoringRingkasan?.Putri?.totalJadwalKbm || 0);
-      if (totalSantriAn === 0 && totalKbmAn === 0) {
-        const restored = await ensureServerHydratedFromMirror();
+      if (totalSantriAn === 0 && totalKbmAn === 0 && localMirrorHasSchedules()) {
+        const restored = await ensureServerHydratedFromMirror(true);
         if (restored) {
           [resAn, resSt] = await Promise.all([
             fetch(`/api/analisis?tanggal=${encodeURIComponent(tgl)}`),
@@ -258,13 +303,23 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
       if (
         (data?.meta?.totalSantri || 0) === 0 &&
         (data?.presensiSummary?.totalSesi || 0) === 0 &&
-        (!data?.classComparison || data.classComparison.length === 0)
+        (!data?.classComparison || data.classComparison.length === 0) &&
+        localMirrorHasSchedules()
       ) {
-        const restored = await ensureServerHydratedFromMirror();
+        const restored = await ensureServerHydratedFromMirror(true);
         if (restored) {
           res = await fetch(`/api/laporan/ringkasan-bulanan?${qs.toString()}`);
           data = await res.json();
         }
+      }
+      // Anti-Flicker Guard: Do not overwrite a non-empty monthlyReport with an empty cold-container response
+      if (
+        (!data?.classComparison || data.classComparison.length === 0) &&
+        monthlyReport &&
+        monthlyReport.classComparison &&
+        monthlyReport.classComparison.length > 0
+      ) {
+        return;
       }
       setMonthlyReport(data);
     } catch {
@@ -274,41 +329,39 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
     }
   };
 
+  // Fetch Monitoring when date changes (needed for Matriks Live and liveDivisionMetrics)
   useEffect(() => {
     fetchMonitoring(tglMonitoring, Boolean(monData));
   }, [tglMonitoring]);
 
+  // Lazy Tab-Scoped Fetching: only fetch Analisis & Monthly Summary when viewing the 'statistik' tab
+  // so opening Matriks Live does not fire 4 concurrent requests that spawn cold serverless containers
   useEffect(() => {
+    if (subTab !== 'statistik') return;
     fetchAnalisis(tglAnalisis, statsWilayah, Boolean(analisis));
-  }, [tglAnalisis, statsWilayah]);
+  }, [subTab, tglAnalisis, statsWilayah]);
 
   useEffect(() => {
+    if (subTab !== 'statistik') return;
     fetchMonthlySummary(statsBulan, statsWilayah, statsKelas, Boolean(monthlyReport));
-  }, [statsBulan, statsWilayah, statsKelas]);
+  }, [subTab, statsBulan, statsWilayah, statsKelas]);
 
   useEffect(() => {
-    let lastVisibilitySync = Date.now();
     const onSync = () => {
-      // Silent in-place realtime update without flashing loading skeletons
+      // Silent in-place realtime update without flashing loading skeletons, scoped to active tab
       fetchMonitoring(tglMonitoring, true);
-      fetchAnalisis(tglAnalisis, statsWilayah, true);
-      fetchMonthlySummary(statsBulan, statsWilayah, statsKelas, true);
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible' && Date.now() - lastVisibilitySync > 30000) {
-        lastVisibilitySync = Date.now();
-        fetchMonitoring(tglMonitoring, true);
+      if (subTab === 'statistik') {
+        fetchAnalisis(tglAnalisis, statsWilayah, true);
+        fetchMonthlySummary(statsBulan, statsWilayah, statsKelas, true);
       }
     };
     window.addEventListener('pintar:data-restored', onSync);
     window.addEventListener('pintar:data-mutated', onSync);
-    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       window.removeEventListener('pintar:data-restored', onSync);
       window.removeEventListener('pintar:data-mutated', onSync);
-      document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [tglMonitoring, tglAnalisis, statsWilayah, statsBulan, statsKelas]);
+  }, [subTab, tglMonitoring, tglAnalisis, statsWilayah, statsBulan, statsKelas]);
 
   // Reset statsKelas if not in statsScopedClasses
   useEffect(() => {
@@ -979,52 +1032,68 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
 
   const CLASS_COLOR_THEMES = [
     {
-      headerBg: 'bg-indigo-600 text-white',
-      cardBorder: 'border-indigo-200',
-      jamBadge: 'bg-indigo-100 text-indigo-800 border-indigo-200',
-      barColor: 'bg-indigo-500',
-    },
-    {
-      headerBg: 'bg-teal-600 text-white',
-      cardBorder: 'border-teal-200',
-      jamBadge: 'bg-teal-100 text-teal-800 border-teal-200',
-      barColor: 'bg-teal-500',
-    },
-    {
-      headerBg: 'bg-violet-600 text-white',
-      cardBorder: 'border-violet-200',
-      jamBadge: 'bg-violet-100 text-violet-800 border-violet-200',
-      barColor: 'bg-violet-500',
-    },
-    {
-      headerBg: 'bg-sky-600 text-white',
-      cardBorder: 'border-sky-200',
-      jamBadge: 'bg-sky-100 text-sky-800 border-sky-200',
+      headerBg: 'bg-gradient-to-r from-sky-100 via-sky-50 to-white text-sky-950 border-b border-sky-200/80',
+      subText: 'text-sky-700',
+      pctPill: 'bg-sky-600 text-white shadow-2xs',
+      cardBorder: 'border-sky-200/90',
+      jamBadge: 'bg-sky-50 text-sky-800 border-sky-200',
       barColor: 'bg-sky-500',
     },
     {
-      headerBg: 'bg-amber-600 text-white',
-      cardBorder: 'border-amber-200',
-      jamBadge: 'bg-amber-100 text-amber-900 border-amber-200',
+      headerBg: 'bg-gradient-to-r from-teal-100 via-teal-50 to-white text-teal-950 border-b border-teal-200/80',
+      subText: 'text-teal-700',
+      pctPill: 'bg-teal-600 text-white shadow-2xs',
+      cardBorder: 'border-teal-200/90',
+      jamBadge: 'bg-teal-50 text-teal-800 border-teal-200',
+      barColor: 'bg-teal-500',
+    },
+    {
+      headerBg: 'bg-gradient-to-r from-indigo-100 via-indigo-50 to-white text-indigo-950 border-b border-indigo-200/80',
+      subText: 'text-indigo-700',
+      pctPill: 'bg-indigo-600 text-white shadow-2xs',
+      cardBorder: 'border-indigo-200/90',
+      jamBadge: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+      barColor: 'bg-indigo-500',
+    },
+    {
+      headerBg: 'bg-gradient-to-r from-violet-100 via-violet-50 to-white text-violet-950 border-b border-violet-200/80',
+      subText: 'text-violet-700',
+      pctPill: 'bg-violet-600 text-white shadow-2xs',
+      cardBorder: 'border-violet-200/90',
+      jamBadge: 'bg-violet-50 text-violet-800 border-violet-200',
+      barColor: 'bg-violet-500',
+    },
+    {
+      headerBg: 'bg-gradient-to-r from-amber-100/90 via-amber-50 to-white text-amber-950 border-b border-amber-200/80',
+      subText: 'text-amber-800',
+      pctPill: 'bg-amber-600 text-white shadow-2xs',
+      cardBorder: 'border-amber-200/90',
+      jamBadge: 'bg-amber-50 text-amber-900 border-amber-200',
       barColor: 'bg-amber-500',
     },
     {
-      headerBg: 'bg-rose-600 text-white',
-      cardBorder: 'border-rose-200',
-      jamBadge: 'bg-rose-100 text-rose-800 border-rose-200',
-      barColor: 'bg-rose-500',
-    },
-    {
-      headerBg: 'bg-cyan-600 text-white',
-      cardBorder: 'border-cyan-200',
-      jamBadge: 'bg-cyan-100 text-cyan-900 border-cyan-200',
+      headerBg: 'bg-gradient-to-r from-cyan-100 via-cyan-50 to-white text-cyan-950 border-b border-cyan-200/80',
+      subText: 'text-cyan-700',
+      pctPill: 'bg-cyan-600 text-white shadow-2xs',
+      cardBorder: 'border-cyan-200/90',
+      jamBadge: 'bg-cyan-50 text-cyan-900 border-cyan-200',
       barColor: 'bg-cyan-500',
     },
     {
-      headerBg: 'bg-fuchsia-600 text-white',
-      cardBorder: 'border-fuchsia-200',
-      jamBadge: 'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200',
-      barColor: 'bg-fuchsia-500',
+      headerBg: 'bg-gradient-to-r from-rose-100/90 via-rose-50 to-white text-rose-950 border-b border-rose-200/80',
+      subText: 'text-rose-700',
+      pctPill: 'bg-rose-600 text-white shadow-2xs',
+      cardBorder: 'border-rose-200/90',
+      jamBadge: 'bg-rose-50 text-rose-800 border-rose-200',
+      barColor: 'bg-rose-500',
+    },
+    {
+      headerBg: 'bg-gradient-to-r from-emerald-100 via-emerald-50 to-white text-emerald-950 border-b border-emerald-200/80',
+      subText: 'text-emerald-700',
+      pctPill: 'bg-emerald-600 text-white shadow-2xs',
+      cardBorder: 'border-emerald-200/90',
+      jamBadge: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+      barColor: 'bg-emerald-500',
     },
   ] as const;
 
@@ -1068,11 +1137,11 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
     );
 
     return (
-      <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-        <div className="border-b border-slate-200 bg-slate-50 px-5 py-3 flex flex-wrap items-center justify-between gap-2">
+      <div className="rounded-xl border border-slate-200/90 bg-white overflow-hidden shadow-2xs">
+        <div className="border-b border-slate-200/80 bg-gradient-to-r from-slate-50 via-white to-teal-50/40 px-5 py-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800">{title}</h4>
-            <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
+            <span className="rounded-md border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
               {sortedClassEntries.length} Kelas
             </span>
           </div>
@@ -1081,7 +1150,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
               className={`rounded-md px-2.5 py-0.5 font-bold ${
                 hadirCount === totalCount && totalCount > 0
                   ? 'bg-emerald-600 text-white'
-                  : 'bg-emerald-100 text-emerald-800'
+                  : 'border border-emerald-200 bg-emerald-50 text-emerald-800'
               }`}
             >
               {hadirCount === totalCount && totalCount > 0
@@ -1091,7 +1160,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* GRID PER KELAS KE BAWAH DENGAN WARNA-WARNI */}
+        {/* GRID PER KELAS KE BAWAH DENGAN WARNA-WARNI CERAH & NYAMAN DILIHAT */}
         <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {sortedClassEntries.map(([kls, cells], cIdx) => {
             const klsHadir = cells.filter((c) => c.status === 'HADIR').length;
@@ -1102,29 +1171,35 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
             return (
               <div
                 key={kls}
-                className={`flex flex-col rounded-xl border-2 bg-white shadow-2xs overflow-hidden transition-all ${
-                  isAllOke ? 'border-emerald-400 ring-2 ring-emerald-100' : theme.cardBorder
+                className={`flex flex-col rounded-xl border bg-white shadow-2xs overflow-hidden ${
+                  isAllOke ? 'border-emerald-300 ring-2 ring-emerald-100/80' : theme.cardBorder
                 }`}
               >
-                {/* Colorful Class Header */}
+                {/* Bright Pastel Class Header */}
                 <div
                   className={`px-3.5 py-2.5 flex items-center justify-between ${
-                    isAllOke ? 'bg-emerald-600 text-white' : theme.headerBg
+                    isAllOke
+                      ? 'bg-gradient-to-r from-emerald-100 via-emerald-50 to-white text-emerald-950 border-b border-emerald-200'
+                      : theme.headerBg
                   }`}
                 >
                   <div>
                     <div className="text-sm font-extrabold tracking-tight">{kls}</div>
-                    <div className="text-[10px] font-mono-num opacity-90">
+                    <div
+                      className={`text-[10px] font-mono-num font-semibold ${
+                        isAllOke ? 'text-emerald-700' : theme.subText
+                      }`}
+                    >
                       {klsHadir} dari {cells.length} Sesi Terisi
                     </div>
                   </div>
                   {isAllOke ? (
-                    <span className="inline-flex items-center gap-1 rounded-md bg-white px-2.5 py-1 font-mono-num text-[11px] font-extrabold text-emerald-700 shadow-2xs">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                    <span className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1 font-mono-num text-[11px] font-extrabold text-white shadow-2xs">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-white" />
                       OKE
                     </span>
                   ) : (
-                    <span className="rounded-md bg-black/20 px-2 py-0.5 font-mono-num text-[11px] font-bold text-white">
+                    <span className={`rounded-md px-2 py-0.5 font-mono-num text-[11px] font-bold ${theme.pctPill}`}>
                       {klsHadir}/{cells.length} ({klsPct}%)
                     </span>
                   )}
@@ -1134,33 +1209,33 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                 <div className="h-1.5 w-full bg-slate-100">
                   <div
                     style={{ width: `${Math.max(klsPct, klsHadir > 0 ? 10 : 0)}%` }}
-                    className={`h-full transition-all ${isAllOke ? 'bg-emerald-500' : theme.barColor}`}
+                    className={`h-full ${isAllOke ? 'bg-emerald-500' : theme.barColor}`}
                   />
                 </div>
 
                 {/* Daftar Jam / Mapel Mengalir Ke Bawah di Dalam Grid Kelas */}
-                <div className="flex-1 p-3 space-y-2.5 bg-slate-50/40">
+                <div className="flex-1 p-3 space-y-2.5 bg-slate-50/35">
                   {cells.map((c, idx) => {
                     const isOke = c.status === 'HADIR';
                     const isAbsen = c.status === 'GURU_ABSEN';
                     return (
                       <div
                         key={idx}
-                        className={`rounded-lg border p-2.5 text-xs transition-all ${
+                        className={`rounded-lg border p-2.5 text-xs ${
                           isOke
-                            ? 'border-emerald-400 bg-emerald-50 text-emerald-950 shadow-2xs'
+                            ? 'border-emerald-300 bg-gradient-to-br from-emerald-50/90 to-white text-emerald-950 shadow-2xs'
                             : isAbsen
-                            ? 'border-amber-300 bg-amber-50 text-amber-950'
-                            : 'border-slate-200 bg-white text-slate-800 hover:border-slate-300'
+                            ? 'border-amber-200 bg-amber-50/70 text-amber-950'
+                            : 'border-slate-200/90 bg-white text-slate-800 hover:border-slate-300'
                         }`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <span
                             className={`inline-block rounded border px-1.5 py-0.5 font-mono-num text-[10px] font-bold whitespace-nowrap ${
                               isOke
-                                ? 'border-emerald-300 bg-emerald-100 text-emerald-900'
+                                ? 'border-emerald-200 bg-emerald-100/80 text-emerald-900'
                                 : isAbsen
-                                ? 'border-amber-300 bg-amber-100 text-amber-900'
+                                ? 'border-amber-200 bg-amber-100 text-amber-900'
                                 : theme.jamBadge
                             }`}
                           >
@@ -1178,8 +1253,8 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                               ABSEN
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 font-mono-num text-[10px] font-bold text-rose-700 shrink-0">
-                              <AlertTriangle className="h-3 w-3 text-rose-600" />
+                            <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50/80 px-2 py-0.5 font-mono-num text-[10px] font-bold text-amber-800 shrink-0">
+                              <AlertTriangle className="h-3 w-3 text-amber-600" />
                               BELUM
                             </span>
                           )}
@@ -1278,7 +1353,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                     key={g}
                     type="button"
                     onClick={() => setMonGender(g)}
-                    className={`text-left rounded-xl border p-4 transition-all ${
+                    className={`text-left rounded-xl border p-4 ${
                       active
                         ? g === 'putri'
                           ? 'border-rose-300 bg-rose-50/50 ring-2 ring-rose-200/60'
@@ -1436,7 +1511,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                     key={st.id}
                     type="button"
                     onClick={() => setMonStatusFilter(st.id)}
-                    className={`rounded-md px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors ${
+                    className={`rounded-md px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap ${
                       monStatusFilter === st.id
                         ? 'bg-white text-slate-900 shadow-2xs'
                         : 'text-slate-600 hover:text-slate-900'
@@ -1479,35 +1554,35 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                   return (
                     <div
                       key={rm.kamar}
-                      className={`rounded-xl border-2 overflow-hidden transition-all shadow-2xs ${
+                      className={`rounded-xl border overflow-hidden shadow-xs ${
                         isOke
-                          ? 'border-emerald-400 bg-emerald-50/50 ring-2 ring-emerald-100'
+                          ? 'border-emerald-300 bg-gradient-to-b from-emerald-50/80 to-white ring-1 ring-emerald-200/70'
                           : isAbsen
-                          ? 'border-amber-300 bg-amber-50/40'
+                          ? 'border-amber-200 bg-gradient-to-b from-amber-50/70 to-white'
                           : `${theme.cardBorder} bg-white`
                       }`}
                     >
                       <div
                         className={`px-3.5 py-2 flex items-center justify-between ${
                           isOke
-                            ? 'bg-emerald-600 text-white'
+                            ? 'bg-gradient-to-r from-emerald-100 via-teal-50 to-white text-emerald-950 border-b border-emerald-200'
                             : isAbsen
-                            ? 'bg-amber-500 text-white'
+                            ? 'bg-gradient-to-r from-amber-100 via-amber-50 to-white text-amber-950 border-b border-amber-200'
                             : theme.headerBg
                         }`}
                       >
                         <span className="text-xs font-extrabold">{rm.kamar}</span>
                         {isOke ? (
-                          <span className="inline-flex items-center gap-1 rounded bg-white px-2 py-0.5 font-mono-num text-[10px] font-extrabold text-emerald-700">
-                            <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                          <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500 px-2 py-0.5 font-mono-num text-[10px] font-extrabold text-white shadow-2xs">
+                            <CheckCircle2 className="h-3 w-3 text-white" />
                             OKE
                           </span>
                         ) : isAbsen ? (
-                          <span className="rounded bg-black/20 px-2 py-0.5 font-mono-num text-[10px] font-bold text-white">
+                          <span className="rounded-md bg-amber-100 border border-amber-200 px-2 py-0.5 font-mono-num text-[10px] font-bold text-amber-800">
                             ABSEN
                           </span>
                         ) : (
-                          <span className="rounded bg-black/20 px-2 py-0.5 font-mono-num text-[10px] font-bold text-white">
+                          <span className="rounded-md bg-amber-50 border border-amber-200 px-2 py-0.5 font-mono-num text-[10px] font-bold text-amber-800">
                             BELUM
                           </span>
                         )}
@@ -1516,7 +1591,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                         <div className="text-xs font-semibold text-slate-800">{rm.musyrif}</div>
                         <div className="mt-2.5 flex items-center justify-between text-xs font-semibold">
                           {isOke ? (
-                            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-extrabold text-white shadow-2xs">
+                            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500 px-2.5 py-1 text-[11px] font-extrabold text-white shadow-2xs">
                               <CheckCircle2 className="h-3.5 w-3.5" />
                               OKE · Sudah Diisi
                             </span>
@@ -1526,8 +1601,8 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                               Musyrif Absen
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-bold text-rose-700">
-                              <AlertTriangle className="h-3.5 w-3.5" />
+                            <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50/90 px-2.5 py-1 text-[11px] font-bold text-amber-800">
+                              <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
                               Belum Diisi
                             </span>
                           )}
@@ -1578,7 +1653,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                   type="button"
                   disabled={!monthlyReport || loadingMonthly}
                   onClick={() => handleDownloadMonthlyWaliPdf()}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50 whitespace-nowrap shrink-0"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-50 whitespace-nowrap shrink-0 shadow-xs"
                 >
                   <FileText className="h-3.5 w-3.5" />
                   Unduh PDF Ringkasan Bulanan
@@ -1587,7 +1662,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                   type="button"
                   disabled={!analisis || loadingAnalisis}
                   onClick={handleDownloadAnalyticsPdf}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap shrink-0"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 whitespace-nowrap shrink-0 shadow-xs"
                 >
                   <Download className="h-3.5 w-3.5" />
                   Unduh PDF Dasbor Analisis
@@ -1598,7 +1673,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                   onClick={handleDownloadMonthlyCsv}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
                 >
-                  <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-700" />
+                  <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
                   Unduh CSV
                 </button>
                 <button
@@ -1627,10 +1702,10 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                       className={`flex-1 rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
                         statsWilayah === w
                           ? w === 'Putri'
-                            ? 'bg-rose-600 text-white shadow-sm'
+                            ? 'bg-rose-500 text-white shadow-sm'
                             : w === 'Putra'
                             ? 'bg-sky-600 text-white shadow-sm'
-                            : 'bg-slate-900 text-white shadow-sm'
+                            : 'bg-teal-600 text-white shadow-sm'
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
@@ -1702,10 +1777,10 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {/* Card 1: Kehadiran Kumulatif */}
-              <div className="rounded-xl border border-slate-200 border-t-4 border-t-emerald-500 bg-white p-4 shadow-2xs">
+              <div className="rounded-xl border border-emerald-200/80 border-t-4 border-t-emerald-500 bg-gradient-to-b from-emerald-50/60 via-white to-white p-4 shadow-xs">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-600">Tingkat Kehadiran</span>
-                  <span className="rounded-md bg-emerald-50 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-emerald-800">
+                  <span className="text-xs font-bold text-emerald-950">Tingkat Kehadiran</span>
+                  <span className="rounded-md bg-emerald-100/80 border border-emerald-200 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-emerald-800">
                     {monthlyReport.presensiSummary.totalSesi} sesi log
                   </span>
                 </div>
@@ -1717,30 +1792,30 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                     H+T: {monthlyReport.presensiSummary.H + monthlyReport.presensiSummary.T}
                   </div>
                 </div>
-                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-emerald-100/70">
                   <div
                     style={{ width: `${monthlyReport.presensiSummary.persenHadir}%` }}
                     className="h-full bg-emerald-500 transition-all"
                   />
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-1.5 text-center font-mono-num text-[11px]">
-                  <div className="rounded-md bg-amber-50 py-1 text-amber-800">
+                  <div className="rounded-md bg-amber-50 border border-amber-200/60 py-1 text-amber-800">
                     S: <strong>{monthlyReport.presensiSummary.S}</strong>
                   </div>
-                  <div className="rounded-md bg-sky-50 py-1 text-sky-800">
+                  <div className="rounded-md bg-sky-50 border border-sky-200/60 py-1 text-sky-800">
                     I: <strong>{monthlyReport.presensiSummary.I}</strong>
                   </div>
-                  <div className="rounded-md bg-rose-50 py-1 text-rose-800">
+                  <div className="rounded-md bg-rose-50 border border-rose-200/60 py-1 text-rose-800">
                     A: <strong>{monthlyReport.presensiSummary.A}</strong>
                   </div>
                 </div>
               </div>
 
               {/* Card 2: Cakupan Pembinaan Wali Kelas */}
-              <div className="rounded-xl border border-slate-200 border-t-4 border-t-teal-600 bg-white p-4 shadow-2xs">
+              <div className="rounded-xl border border-teal-200/80 border-t-4 border-t-teal-500 bg-gradient-to-b from-teal-50/60 via-white to-white p-4 shadow-xs">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-600">Cakupan Pembinaan</span>
-                  <span className="rounded-md bg-teal-50 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-teal-800">
+                  <span className="text-xs font-bold text-teal-950">Cakupan Pembinaan</span>
+                  <span className="rounded-md bg-teal-100/80 border border-teal-200 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-teal-800">
                     {monthlyReport.pembinaanSummary.totalCatatan} catatan
                   </span>
                 </div>
@@ -1757,7 +1832,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                     {monthlyReport.pembinaanSummary.santriDibina}/{monthlyReport.meta.totalSantri} santri
                   </div>
                 </div>
-                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-teal-100/70">
                   <div
                     style={{
                       width: `${
@@ -1768,7 +1843,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                             )
                       }%`,
                     }}
-                    className="h-full bg-teal-600 transition-all"
+                    className="h-full bg-teal-500 transition-all"
                   />
                 </div>
                 <div className="mt-3 flex items-center justify-between text-[11px] text-slate-600">
@@ -1780,10 +1855,10 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
               </div>
 
               {/* Card 3: Ketaatan Sholat Wajib & Ibadah Sunnah */}
-              <div className="rounded-xl border border-slate-200 border-t-4 border-t-sky-500 bg-white p-4 shadow-2xs">
+              <div className="rounded-xl border border-sky-200/80 border-t-4 border-t-sky-500 bg-gradient-to-b from-sky-50/60 via-white to-white p-4 shadow-xs">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-600">Indeks Ibadah Santri</span>
-                  <span className="rounded-md bg-sky-50 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-sky-800">
+                  <span className="text-xs font-bold text-sky-950">Indeks Ibadah Santri</span>
+                  <span className="rounded-md bg-sky-100/80 border border-sky-200 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-sky-800">
                     5 Waktu &amp; Sunnah
                   </span>
                 </div>
@@ -1795,30 +1870,30 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
                     Sunnah: {monthlyReport.pembinaanSummary.persenIbadahSunnah}%
                   </div>
                 </div>
-                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-sky-100/70">
                   <div
                     style={{ width: `${monthlyReport.pembinaanSummary.persenSholatWajib}%` }}
                     className="h-full bg-sky-500 transition-all"
                   />
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-1.5 text-center font-mono-num text-[10px]">
-                  <div className="rounded-md bg-emerald-50 py-1 text-emerald-800">
+                  <div className="rounded-md bg-emerald-50 border border-emerald-200/60 py-1 text-emerald-800">
                     Mandiri: <strong>{monthlyReport.pembinaanSummary.prioritasCounts.Mandiri}</strong>
                   </div>
-                  <div className="rounded-md bg-sky-50 py-1 text-sky-800">
+                  <div className="rounded-md bg-sky-50 border border-sky-200/60 py-1 text-sky-800">
                     Rutin: <strong>{monthlyReport.pembinaanSummary.prioritasCounts.Rutin}</strong>
                   </div>
-                  <div className="rounded-md bg-rose-50 py-1 text-rose-800">
+                  <div className="rounded-md bg-rose-50 border border-rose-200/60 py-1 text-rose-800">
                     Intensif: <strong>{monthlyReport.pembinaanSummary.prioritasCounts.Intensif}</strong>
                   </div>
                 </div>
               </div>
 
               {/* Card 4: Poin Karakter & Status Tindak Lanjut */}
-              <div className="rounded-xl border border-slate-200 border-t-4 border-t-indigo-600 bg-white p-4 shadow-2xs">
+              <div className="rounded-xl border border-indigo-200/80 border-t-4 border-t-indigo-500 bg-gradient-to-b from-indigo-50/60 via-white to-white p-4 shadow-xs">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-600">Poin &amp; Tindak Lanjut</span>
-                  <span className="rounded-md bg-indigo-50 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-indigo-800">
+                  <span className="text-xs font-bold text-indigo-950">Poin &amp; Tindak Lanjut</span>
+                  <span className="rounded-md bg-indigo-100/80 border border-indigo-200 px-2 py-0.5 font-mono-num text-[11px] font-semibold text-indigo-800">
                     Karakter
                   </span>
                 </div>

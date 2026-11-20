@@ -209,7 +209,7 @@ export const DasborTerpaduModule: React.FC<DasborTerpaduModuleProps> = ({
   return (
     <div className="space-y-6">
       {/* Header & Filter Bar */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
+      <div className="rounded-xl border border-teal-200/70 bg-gradient-to-br from-teal-50/40 via-white to-sky-50/40 p-5 shadow-xs space-y-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h2 className="font-display text-lg font-bold tracking-tight text-slate-900">
@@ -232,10 +232,10 @@ export const DasborTerpaduModule: React.FC<DasborTerpaduModuleProps> = ({
                   className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
                     wilayah === w
                       ? w === 'Putri'
-                        ? 'bg-rose-600 text-white shadow-xs'
+                        ? 'bg-rose-500 text-white shadow-xs'
                         : w === 'Putra'
                         ? 'bg-sky-600 text-white shadow-xs'
-                        : 'bg-slate-900 text-white shadow-xs'
+                        : 'bg-teal-600 text-white shadow-xs'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
