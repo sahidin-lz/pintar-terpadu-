@@ -177,14 +177,15 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
     };
   }, []);
 
-  // Load filtered teacher list whenever jenis, gender, or targetRefreshTick changes
+  // Load filtered teacher list whenever jenis, gender, hari (for Belajar), or targetRefreshTick changes
   useEffect(() => {
     let active = true;
+    const hariQuery = jenis === 'Belajar' && hari ? `&hari=${encodeURIComponent(hari)}` : '';
 
     const loadTeachersForPresensi = async () => {
       try {
         const res = await fetch(
-          `/api/presensi/teachers?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(gender)}`,
+          `/api/presensi/teachers?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(gender)}${hariQuery}`,
         );
         let list: TeacherPublic[] = res.ok ? await res.json() : [];
 
@@ -193,7 +194,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
           const restored = await ensureServerHydratedFromMirror();
           if (restored) {
             const retryRes = await fetch(
-              `/api/presensi/teachers?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(gender)}`,
+              `/api/presensi/teachers?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(gender)}${hariQuery}`,
             );
             if (retryRes.ok) {
               list = await retryRes.json();
@@ -201,11 +202,11 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
           }
         }
 
-        // If current gender has 0 teachers but the other Wilayah has uploaded teachers, switch automatically
+        // If current gender has 0 teachers but the other Wilayah has scheduled teachers on this day, switch automatically
         if (list.length === 0) {
           const otherGender: Gender = gender === 'Putri' ? 'Putra' : 'Putri';
           const otherRes = await fetch(
-            `/api/presensi/teachers?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(otherGender)}`,
+            `/api/presensi/teachers?jenis=${encodeURIComponent(jenis)}&gender=${encodeURIComponent(otherGender)}${hariQuery}`,
           );
           const otherList: TeacherPublic[] = otherRes.ok ? await otherRes.json() : [];
           if (active && otherList.length > 0) {
@@ -233,6 +234,8 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
             }
             return list[0].nama;
           });
+        } else if (jenis === 'Belajar') {
+          setNamaGuru('');
         } else {
           setNamaGuru((prev) => (isAdminSuperName(prev) ? '' : cleanGuruDisplayName(prev)));
         }
@@ -245,7 +248,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
     return () => {
       active = false;
     };
-  }, [jenis, gender, loggedInUser, targetRefreshTick]);
+  }, [jenis, gender, hari, loggedInUser, targetRefreshTick]);
 
   // Load target rooms / classes whenever guru, jenis, gender, tanggal, or targetRefreshTick changes
   useEffect(() => {
@@ -698,7 +701,11 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
               onChange={(e) => setNamaGuru(e.target.value)}
               className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-900 focus:border-teal-600 focus:outline-none"
             >
-              <option value="">-- Pilih {roleLabel} --</option>
+              <option value="">
+                {jenis === 'Belajar' && teachers.length === 0
+                  ? `-- Tidak ada guru akademik terjadwal hari ${hari} --`
+                  : `-- Pilih ${roleLabel} --`}
+              </option>
               {teachers.map((t) => {
                 const hint =
                   jenis === 'Asrama' && t.kamarBinaan?.length
@@ -780,7 +787,9 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
                   : !namaGuru
                   ? '-- Pilih guru dahulu --'
                   : targetOptions.length === 0
-                  ? 'Tidak ada jadwal / kamar'
+                  ? jenis === 'Belajar'
+                    ? `Tidak ada jadwal akademik hari ${hari}`
+                    : 'Tidak ada jadwal / kamar'
                   : '-- Pilih Target --'}
               </option>
               {targetOptions.map((opt) => (

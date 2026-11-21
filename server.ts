@@ -636,7 +636,8 @@ function registerApiRoutes() {
   app.get('/api/presensi/teachers', (req, res) => {
     const jenis = String(req.query.jenis || 'Semua');
     const gender = String(req.query.gender || 'Semua');
-    res.json(store.getPublicTeachers(jenis, gender));
+    const hari = String(req.query.hari || '');
+    res.json(store.getPublicTeachers(jenis, gender, hari));
   });
 
   app.get('/api/presensi/opsi', (req, res) => {

@@ -3926,8 +3926,9 @@ class PintarStore {
   // ==============================================================
   // PRESENSI UTAMA
   // ==============================================================
-  public getPublicTeachers(jenis?: string, gender?: string): TeacherPublic[] {
-    return this.getCached(`teachers_${jenis || 'all'}_${gender || 'all'}`, () => {
+  public getPublicTeachers(jenis?: string, gender?: string, hari?: string): TeacherPublic[] {
+    const reqHari = normalizeDayName(hari);
+    return this.getCached(`teachers_${jenis || 'all'}_${gender || 'all'}_${reqHari || 'anyday'}`, () => {
       const nonSuperTeachers = this.db.teachers.filter((t) => t.peran !== 'Admin Super');
       if (
         nonSuperTeachers.length === 0 &&
@@ -4010,31 +4011,69 @@ class PintarStore {
           );
         }
 
-        // jenis === 'Belajar' (Akademik)
-        const hasAcademicSchedule =
-          Boolean(t.waliKelasOf) ||
-          this.db.schedules.some(
-            (sc) =>
-              (!gender || gender === 'Semua' || sc.gender === gender) &&
-              !isQuranScheduleItem(sc) &&
-              matchTeacherName(sc.guru, t.nama),
-          ) ||
-          this.db.students.some(
-            (st) =>
-              (!gender || gender === 'Semua' || st.gender === gender) &&
-              matchTeacherName(st.waliKelas, t.nama),
-          );
-        return (
-          Boolean(hasAcademicSchedule) ||
-          jab.includes('guru') ||
-          jab.includes('wali') ||
-          jab.includes('musyrif') ||
-          jab.includes('pengampu')
-        );
+        // jenis === 'Belajar' (Akademik): STRICTLY teachers who have an academic schedule
+        // (and when reqHari is provided, strictly on that specific day only)
+        const oppositeGenderRegex =
+          gender === 'Putra' ? /\b(PUTRI|AKHWAT)\b/i : gender === 'Putri' ? /\b(PUTRA|IKHWAN)\b/i : null;
+        const hasAcademicSchedule = this.db.schedules.some((sc) => {
+          if (isQuranScheduleItem(sc)) return false;
+          if (gender && gender !== 'Semua') {
+            const matchesGender =
+              sc.gender === gender || (!sc.gender && (!oppositeGenderRegex || !oppositeGenderRegex.test(sc.kelas || '')));
+            if (!matchesGender) return false;
+          }
+          if (reqHari && normalizeDayName(sc.hari) !== reqHari) return false;
+          return matchTeacherName(sc.guru, t.nama);
+        });
+        return hasAcademicSchedule;
       });
 
-      // Fallback: if strict role+gender filter yielded 0 teachers while we DO have teachers in DB,
-      // return all non-Super-Admin teachers matching gender (or all non-Super-Admin teachers) so dropdown is never empty
+      if (jenis === 'Belajar') {
+        const oppositeGenderRegex =
+          gender === 'Putra' ? /\b(PUTRI|AKHWAT)\b/i : gender === 'Putri' ? /\b(PUTRA|IKHWAN)\b/i : null;
+        const dayAcademicSchedules = this.db.schedules.filter((sc) => {
+          if (isQuranScheduleItem(sc)) return false;
+          if (gender && gender !== 'Semua') {
+            const matchesGender =
+              sc.gender === gender || (!sc.gender && (!oppositeGenderRegex || !oppositeGenderRegex.test(sc.kelas || '')));
+            if (!matchesGender) return false;
+          }
+          if (reqHari && normalizeDayName(sc.hari) !== reqHari) return false;
+          return Boolean(sc.guru && !isPlaceholderTeacherName(sc.guru));
+        });
+
+        const resultMap = new Map<string, TeacherPublic>();
+        for (const t of filtered) {
+          const key = stripHonorificName(t.nama) || normalizeStr(t.nama);
+          if (key && !resultMap.has(key)) {
+            resultMap.set(key, mapTeacherPublic(t));
+          }
+        }
+        // Include any teacher name present in dayAcademicSchedules even if not yet registered in db.teachers
+        for (const sc of dayAcademicSchedules) {
+          const cleanNama = cleanTeacherDisplayName(sc.guru);
+          if (!cleanNama || isPlaceholderTeacherName(cleanNama)) continue;
+          const alreadyIncluded = Array.from(resultMap.values()).some((t) =>
+            matchTeacherName(t.nama, cleanNama),
+          );
+          if (!alreadyIncluded) {
+            const key = stripHonorificName(cleanNama) || normalizeStr(cleanNama);
+            resultMap.set(key, {
+              id: `SCH_GURU_${key.replace(/\s+/g, '_')}`,
+              username: makeUsername(cleanNama),
+              nama: cleanNama,
+              jabatan: 'Guru',
+              peran: 'Guru',
+              peranTambahan: [],
+              genderScope: sc.gender || (gender === 'Putra' || gender === 'Putri' ? gender : 'Semua'),
+              pin: generateTeacherAccessToken(cleanNama),
+            });
+          }
+        }
+        return Array.from(resultMap.values()).sort((a, b) => a.nama.localeCompare(b.nama));
+      }
+
+      // Fallback for non-Belajar modes if strict role+gender filter yielded 0 teachers while we DO have teachers in DB
       const resultList =
         filtered.length > 0
           ? filtered
@@ -4225,17 +4264,20 @@ class PintarStore {
 
     const seen = new Set<string>();
     const results: Array<{ kelas: string; mapel: string; jamKe: string; filledToday?: boolean }> = [];
-    const addResult = (kelas: string, mapel: string, jamKe: string) => {
+    const addResult = (kelas: string, mapel: string, jamKe: string, includeJamInKey = false) => {
       const cleanKelas = String(kelas || '').trim().toUpperCase();
       const cleanMapel = String(mapel || '').trim().toUpperCase();
+      const cleanJam = String(jamKe || '1-2').trim();
       if (!cleanKelas || cleanKelas === '-' || !cleanMapel) return;
-      const key = `${normGroupCode(cleanKelas) || cleanKelas}|${cleanMapel}`;
+      const key = includeJamInKey
+        ? `${normGroupCode(cleanKelas) || cleanKelas}|${cleanMapel}|${cleanJam.toUpperCase()}`
+        : `${normGroupCode(cleanKelas) || cleanKelas}|${cleanMapel}`;
       if (!seen.has(key)) {
         seen.add(key);
         results.push({
           kelas: cleanKelas,
           mapel: cleanMapel,
-          jamKe: jamKe || '1-2',
+          jamKe: cleanJam,
           filledToday: isTargetFilledToday(cleanKelas, cleanMapel),
         });
       }
@@ -4336,69 +4378,27 @@ class PintarStore {
     }
 
     // jenis === 'Belajar' (Akademik):
+    // STRICTLY return ONLY this teacher's academic schedules on the selected day (reqHari) and gender.
+    // Never leak other days, Al-Qur'an schedules, opposite gender, or fallback classes.
     const oppositeGenderRegex = gender === 'Putra' ? /\b(PUTRI|AKHWAT)\b/i : /\b(PUTRA|IKHWAN)\b/i;
 
-    // 1. Primary: schedules matching selected day (reqHari), teacher, and gender
-    const todayAcademicSchedules = this.db.schedules.filter(
-      (sc) =>
-        !isQuranScheduleItem(sc) &&
-        (sc.gender === gender || !oppositeGenderRegex.test(sc.kelas || '')) &&
-        matchTeacherName(sc.guru, namaGuru) &&
-        (!reqHari || normalizeDayName(sc.hari) === reqHari),
-    );
+    const todayAcademicSchedules = this.db.schedules
+      .filter(
+        (sc) =>
+          !isQuranScheduleItem(sc) &&
+          (sc.gender === gender || (!sc.gender && !oppositeGenderRegex.test(sc.kelas || ''))) &&
+          matchTeacherName(sc.guru, namaGuru) &&
+          (!reqHari || normalizeDayName(sc.hari) === reqHari),
+      )
+      .sort((a, b) => {
+        const jpA = this.parseJpSlots(a.jamKe)[0] ?? 999;
+        const jpB = this.parseJpSlots(b.jamKe)[0] ?? 999;
+        if (jpA !== jpB) return jpA - jpB;
+        return a.kelas.localeCompare(b.kelas, 'id', { numeric: true }) || a.mapel.localeCompare(b.mapel);
+      });
 
     for (const sc of todayAcademicSchedules) {
-      addResult(sc.kelas, sc.mapel, sc.jamKe);
-    }
-
-    // 2. Also include any other schedules of this teacher from other days in the Weekly Matrix
-    // so newly added/edited schedules on any day are immediately selectable in Menu Presensi
-    const anyDayAcademicSchedules = this.db.schedules.filter(
-      (sc) =>
-        !isQuranScheduleItem(sc) &&
-        (sc.gender === gender || !sc.gender || !oppositeGenderRegex.test(sc.kelas || '')) &&
-        matchTeacherName(sc.guru, namaGuru),
-    );
-    for (const sc of anyDayAcademicSchedules) {
-      const jamWithDay = sc.hari ? `${sc.hari} · Jam ${sc.jamKe || '1-2'}` : sc.jamKe || '1-2';
-      addResult(sc.kelas, sc.mapel, jamWithDay);
-    }
-
-    // 3. Fallback if teacher is a Wali Kelas or has classes in students/teachers without explicit schedule rows yet
-    if (results.length === 0) {
-      const matchedTeachers = this.db.teachers.filter(
-        (t) => t.id !== SUPER_ADMIN_ID && t.peran !== 'Admin Super' && matchTeacherName(t.nama, namaGuru),
-      );
-      for (const t of matchedTeachers) {
-        if (t.waliKelasOf && t.waliKelasOf !== '-') {
-          for (const wk of t.waliKelasOf.split(/[;,]/).map((s) => s.trim()).filter(Boolean)) {
-            if (!oppositeGenderRegex.test(wk)) {
-              addResult(wk, 'PEMBELAJARAN KELAS', 'Wali Kelas');
-            }
-          }
-        }
-      }
-      for (const st of this.db.students) {
-        if (st.gender === gender && st.waliKelas && matchTeacherName(st.waliKelas, namaGuru) && st.kelas && st.kelas !== '-') {
-          addResult(st.kelas, 'PEMBELAJARAN KELAS', 'Wali Kelas');
-        }
-      }
-    }
-
-    // 4. Final fallback: all distinct academic classes of that gender so any substitute/new teacher can still take attendance
-    if (results.length === 0) {
-      const allClasses = new Map<string, string>();
-      for (const st of this.db.students) {
-        if (st.gender === gender && st.kelas && st.kelas !== '-') {
-          const code = normGroupCode(st.kelas) || st.kelas.toUpperCase();
-          if (!allClasses.has(code)) {
-            allClasses.set(code, st.kelas.trim().toUpperCase());
-          }
-        }
-      }
-      for (const kls of Array.from(allClasses.values()).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }))) {
-        addResult(kls, 'PEMBELAJARAN KELAS', '1-2');
-      }
+      addResult(sc.kelas, sc.mapel, sc.jamKe, true);
     }
 
     return results;
@@ -6584,15 +6584,19 @@ class PintarStore {
     const todayDay = NAMA_HARI[new Date(`${tanggal}T00:00:00`).getDay()];
     const allMySchedules = this.db.schedules.filter((s) => matchTeacherName(s.guru, teacher.nama));
     const todaySchedules = allMySchedules
-      .filter((s) => normalizeDayName(s.hari) === todayDay)
+      .filter((s) => !isQuranScheduleItem(s) && normalizeDayName(s.hari) === todayDay)
+      .sort((a, b) => {
+        const jpA = this.parseJpSlots(a.jamKe)[0] ?? 999;
+        const jpB = this.parseJpSlots(b.jamKe)[0] ?? 999;
+        if (jpA !== jpB) return jpA - jpB;
+        return a.kelas.localeCompare(b.kelas, 'id', { numeric: true });
+      })
       .map((s) => {
         const filled = sessions.some(
           (ses) =>
             ses.tanggal === tanggal &&
             matchGroupCode(ses.kelas, s.kelas) &&
-            (isQuranScheduleItem(s)
-              ? ses.jenisPresensi === 'Al-Quran'
-              : ses.mapel.toUpperCase() === s.mapel.toUpperCase())
+            ses.mapel.toUpperCase() === s.mapel.toUpperCase(),
         );
         return { ...s, filled };
       });
