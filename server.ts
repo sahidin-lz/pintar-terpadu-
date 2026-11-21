@@ -1,7 +1,7 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { store } from './server/store.js';
+import { store } from './server/store.ts';
 import {
   buildDatabaseWorkbookBuffer,
   buildDatabaseWorkbookSpec,
@@ -9,7 +9,7 @@ import {
   buildPersonalLoginWorkbookSpec,
   loadAuthenticPutraRoster,
   type TemplateContext,
-} from './server/templates.js';
+} from './server/templates.ts';
 import type { Gender, PembinaanJalur, PresensiType, StatusTindakLanjut, TeacherPublic, UserRole, WilayahFilter } from './src/types';
 
 export const app = express();
@@ -1150,7 +1150,7 @@ async function startServer() {
   // ==============================================================
   // VITE / STATIC SERVING
   // ==============================================================
-  const isProd = process.env.NODE_ENV === 'production';
+  const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.K_SERVICE);
   const distPath = path.resolve(process.cwd(), 'dist');
 
   if (!isProd || !fs.existsSync(distPath)) {

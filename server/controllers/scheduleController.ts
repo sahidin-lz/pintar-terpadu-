@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { store } from '../store.js';
+import { store } from '../store.ts';
 
 /**
  * Helper: Mengurai rentang Jam Pelajaran (misal "1-2", "3,4", atau "5")

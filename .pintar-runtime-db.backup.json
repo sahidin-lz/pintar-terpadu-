@@ -1,0 +1,222 @@
+{
+  "students": [],
+  "teachers": [
+    {
+      "id": "ADMIN_SUPER_SAHIDIN",
+      "username": "sahidin30@gmail.com",
+      "nama": "SAHIDIN (ADMIN SUPER)",
+      "jabatan": "Admin Super & Pimpinan Sistem",
+      "peran": "Admin Super",
+      "peranTambahan": [
+        "Pimpinan",
+        "Admin SIM",
+        "Guru",
+        "Guru Wali",
+        "Wali Kelas",
+        "Wali Asrama",
+        "Musyrif",
+        "Musyrifah",
+        "Pengampu Al-Quran"
+      ],
+      "genderScope": "Semua",
+      "whatsapp": "",
+      "pin": "121320"
+    },
+    {
+      "id": "G_DB_1795223880724_1",
+      "username": "sahidin",
+      "nama": "SAHIDIN",
+      "peran": "Guru",
+      "peranTambahan": [],
+      "jabatan": "Guru",
+      "genderScope": "Semua",
+      "kamarBinaan": [],
+      "kelompokQuranBinaan": [],
+      "whatsapp": "",
+      "pin": "PN-3391"
+    }
+  ],
+  "rooms": [],
+  "ruanganUjian": [],
+  "schedules": [],
+  "attendanceLogs": [],
+  "examLogs": [],
+  "teacherAbsences": [],
+  "pembinaanRecords": [],
+  "attachments": [],
+  "whatsappLogs": [],
+  "labkomBookings": [],
+  "labkomFixedSchedules": [],
+  "labkomPlotings": [],
+  "labkomMasters": [
+    {
+      "id": "LM_LAB_1795223880719_5010",
+      "kategori": "LAB",
+      "nilai": "LABKOM A"
+    },
+    {
+      "id": "LM_LAB_1795223880719_4889",
+      "kategori": "LAB",
+      "nilai": "LABKOM B"
+    },
+    {
+      "id": "LM_LAB_1795223880719_3302",
+      "kategori": "LAB",
+      "nilai": "LABKOM C"
+    },
+    {
+      "id": "LM_LAB_1795223880719_5580",
+      "kategori": "LAB",
+      "nilai": "BIOKIM"
+    },
+    {
+      "id": "LM_RUANGAN_1795223880719_817",
+      "kategori": "RUANGAN",
+      "nilai": "KELAS UI"
+    },
+    {
+      "id": "LM_RUANGAN_1795223880719_2505",
+      "kategori": "RUANGAN",
+      "nilai": "KELAS ITB"
+    },
+    {
+      "id": "LM_RUANGAN_1795223880719_6726",
+      "kategori": "RUANGAN",
+      "nilai": "KELAS UGM"
+    },
+    {
+      "id": "LM_RUANGAN_1795223880719_9055",
+      "kategori": "RUANGAN",
+      "nilai": "KELAS UPI"
+    },
+    {
+      "id": "LM_RUANGAN_1795223880719_9296",
+      "kategori": "RUANGAN",
+      "nilai": "KELAS UNPAD"
+    },
+    {
+      "id": "LM_RUANGAN_1795223880719_606",
+      "kategori": "RUANGAN",
+      "nilai": "KELAS TIMTENG"
+    },
+    {
+      "id": "LM_RUANGAN_1795223880719_4366",
+      "kategori": "RUANGAN",
+      "nilai": "KELAS UNAIR"
+    },
+    {
+      "id": "LM_RUANGAN_1795223880719_1784",
+      "kategori": "RUANGAN",
+      "nilai": "KELAS ITS"
+    },
+    {
+      "id": "LM_RUANGAN_1795223880719_6624",
+      "kategori": "RUANGAN",
+      "nilai": "KELAS UB"
+    },
+    {
+      "id": "LM_RUANGAN_1795223880719_9548",
+      "kategori": "RUANGAN",
+      "nilai": "KELAS EROPA"
+    },
+    {
+      "id": "LM_RUANGAN_1795223880719_4363",
+      "kategori": "RUANGAN",
+      "nilai": "RUANG RAPAT"
+    },
+    {
+      "id": "LM_RUANGAN_1795223880719_9232",
+      "kategori": "RUANGAN",
+      "nilai": "PERPUSTAKAAN"
+    },
+    {
+      "id": "LM_JAM_1795223880719_3455",
+      "kategori": "JAM",
+      "nilai": "1"
+    },
+    {
+      "id": "LM_JAM_1795223880719_8673",
+      "kategori": "JAM",
+      "nilai": "2"
+    },
+    {
+      "id": "LM_JAM_1795223880719_8125",
+      "kategori": "JAM",
+      "nilai": "3"
+    },
+    {
+      "id": "LM_JAM_1795223880719_3360",
+      "kategori": "JAM",
+      "nilai": "4"
+    },
+    {
+      "id": "LM_JAM_1795223880719_1600",
+      "kategori": "JAM",
+      "nilai": "5"
+    },
+    {
+      "id": "LM_JAM_1795223880719_1587",
+      "kategori": "JAM",
+      "nilai": "6"
+    },
+    {
+      "id": "LM_JAM_1795223880719_816",
+      "kategori": "JAM",
+      "nilai": "7"
+    },
+    {
+      "id": "LM_JAM_1795223880719_8181",
+      "kategori": "JAM",
+      "nilai": "8"
+    },
+    {
+      "id": "LM_JAM_1795223880719_1121",
+      "kategori": "JAM",
+      "nilai": "9"
+    },
+    {
+      "id": "LM_JAM_1795223880719_9156",
+      "kategori": "JAM",
+      "nilai": "10 (SORE)"
+    },
+    {
+      "id": "LM_JAM_1795223880720_2952",
+      "kategori": "JAM",
+      "nilai": "11 (MALAM)"
+    },
+    {
+      "id": "LM_WAKTU_RUANG_1795223880720_6341",
+      "kategori": "WAKTU_RUANG",
+      "nilai": "PAGI"
+    },
+    {
+      "id": "LM_WAKTU_RUANG_1795223880720_2578",
+      "kategori": "WAKTU_RUANG",
+      "nilai": "SIANG"
+    },
+    {
+      "id": "LM_WAKTU_RUANG_1795223880720_2931",
+      "kategori": "WAKTU_RUANG",
+      "nilai": "SORE"
+    },
+    {
+      "id": "LM_WAKTU_RUANG_1795223880720_8175",
+      "kategori": "WAKTU_RUANG",
+      "nilai": "MALAM"
+    }
+  ],
+  "settings": {
+    "gasBridgeUrl": "",
+    "lastSyncedAt": null,
+    "whatsappConfig": {
+      "provider": "Fonnte",
+      "apiUrl": "https://api.fonnte.com/send",
+      "apiToken": "",
+      "autoNotifyAlfa": true,
+      "autoNotifyEskalasi": true
+    },
+    "labkomBroadcastTemplate": "==========================================\n📢 *INFO JADWAL RUANGAN & LABKOM* 📢\n🏢 Area: *{{KAMPUS}}*\n🗓 Tanggal: *{{TANGGAL}}*\n{{DATA}}==========================================\nBooking Link:\n_s.id/bookingruangansma_\n==========================================",
+    "explicitEmpty": false,
+    "lastModifiedAt": "2026-11-21T01:18:01.714Z"
+  }
+}

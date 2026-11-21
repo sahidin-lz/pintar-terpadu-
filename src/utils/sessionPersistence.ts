@@ -1,4 +1,11 @@
-import type { BootstrapPayload, RoomInfo, Student, TeacherPublic } from '../types';
+import type {
+  BootstrapPayload,
+  ReportOptionsScope,
+  RoomMapping,
+  ScheduleItem,
+  Student,
+  TeacherPublic,
+} from '../types';
 
 const SESSION_USER_KEY = 'pintar_unlocked_teacher_v1';
 const LAST_MODULE_KEY = 'pintar_last_module_v1';
@@ -290,76 +297,67 @@ export function buildInstantBootstrapFromMirror(): BootstrapPayload | null {
   try {
     const students = (Array.isArray(snap.students) ? snap.students : []) as Student[];
     const teachers = (Array.isArray(snap.teachers) ? snap.teachers : []) as TeacherPublic[];
-    const rooms = (Array.isArray(snap.rooms) ? snap.rooms : []) as RoomInfo[];
-    const schedules = Array.isArray(snap.schedules) ? snap.schedules : [];
+    const rooms = (Array.isArray(snap.rooms) ? snap.rooms : []) as RoomMapping[];
+    const schedules = (Array.isArray(snap.schedules) ? snap.schedules : []) as ScheduleItem[];
     const ruanganUjian = (Array.isArray(snap.ruanganUjian) ? snap.ruanganUjian : []) as string[];
     const attendanceLogs = Array.isArray(snap.attendanceLogs) ? snap.attendanceLogs : [];
     const examLogs = Array.isArray(snap.examLogs) ? snap.examLogs : [];
-    const teacherAbsences = Array.isArray(snap.teacherAbsences) ? snap.teacherAbsences : [];
     const pembinaanRecords = Array.isArray(snap.pembinaanRecords) ? snap.pembinaanRecords : [];
-    const attachments = Array.isArray(snap.attachments) ? snap.attachments : [];
-    const whatsappLogs = Array.isArray(snap.whatsappLogs) ? snap.whatsappLogs : [];
+    const labkomBookings = Array.isArray(snap.labkomBookings) ? snap.labkomBookings : [];
 
-    const sortNat = (arr: string[]) =>
-      Array.from(new Set(arr.filter((v) => Boolean(v) && v !== '-'))).sort((a, b) =>
+    const sortNat = (arr: Array<string | undefined | null>) =>
+      Array.from(new Set(arr.filter((v): v is string => Boolean(v) && v !== '-'))).sort((a, b) =>
         a.localeCompare(b, 'id', { numeric: true })
       );
 
-    const kelasPutra = sortNat(students.filter((s) => s.gender === 'Putra').map((s) => s.kelas));
-    const kelasPutri = sortNat(students.filter((s) => s.gender === 'Putri').map((s) => s.kelas));
-    const kamarPutra = sortNat([
-      ...students.filter((s) => s.gender === 'Putra').map((s) => s.kamar),
-      ...rooms.filter((r) => r.gender === 'Putra').map((r) => r.kamar),
-    ]);
-    const kamarPutri = sortNat([
-      ...students.filter((s) => s.gender === 'Putri').map((s) => s.kamar),
-      ...rooms.filter((r) => r.gender === 'Putri').map((r) => r.kamar),
-    ]);
-    const kelompokPutra = sortNat(
-      students.filter((s) => s.gender === 'Putra').map((s) => s.kelompokQuran)
-    );
-    const kelompokPutri = sortNat(
-      students.filter((s) => s.gender === 'Putri').map((s) => s.kelompokQuran)
-    );
+    const buildScope = (gender?: 'Putra' | 'Putri'): ReportOptionsScope => {
+      const scopedStudents = gender ? students.filter((s) => s.gender === gender) : students;
+      const scopedRooms = gender ? rooms.filter((r) => r.gender === gender) : rooms;
+      const scopedSchedules = gender ? schedules.filter((s) => s.gender === gender) : schedules;
+      return {
+        akademik: {
+          kelas: sortNat([...scopedStudents.map((s) => s.kelas), ...scopedSchedules.map((s) => s.kelas)]),
+          mapel: sortNat(scopedSchedules.map((s) => s.mapel)),
+        },
+        asrama: {
+          kamar: sortNat([...scopedStudents.map((s) => s.kamar), ...scopedRooms.map((r) => r.kamar)]),
+          musyrif: sortNat([...scopedRooms.map((r) => r.musyrif), ...scopedStudents.map((s) => s.musyrif)]),
+        },
+        alquran: {
+          kelompok: sortNat(scopedStudents.map((s) => s.kelompokQuran)),
+        },
+        ruanganUjian: sortNat(ruanganUjian),
+        students: sortNat(scopedStudents.map((s) => s.nama)),
+      };
+    };
 
-    const settings = (snap.settings || {}) as Record<string, unknown>;
+    const emptyStats = () => ({ H: 0, T: 0, S: 0, I: 0, A: 0 });
 
     return {
       options: {
-        kelasPutra,
-        kelasPutri,
-        kamarPutra,
-        kamarPutri,
-        kelompokPutra,
-        kelompokPutri,
-        ruanganUjian: sortNat(ruanganUjian),
+        ...buildScope(),
+        byWilayah: {
+          Putra: buildScope('Putra'),
+          Putri: buildScope('Putri'),
+        },
       },
       rooms,
       teachers,
+      stats: {
+        hari: emptyStats(),
+        bulan: emptyStats(),
+        semester: emptyStats(),
+      },
       counts: {
         students: students.length,
         teachers: teachers.length,
         rooms: rooms.length,
         schedules: schedules.length,
-        ruanganUjian: ruanganUjian.length,
         attendanceLogs: attendanceLogs.length,
-        examLogs: examLogs.length,
-        teacherAbsences: teacherAbsences.length,
         pembinaanRecords: pembinaanRecords.length,
-        attachments: attachments.length,
-        whatsappLogs: whatsappLogs.length,
-        lastModifiedAt: (settings.lastModifiedAt as string) || new Date().toISOString(),
-        explicitEmpty: Boolean(settings.explicitEmpty),
+        examLogs: examLogs.length,
+        labkomBookings: labkomBookings.length,
       },
-      quota: {
-        cacheHits: 1,
-        batchedWrites: 0,
-        savedPercentage: 98,
-        totalStudents: students.length,
-        gasBridgeConfigured: Boolean(settings.gasBridgeUrl),
-        lastSyncedAt: (settings.lastSyncedAt as string) || null,
-      },
-      scheduleApprovalRequired: Boolean(settings.scheduleApprovalRequired),
     };
   } catch {
     return null;

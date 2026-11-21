@@ -62,7 +62,7 @@ import {
   loadLabkomSeedData,
   parseLabkomCsvContent,
   parseLabkomTanggalToIso,
-} from './labkomSeed.js';
+} from './labkomSeed.ts';
 
 export interface DatabaseSchema {
   students: Student[];
@@ -1066,6 +1066,20 @@ class PintarStore {
     teachers: TeacherPublic[];
   } {
     let updatedCount = 0;
+    const hasStudentsData = this.db.students.length > 0;
+    const hasRoomsData = this.db.rooms.length > 0;
+
+    // Build class -> waliKelas map from students so stale waliKelasOf does not linger if reassigned
+    const studentClassWaliMap = new Map<string, string>();
+    for (const st of this.db.students) {
+      if (st.kelas && st.kelas !== '-' && st.waliKelas && !isPlaceholderTeacherName(st.waliKelas)) {
+        const kCode = normGroupCode(st.kelas) || normalizeStr(st.kelas);
+        if (kCode && !studentClassWaliMap.has(kCode)) {
+          studentClassWaliMap.set(kCode, st.waliKelas);
+        }
+      }
+    }
+
     for (const t of this.db.teachers) {
       if (t.id === SUPER_ADMIN_ID || t.peran === 'Admin Super') continue;
 
@@ -1073,20 +1087,68 @@ class PintarStore {
       const hasAcademicSchedule = this.db.schedules.some(
         (sc) => !isQuranScheduleItem(sc) && matchTeacherName(sc.guru, t.nama)
       );
+
+      // Authoritative Al-Quran groups from schedules & students
+      const quranGroupsSet = new Set<string>();
+      for (const sc of this.db.schedules) {
+        if (isQuranScheduleItem(sc) && matchTeacherName(sc.guru, t.nama) && sc.kelas && sc.kelas !== '-') {
+          quranGroupsSet.add(sc.kelas.trim());
+        }
+      }
+      for (const st of this.db.students) {
+        if (st.pengampuQuran && matchTeacherName(st.pengampuQuran, t.nama) && st.kelompokQuran && st.kelompokQuran !== '-') {
+          quranGroupsSet.add(st.kelompokQuran.trim());
+        }
+      }
+      if (!hasStudentsData && this.db.schedules.length === 0 && Array.isArray(t.kelompokQuranBinaan)) {
+        for (const k of t.kelompokQuranBinaan) {
+          if (k && k.trim() !== '-') quranGroupsSet.add(k.trim());
+        }
+      }
       const hasQuranScheduleOrGroup =
+        quranGroupsSet.size > 0 ||
         this.db.schedules.some((sc) => isQuranScheduleItem(sc) && matchTeacherName(sc.guru, t.nama)) ||
-        (Array.isArray(t.kelompokQuranBinaan) &&
-          t.kelompokQuranBinaan.some((k) => Boolean(k) && k.trim() !== '-')) ||
         this.db.students.some((st) => Boolean(st.pengampuQuran) && matchTeacherName(st.pengampuQuran, t.nama));
 
-      const hasWaliKelasAssignment =
-        Boolean(t.waliKelasOf && t.waliKelasOf.trim() !== '-') ||
-        this.db.students.some((st) => Boolean(st.waliKelas) && matchTeacherName(st.waliKelas, t.nama));
+      // Authoritative Wali Kelas classes from students (or explicit waliKelasOf if not owned by someone else)
+      const waliClassesSet = new Set<string>();
+      for (const st of this.db.students) {
+        if (st.waliKelas && matchTeacherName(st.waliKelas, t.nama) && st.kelas && st.kelas !== '-') {
+          waliClassesSet.add(st.kelas.trim().toUpperCase());
+        }
+      }
+      if (waliClassesSet.size === 0 && t.waliKelasOf && t.waliKelasOf.trim() !== '-') {
+        const parts = t.waliKelasOf.split(/[;,]/).map((s) => s.trim().toUpperCase()).filter(Boolean);
+        for (const p of parts) {
+          const kCode = normGroupCode(p) || normalizeStr(p);
+          const owner = kCode ? studentClassWaliMap.get(kCode) : undefined;
+          if (!hasStudentsData || !owner || matchTeacherName(owner, t.nama)) {
+            waliClassesSet.add(p);
+          }
+        }
+      }
+      const hasWaliKelasAssignment = waliClassesSet.size > 0;
 
-      const hasAsramaAssignment =
-        (Array.isArray(t.kamarBinaan) && t.kamarBinaan.some((k) => Boolean(k) && k.trim() !== '-')) ||
-        this.db.rooms.some((rm) => Boolean(rm.musyrif) && matchTeacherName(rm.musyrif, t.nama)) ||
-        this.db.students.some((st) => Boolean(st.musyrif) && matchTeacherName(st.musyrif, t.nama));
+      // Authoritative Asrama rooms from rooms & students
+      const ownedRoomsSet = new Set<string>();
+      for (const rm of this.db.rooms) {
+        if (rm.musyrif && matchTeacherName(rm.musyrif, t.nama) && rm.kamar && rm.kamar !== '-') {
+          ownedRoomsSet.add(rm.kamar.trim());
+        }
+      }
+      for (const st of this.db.students) {
+        if (st.musyrif && matchTeacherName(st.musyrif, t.nama) && st.kamar && st.kamar !== '-') {
+          if (!Array.from(ownedRoomsSet).some((x) => matchGroupCode(x, st.kamar))) {
+            ownedRoomsSet.add(st.kamar.trim());
+          }
+        }
+      }
+      if (!hasRoomsData && !hasStudentsData && Array.isArray(t.kamarBinaan)) {
+        for (const km of t.kamarBinaan) {
+          if (km && km.trim() !== '-') ownedRoomsSet.add(km.trim());
+        }
+      }
+      const hasAsramaAssignment = ownedRoomsSet.size > 0;
 
       const hasGuruWaliAssignment = this.db.students.some(
         (st) => Boolean(st.guruWali) && matchTeacherName(st.guruWali, t.nama)
@@ -1119,9 +1181,15 @@ class PintarStore {
         addUniqueRole('Guru');
       }
 
-      if (!hasWaliKelasAssignment) t.waliKelasOf = undefined;
-      if (!hasAsramaAssignment) t.kamarBinaan = [];
-      if (!hasQuranScheduleOrGroup) t.kelompokQuranBinaan = [];
+      t.waliKelasOf = hasWaliKelasAssignment
+        ? Array.from(waliClassesSet).sort((a, b) => a.localeCompare(b, 'id', { numeric: true })).join(', ')
+        : undefined;
+      t.kamarBinaan = hasAsramaAssignment
+        ? Array.from(ownedRoomsSet).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }))
+        : [];
+      t.kelompokQuranBinaan = hasQuranScheduleOrGroup
+        ? Array.from(quranGroupsSet).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }))
+        : [];
 
       const nextPrimary = nextRoles[0];
       const nextExtras = nextRoles.slice(1);
@@ -2902,7 +2970,7 @@ class PintarStore {
 
     const teacherResult =
       filteredTeachers.length > 0
-        ? this.importTeachersBulk({ rows: filteredTeachers })
+        ? this.importTeachersBulk({ rows: filteredTeachers, strictTemplateRoles: true })
         : { added: 0, updated: 0 };
 
     let roomsAdded = 0;
@@ -2997,6 +3065,9 @@ class PintarStore {
     // Reconcile all cross-entity relationships and tidy Putra/Putri normalization
     this.reconcileDatabaseRelations(payload.defaultPin || '1234');
     this.tidyAllPutraPutriData({ skipSyncMasters: true });
+    if (filteredTeachers.length === 0) {
+      this.syncAllTeacherRolesWithTemplate();
+    }
 
     return {
       santri: santriResult,

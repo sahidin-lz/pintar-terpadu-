@@ -44,6 +44,7 @@ import {
 } from '../utils/exportHelpers';
 import { auth, pushSnapshotToFirestore } from '../firebase';
 import {
+  emitDataMutated,
   getLocalMirrorSnapshot,
   loadSubTab,
   matchTeacherClient,
@@ -696,6 +697,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
         totalTeachers: number;
       }>(res);
       onDataUpdated();
+      emitDataMutated();
       notify(
         `Sinkronisasi Peran Sesuai Template selesai! ${data.updatedCount} akun guru dirapikan (peran berlebih dihapus, guru tanpa tugas tambahan diset ke Guru Jadwal Saja, multi-peran dipertahankan).`,
         'success'
@@ -727,6 +729,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       const data = await parseJsonSafe(res);
       if (!data) throw new Error('Gagal menghapus peran.');
       onDataUpdated();
+      emitDataMutated();
       notify(
         remaining.length > 0
           ? `Peran "${roleToRemove}" dihapus dari ${t.nama}. Peran aktif sekarang: ${finalRoles.join(' + ')}.`
@@ -760,6 +763,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       });
       await parseJsonSafe(res);
       onDataUpdated();
+      emitDataMutated();
       notify(
         `Peran "${roleToAdd}" ditambahkan ke ${t.nama} (Multi-Peran: ${finalRoles.join(' + ')}).`,
         'success'
@@ -787,6 +791,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       });
       await parseJsonSafe(res);
       onDataUpdated();
+      emitDataMutated();
       notify(
         `${t.nama} berhasil direset menjadi Guru Akademik (Jadwal Saja) tanpa peran tambahan.`,
         'success'
@@ -826,6 +831,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal menyimpan amanah pegawai.');
       onDataUpdated();
+      emitDataMutated();
       loadWorkbookSpec();
       notify(`Peran & Amanah untuk ${selectedPegawai.nama} berhasil diperbarui.`, 'success');
     } catch (err) {
@@ -1470,6 +1476,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       return;
     }
     onDataUpdated();
+    emitDataMutated();
     loadWorkbookSpec();
     notify(`Akun ${nama} dihapus.`, 'info');
   };

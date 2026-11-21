@@ -553,6 +553,14 @@ export interface SystemCounts {
   };
 }
 
+export interface BootstrapPayload {
+  teachers: TeacherPublic[];
+  rooms: RoomMapping[];
+  options: ReportOptions;
+  stats: DashboardStats;
+  counts: SystemCounts;
+}
+
 export type SemesterType = 'Ganjil' | 'Genap';
 export type SemesterFilter = 'ALL' | 'GANJIL' | 'GENAP';
 
