@@ -29,6 +29,8 @@ export type AttachmentCategory =
   | 'Surat Izin Ortu'
   | 'Lainnya';
 
+export type StatusKenaikanKelas = 'Naik Kelas' | 'Tinggal Kelas' | 'Lulus' | 'Pindah';
+
 export interface Student {
   id: string;
   nis?: string;
@@ -50,6 +52,41 @@ export interface Student {
   riwayatPenyakit?: string;
   obatRutin?: string;
   targetKampus?: string;
+  posisiRanjang?: string;
+  catatanKamar?: string;
+  kamarSebelumnya?: string;
+  statusKenaikan?: StatusKenaikanKelas;
+  kelasTujuanKenaikan?: string;
+  ringkasanNilaiRapor?: string;
+  catatanRaporWali?: string;
+}
+
+export interface AcademicArchiveEntry {
+  id: string;
+  archivedAt: string;
+  tahunAjaranLama: string;
+  tahunAjaranBaru: string;
+  semester: string;
+  waliKelas: string;
+  studentId: string;
+  nis: string;
+  namaSantri: string;
+  gender: Gender;
+  kelasLama: string;
+  kelasBaru: string;
+  statusKenaikan: StatusKenaikanKelas;
+  ringkasanNilai: string;
+  persenHadirAkademik: number;
+  persenHadirAsrama: number;
+  persenHadirQuran: number;
+  totalSakit: number;
+  totalIzin: number;
+  totalAlfa: number;
+  skorIbadahWajibPct: number;
+  netPoinKarakter: number;
+  totalCatatanPembinaan: number;
+  catatanAkhirWali: string;
+  locked: boolean;
 }
 
 export interface TeacherPublic {
@@ -79,8 +116,10 @@ export interface ScheduleItem {
   kelas: string;
   mapel: string;
   jamKe: string;
+  ruang?: string;
   gender: Gender;
   kategori?: 'Akademik' | 'Al-Quran';
+  approvalStatus?: 'APPROVED' | 'PENDING_APPROVAL';
   isPerubahan?: boolean;
   catatanPerubahan?: string;
   updatedAt?: string;
@@ -98,6 +137,7 @@ export interface RoomMapping {
   kamar: string;
   musyrif: string;
   gender: Gender;
+  kapasitas?: number;
 }
 
 export interface AttendanceLog {

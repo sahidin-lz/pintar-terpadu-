@@ -1,4 +1,4 @@
-import type { TeacherPublic } from '../types';
+import type { BootstrapPayload, RoomInfo, Student, TeacherPublic } from '../types';
 
 const SESSION_USER_KEY = 'pintar_unlocked_teacher_v1';
 const LAST_MODULE_KEY = 'pintar_last_module_v1';
@@ -58,15 +58,96 @@ export function savePersistedModule(moduleId: string): void {
   }
 }
 
+export function cleanGuruDisplayName(nama?: string | null): string {
+  if (!nama) return '';
+  return nama
+    .replace(/\(\s*ADMIN\s+SUPER\s*\)/gi, '')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
 export function isAdminSuperName(nama?: string | null): boolean {
-  if (!nama) return false;
-  const up = nama.trim().toUpperCase();
-  return up.includes('ADMIN SUPER') || up === 'ADMIN SIM';
+  const up = cleanGuruDisplayName(nama).toUpperCase();
+  return !up || up === 'ADMIN SUPER' || up === 'ADMIN SIM' || up === 'ADMIN';
+}
+
+function stripHonorificClient(val?: string | null): string {
+  const raw = cleanGuruDisplayName(val)
+    .toLowerCase()
+    .replace(/["'`]/g, '');
+  if (!raw || raw === '-') return '';
+  const withoutDegrees = raw.split(',')[0] || raw;
+  return withoutDegrees
+    .replace(/^(ustadzah|ustadz|ustz|ust|bpk|ibu|pak|bu|dr|drs|hj|h|kh)\.?\s+/i, '')
+    .replace(/^(ustadzah|ustadz|ustz|ust)\.?\s+/i, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+export function matchTeacherClient(a?: string | null, b?: string | null): boolean {
+  const na = cleanGuruDisplayName(a).toLowerCase();
+  const nb = cleanGuruDisplayName(b).toLowerCase();
+  if (!na || !nb || na === '-' || nb === '-') return false;
+  if (na === nb || na.includes(nb) || nb.includes(na)) return true;
+  const ca = stripHonorificClient(a);
+  const cb = stripHonorificClient(b);
+  if (!ca || !cb || ca.length < 3 || cb.length < 3) return false;
+  return ca === cb || ca.includes(cb) || cb.includes(ca);
+}
+
+export function normGroupClient(raw?: string | null): string {
+  const s = String(raw || '').trim().toUpperCase();
+  if (!s || s === '-' || s === 'KOSONG') return '';
+  return s
+    .replace(/^(KELAS|KAMAR|ASRAMA|HUJROH|KELOMPOK|KELP\.?|HALAQAH)\s+/i, '')
+    .replace(/\bXII\b/g, '12')
+    .replace(/\bXI\b/g, '11')
+    .replace(/\bX\b/g, '10')
+    .replace(/\b0+(\d+)\b/g, '$1')
+    .replace(/[\-_.\/]+/g, '.')
+    .replace(/\s*\.\s*/g, '.')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function matchGroupClient(a?: string | null, b?: string | null): boolean {
+  const rawA = String(a || '').trim().toUpperCase();
+  const rawB = String(b || '').trim().toUpperCase();
+  if (!rawA || !rawB || rawA === '-' || rawB === '-') return false;
+  if (rawA === rawB) return true;
+  const na = normGroupClient(rawA);
+  const nb = normGroupClient(rawB);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const stripG = (v: string) =>
+    v
+      .replace(/\b(PUTRA|PUTRI|IKHWAN|AKHWAT)\b/g, '')
+      .replace(/\s*\.\s*/g, '.')
+      .replace(/^\.+|\.+$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const baseA = stripG(na);
+  const baseB = stripG(nb);
+  if (!baseA || !baseB) return false;
+  if (baseA === baseB) return true;
+  const numsA = (baseA.match(/\d+/g) || []).join('.');
+  const numsB = (baseB.match(/\d+/g) || []).join('.');
+  if (numsA !== numsB) return false;
+  if (/[A-Z]{3,}/.test(baseA) && /[A-Z]{3,}/.test(baseB)) {
+    return (
+      baseA.startsWith(baseB + ' ') ||
+      baseB.startsWith(baseA + ' ') ||
+      baseA.startsWith(baseB + '.') ||
+      baseB.startsWith(baseA + '.')
+    );
+  }
+  return false;
 }
 
 export function loadPersistedQuickGuru(fallback = ''): string {
   try {
-    const saved = localStorage.getItem(QUICK_GURU_KEY);
+    const saved = cleanGuruDisplayName(localStorage.getItem(QUICK_GURU_KEY));
     if (saved && !isAdminSuperName(saved)) return saved;
     if (saved && isAdminSuperName(saved)) {
       localStorage.removeItem(QUICK_GURU_KEY);
@@ -74,13 +155,15 @@ export function loadPersistedQuickGuru(fallback = ''): string {
   } catch {
     // Ignore
   }
-  return isAdminSuperName(fallback) ? '' : fallback;
+  const cleanFallback = cleanGuruDisplayName(fallback);
+  return isAdminSuperName(cleanFallback) ? '' : cleanFallback;
 }
 
 export function savePersistedQuickGuru(nama: string): void {
   try {
-    if (nama && !isAdminSuperName(nama)) {
-      localStorage.setItem(QUICK_GURU_KEY, nama);
+    const clean = cleanGuruDisplayName(nama);
+    if (clean && !isAdminSuperName(clean)) {
+      localStorage.setItem(QUICK_GURU_KEY, clean);
     } else {
       localStorage.removeItem(QUICK_GURU_KEY);
     }
@@ -187,7 +270,6 @@ export function saveSnapshotToLocalMirror(snap: Record<string, unknown> | null |
 
 let hydrationInFlight: Promise<boolean> | null = null;
 let hasHydratedInSession = false;
-let lastHydrationTimestamp = 0;
 
 export function getLocalMirrorSnapshot(): Record<string, unknown> | null {
   if (typeof window === 'undefined') return null;
@@ -202,13 +284,94 @@ export function getLocalMirrorSnapshot(): Record<string, unknown> | null {
   }
 }
 
+export function buildInstantBootstrapFromMirror(): BootstrapPayload | null {
+  const snap = getLocalMirrorSnapshot();
+  if (!snap) return null;
+  try {
+    const students = (Array.isArray(snap.students) ? snap.students : []) as Student[];
+    const teachers = (Array.isArray(snap.teachers) ? snap.teachers : []) as TeacherPublic[];
+    const rooms = (Array.isArray(snap.rooms) ? snap.rooms : []) as RoomInfo[];
+    const schedules = Array.isArray(snap.schedules) ? snap.schedules : [];
+    const ruanganUjian = (Array.isArray(snap.ruanganUjian) ? snap.ruanganUjian : []) as string[];
+    const attendanceLogs = Array.isArray(snap.attendanceLogs) ? snap.attendanceLogs : [];
+    const examLogs = Array.isArray(snap.examLogs) ? snap.examLogs : [];
+    const teacherAbsences = Array.isArray(snap.teacherAbsences) ? snap.teacherAbsences : [];
+    const pembinaanRecords = Array.isArray(snap.pembinaanRecords) ? snap.pembinaanRecords : [];
+    const attachments = Array.isArray(snap.attachments) ? snap.attachments : [];
+    const whatsappLogs = Array.isArray(snap.whatsappLogs) ? snap.whatsappLogs : [];
+
+    const sortNat = (arr: string[]) =>
+      Array.from(new Set(arr.filter((v) => Boolean(v) && v !== '-'))).sort((a, b) =>
+        a.localeCompare(b, 'id', { numeric: true })
+      );
+
+    const kelasPutra = sortNat(students.filter((s) => s.gender === 'Putra').map((s) => s.kelas));
+    const kelasPutri = sortNat(students.filter((s) => s.gender === 'Putri').map((s) => s.kelas));
+    const kamarPutra = sortNat([
+      ...students.filter((s) => s.gender === 'Putra').map((s) => s.kamar),
+      ...rooms.filter((r) => r.gender === 'Putra').map((r) => r.kamar),
+    ]);
+    const kamarPutri = sortNat([
+      ...students.filter((s) => s.gender === 'Putri').map((s) => s.kamar),
+      ...rooms.filter((r) => r.gender === 'Putri').map((r) => r.kamar),
+    ]);
+    const kelompokPutra = sortNat(
+      students.filter((s) => s.gender === 'Putra').map((s) => s.kelompokQuran)
+    );
+    const kelompokPutri = sortNat(
+      students.filter((s) => s.gender === 'Putri').map((s) => s.kelompokQuran)
+    );
+
+    const settings = (snap.settings || {}) as Record<string, unknown>;
+
+    return {
+      options: {
+        kelasPutra,
+        kelasPutri,
+        kamarPutra,
+        kamarPutri,
+        kelompokPutra,
+        kelompokPutri,
+        ruanganUjian: sortNat(ruanganUjian),
+      },
+      rooms,
+      teachers,
+      counts: {
+        students: students.length,
+        teachers: teachers.length,
+        rooms: rooms.length,
+        schedules: schedules.length,
+        ruanganUjian: ruanganUjian.length,
+        attendanceLogs: attendanceLogs.length,
+        examLogs: examLogs.length,
+        teacherAbsences: teacherAbsences.length,
+        pembinaanRecords: pembinaanRecords.length,
+        attachments: attachments.length,
+        whatsappLogs: whatsappLogs.length,
+        lastModifiedAt: (settings.lastModifiedAt as string) || new Date().toISOString(),
+        explicitEmpty: Boolean(settings.explicitEmpty),
+      },
+      quota: {
+        cacheHits: 1,
+        batchedWrites: 0,
+        savedPercentage: 98,
+        totalStudents: students.length,
+        gasBridgeConfigured: Boolean(settings.gasBridgeUrl),
+        lastSyncedAt: (settings.lastSyncedAt as string) || null,
+      },
+      scheduleApprovalRequired: Boolean(settings.scheduleApprovalRequired),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function ensureServerHydratedFromMirror(forceIfServerEmpty = false): Promise<boolean> {
   if (typeof window === 'undefined') return Promise.resolve(false);
-  const now = Date.now();
-  if (hasHydratedInSession && (!forceIfServerEmpty || now - lastHydrationTimestamp < 4000)) {
+  if (hydrationInFlight) return hydrationInFlight;
+  if (hasHydratedInSession && !forceIfServerEmpty) {
     return Promise.resolve(false);
   }
-  if (hydrationInFlight) return hydrationInFlight;
 
   hydrationInFlight = (async () => {
     try {
@@ -218,7 +381,6 @@ export function ensureServerHydratedFromMirror(forceIfServerEmpty = false): Prom
         return false;
       }
 
-      // If a valid non-empty mirror exists in localStorage, clear any stale explicitEmpty flag
       try {
         localStorage.removeItem(DB_EXPLICIT_EMPTY_KEY);
       } catch {
@@ -226,12 +388,15 @@ export function ensureServerHydratedFromMirror(forceIfServerEmpty = false): Prom
       }
 
       hasHydratedInSession = true;
-      lastHydrationTimestamp = Date.now();
       const restoreRes = await fetch('/api/system/restore-snapshot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ snapshot: mirrorSnap, mode: 'merge' }),
       });
+
+      if (restoreRes.ok && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pintar:data-restored'));
+      }
 
       return restoreRes.ok;
     } catch {
@@ -243,4 +408,5 @@ export function ensureServerHydratedFromMirror(forceIfServerEmpty = false): Prom
 
   return hydrationInFlight;
 }
+
 

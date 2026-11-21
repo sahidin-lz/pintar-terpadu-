@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type {
+  AcademicArchiveEntry,
   AnalyticsTerpadu,
   AttachmentCategory,
   AttendanceLog,
@@ -38,6 +39,7 @@ import type {
   RoomMapping,
   ScheduleClashDetail,
   ScheduleItem,
+  StatusKenaikanKelas,
   StatusTindakLanjut,
   Student,
   StudentFormEntry,
@@ -72,6 +74,7 @@ export interface DatabaseSchema {
   examLogs: ExamLog[];
   teacherAbsences: TeacherAbsenceLog[];
   pembinaanRecords: PembinaanRecord[];
+  academicArchives?: AcademicArchiveEntry[];
   attachments?: CloudAttachmentItem[];
   whatsappLogs?: WhatsAppLogEntry[];
   labkomBookings?: LabkomBooking[];
@@ -84,6 +87,7 @@ export interface DatabaseSchema {
     lastModifiedAt?: string | null;
     explicitEmpty?: boolean;
     labkomBookingsCleared?: boolean;
+    scheduleApprovalRequired?: boolean;
     whatsappConfig?: WhatsAppGatewayConfig;
     labkomBroadcastTemplate?: string;
     labkomTelegramToken?: string;
@@ -169,8 +173,22 @@ function normalizeStr(val: string): string {
     .replace(/\s+/g, ' ');
 }
 
+function cleanTeacherDisplayName(val?: string): string {
+  return String(val || '')
+    .replace(/\(\s*ADMIN\s+SUPER\s*\)/gi, '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toUpperCase();
+}
+
+function isPureGenericAdminName(val?: string): boolean {
+  const cleaned = cleanTeacherDisplayName(val);
+  return !cleaned || cleaned === 'ADMIN' || cleaned === 'ADMIN SUPER' || cleaned === 'ADMIN SIM';
+}
+
 function stripHonorificName(val?: string): string {
   const raw = String(val || '')
+    .replace(/\(\s*admin\s+super\s*\)/gi, '')
     .trim()
     .toLowerCase()
     .replace(/["'`]/g, '');
@@ -185,8 +203,8 @@ function stripHonorificName(val?: string): string {
 }
 
 function matchTeacherName(a?: string, b?: string): boolean {
-  const na = normalizeStr(a || '');
-  const nb = normalizeStr(b || '');
+  const na = normalizeStr(cleanTeacherDisplayName(a || ''));
+  const nb = normalizeStr(cleanTeacherDisplayName(b || ''));
   if (!na || !nb || na === '-' || nb === '-') return false;
   if (na === nb || na.includes(nb) || nb.includes(na)) return true;
   const ca = stripHonorificName(a);
@@ -456,15 +474,10 @@ class PintarStore {
   constructor() {
     try {
       this.db = this.loadFromDisk();
-      if (
-        this.db.students.length > 0 ||
-        this.db.schedules.length > 0 ||
-        this.db.rooms.length > 0
-      ) {
-        this.reconcileDatabaseRelations('1234');
-      }
+      this.reconcileDatabaseRelations('1234');
     } catch {
       this.db = createInitialDatabase();
+      this.reconcileDatabaseRelations('1234');
     }
   }
 
@@ -901,31 +914,115 @@ class PintarStore {
 
   public updateTeacherAccount(
     id: string,
-    updates: Partial<Pick<TeacherRecord, 'peran' | 'peranTambahan' | 'genderScope' | 'waliKelasOf' | 'kamarBinaan' | 'whatsapp' | 'pin'>>
+    updates: Partial<
+      Pick<
+        TeacherRecord,
+        | 'nama'
+        | 'peran'
+        | 'peranTambahan'
+        | 'genderScope'
+        | 'waliKelasOf'
+        | 'kamarBinaan'
+        | 'kelompokQuranBinaan'
+        | 'whatsapp'
+        | 'pin'
+      >
+    >
   ): TeacherPublic | null {
     const idx = this.db.teachers.findIndex((t) => t.id === id);
     if (idx < 0) return null;
     const prev = this.db.teachers[idx];
-    const nextPeran = updates.peran || prev.peran;
-    const nextExtra = updates.peranTambahan !== undefined ? updates.peranTambahan : prev.peranTambahan;
-    const nextWaliKelas =
-      updates.waliKelasOf !== undefined ? updates.waliKelasOf.toUpperCase() || undefined : prev.waliKelasOf;
-    const nextKamarBinaan =
+    const nextNama = updates.nama ? cleanTeacherDisplayName(updates.nama) || prev.nama : prev.nama;
+    const nextPeran: UserRole = updates.peran || prev.peran || 'Guru';
+    const rawExtra =
+      updates.peranTambahan !== undefined ? updates.peranTambahan : prev.peranTambahan || [];
+    const nextExtra = Array.from(
+      new Set(rawExtra.filter((r) => Boolean(r) && r !== nextPeran))
+    );
+    const allRoles = new Set<UserRole>([nextPeran, ...nextExtra]);
+
+    const hasWaliKelasRole = allRoles.has('Wali Kelas');
+    const hasAsramaRole =
+      allRoles.has('Musyrif') || allRoles.has('Musyrifah') || allRoles.has('Wali Asrama');
+    const hasQuranRole = allRoles.has('Pengampu Al-Quran');
+    const hasGuruWaliRole = allRoles.has('Guru Wali');
+
+    let nextWaliKelas =
+      updates.waliKelasOf !== undefined
+        ? updates.waliKelasOf.trim().toUpperCase() || undefined
+        : prev.waliKelasOf;
+    if (!hasWaliKelasRole) {
+      nextWaliKelas = undefined;
+    }
+
+    let nextKamarBinaan =
       updates.kamarBinaan !== undefined
-        ? updates.kamarBinaan.map((k) => k.trim()).filter(Boolean)
+        ? updates.kamarBinaan.map((k) => k.trim()).filter((k) => Boolean(k) && k !== '-')
         : prev.kamarBinaan;
+    if (!hasAsramaRole) {
+      nextKamarBinaan = [];
+    }
+
+    let nextKelompokQuran =
+      updates.kelompokQuranBinaan !== undefined
+        ? updates.kelompokQuranBinaan.map((k) => k.trim()).filter((k) => Boolean(k) && k !== '-')
+        : prev.kelompokQuranBinaan;
+    if (!hasQuranRole) {
+      nextKelompokQuran = [];
+    }
+
     const nextRec: TeacherRecord = {
       ...prev,
       ...updates,
+      nama: nextNama,
       peran: nextPeran,
       peranTambahan: nextExtra,
       jabatan: roleToJabatan(nextPeran, nextExtra),
       waliKelasOf: nextWaliKelas,
       kamarBinaan: nextKamarBinaan,
+      kelompokQuranBinaan: nextKelompokQuran,
     };
     this.db.teachers[idx] = nextRec;
 
-    if (nextKamarBinaan && nextKamarBinaan.length > 0) {
+    // Unlink student / room references if a role was removed from this teacher
+    if (!hasWaliKelasRole) {
+      for (const st of this.db.students) {
+        if (st.waliKelas && (matchTeacherName(st.waliKelas, prev.nama) || matchTeacherName(st.waliKelas, nextNama))) {
+          st.waliKelas = '';
+        }
+      }
+    }
+    if (!hasAsramaRole) {
+      for (const rm of this.db.rooms) {
+        if (rm.musyrif && (matchTeacherName(rm.musyrif, prev.nama) || matchTeacherName(rm.musyrif, nextNama))) {
+          rm.musyrif = '';
+        }
+      }
+      for (const st of this.db.students) {
+        if (st.musyrif && (matchTeacherName(st.musyrif, prev.nama) || matchTeacherName(st.musyrif, nextNama))) {
+          st.musyrif = '';
+        }
+      }
+    }
+    if (!hasQuranRole) {
+      for (const st of this.db.students) {
+        if (
+          st.pengampuQuran &&
+          (matchTeacherName(st.pengampuQuran, prev.nama) || matchTeacherName(st.pengampuQuran, nextNama))
+        ) {
+          st.pengampuQuran = '';
+        }
+      }
+    }
+    if (!hasGuruWaliRole) {
+      for (const st of this.db.students) {
+        if (st.guruWali && (matchTeacherName(st.guruWali, prev.nama) || matchTeacherName(st.guruWali, nextNama))) {
+          st.guruWali = '';
+        }
+      }
+    }
+
+    if (hasAsramaRole && nextKamarBinaan && nextKamarBinaan.length > 0) {
       for (const km of nextKamarBinaan) {
         const roomGender: Gender = nextRec.genderScope === 'Putri' ? 'Putri' : inferGender(km);
         const rm = this.db.rooms.find((x) => normalizeStr(x.kamar) === normalizeStr(km));
@@ -940,7 +1037,7 @@ class PintarStore {
       }
     }
 
-    if (nextWaliKelas) {
+    if (hasWaliKelasRole && nextWaliKelas) {
       for (const st of this.db.students) {
         if (st.kelas.toUpperCase() === nextWaliKelas.toUpperCase()) {
           st.waliKelas = nextRec.nama;
@@ -948,9 +1045,104 @@ class PintarStore {
       }
     }
 
+    if (hasQuranRole && nextKelompokQuran && nextKelompokQuran.length > 0) {
+      for (const klp of nextKelompokQuran) {
+        for (const st of this.db.students) {
+          if (matchGroupCode(st.kelompokQuran, klp)) {
+            st.pengampuQuran = nextRec.nama;
+          }
+        }
+      }
+    }
+
     this.batchedWrites++;
     this.persist();
     return { ...nextRec };
+  }
+
+  public syncAllTeacherRolesWithTemplate(): {
+    updatedCount: number;
+    totalTeachers: number;
+    teachers: TeacherPublic[];
+  } {
+    let updatedCount = 0;
+    for (const t of this.db.teachers) {
+      if (t.id === SUPER_ADMIN_ID || t.peran === 'Admin Super') continue;
+
+      const prevRoles = [t.peran, ...(t.peranTambahan || [])];
+      const hasAcademicSchedule = this.db.schedules.some(
+        (sc) => !isQuranScheduleItem(sc) && matchTeacherName(sc.guru, t.nama)
+      );
+      const hasQuranScheduleOrGroup =
+        this.db.schedules.some((sc) => isQuranScheduleItem(sc) && matchTeacherName(sc.guru, t.nama)) ||
+        (Array.isArray(t.kelompokQuranBinaan) &&
+          t.kelompokQuranBinaan.some((k) => Boolean(k) && k.trim() !== '-')) ||
+        this.db.students.some((st) => Boolean(st.pengampuQuran) && matchTeacherName(st.pengampuQuran, t.nama));
+
+      const hasWaliKelasAssignment =
+        Boolean(t.waliKelasOf && t.waliKelasOf.trim() !== '-') ||
+        this.db.students.some((st) => Boolean(st.waliKelas) && matchTeacherName(st.waliKelas, t.nama));
+
+      const hasAsramaAssignment =
+        (Array.isArray(t.kamarBinaan) && t.kamarBinaan.some((k) => Boolean(k) && k.trim() !== '-')) ||
+        this.db.rooms.some((rm) => Boolean(rm.musyrif) && matchTeacherName(rm.musyrif, t.nama)) ||
+        this.db.students.some((st) => Boolean(st.musyrif) && matchTeacherName(st.musyrif, t.nama));
+
+      const hasGuruWaliAssignment = this.db.students.some(
+        (st) => Boolean(st.guruWali) && matchTeacherName(st.guruWali, t.nama)
+      );
+
+      const nextRoles: UserRole[] = [];
+      const addUniqueRole = (r: UserRole) => {
+        if (!nextRoles.includes(r)) nextRoles.push(r);
+      };
+
+      if (prevRoles.includes('Pimpinan')) addUniqueRole('Pimpinan');
+      if (prevRoles.includes('Admin SIM')) addUniqueRole('Admin SIM');
+
+      if (hasAcademicSchedule) addUniqueRole('Guru');
+      if (hasWaliKelasAssignment) addUniqueRole('Wali Kelas');
+      if (hasAsramaAssignment) {
+        const asramaRole: UserRole =
+          t.genderScope === 'Putri'
+            ? 'Musyrifah'
+            : prevRoles.includes('Musyrifah')
+            ? 'Musyrifah'
+            : 'Musyrif';
+        addUniqueRole(asramaRole);
+      }
+      if (hasQuranScheduleOrGroup) addUniqueRole('Pengampu Al-Quran');
+      if (hasGuruWaliAssignment) addUniqueRole('Guru Wali');
+
+      // Default to 'Guru' (jadwal saja) if no special role is backed by template/schedule
+      if (nextRoles.length === 0) {
+        addUniqueRole('Guru');
+      }
+
+      if (!hasWaliKelasAssignment) t.waliKelasOf = undefined;
+      if (!hasAsramaAssignment) t.kamarBinaan = [];
+      if (!hasQuranScheduleOrGroup) t.kelompokQuranBinaan = [];
+
+      const nextPrimary = nextRoles[0];
+      const nextExtras = nextRoles.slice(1);
+      const prevKey = prevRoles.join('|');
+      const nextKey = [nextPrimary, ...nextExtras].join('|');
+
+      if (prevKey !== nextKey) {
+        t.peran = nextPrimary;
+        t.peranTambahan = nextExtras;
+        t.jabatan = roleToJabatan(nextPrimary, nextExtras);
+        updatedCount++;
+      }
+    }
+
+    this.batchedWrites++;
+    this.persist();
+    return {
+      updatedCount,
+      totalTeachers: this.getPublicTeachers().length,
+      teachers: this.getPublicTeachers(),
+    };
   }
 
   // ==============================================================
@@ -972,16 +1164,31 @@ class PintarStore {
   }
 
   private parseJpSlots(jamKe: string): number[] {
-    const clean = String(jamKe || '').trim();
+    const clean = String(jamKe || '').trim().toUpperCase();
     if (!clean) return [];
+
+    // Support named Halaqah Al-Qur'an sessions (Ba'da Subuh, Dhuha, Ba'da Dzuhur, Ba'da Ashar, Ba'da Maghrib/Isya)
+    if (clean.includes('SUBUH')) return [101];
+    if (clean.includes('DHUHA') || clean.includes('PAGI')) return [102];
+    if (clean.includes('DZUHUR') || clean.includes('ZUHUR') || clean.includes('SIANG')) return [103];
+    if (clean.includes('ASHAR') || clean.includes('ASAR') || clean.includes('SORE')) return [104];
+    if (clean.includes('MAGHRIB') || clean.includes('ISYA') || clean.includes('MALAM')) return [105];
+
     const parts = clean
       .split(/[-–,]/)
       .map((p) => Number.parseInt(p.replace(/[^\d]/g, ''), 10))
       .filter((n) => Number.isFinite(n));
-    if (parts.length === 0) return [];
+    if (parts.length === 0) {
+      // Hash custom text session into a deterministic slot ID >= 200
+      let hash = 200;
+      for (let i = 0; i < clean.length; i++) {
+        hash = (hash * 31 + clean.charCodeAt(i)) % 900 + 200;
+      }
+      return [hash];
+    }
     if (parts.length === 1) return [parts[0]];
     const start = Math.max(1, Math.min(parts[0], parts[1]));
-    const end = Math.min(12, Math.max(parts[0], parts[1]));
+    const end = Math.min(14, Math.max(parts[0], parts[1]));
     const slots: number[] = [];
     for (let i = start; i <= end; i++) slots.push(i);
     return slots;
@@ -995,7 +1202,7 @@ class PintarStore {
     jamKe: string;
   }): ScheduleClashDetail {
     const reqGuru = normalizeStr(payload.guru);
-    const reqHari = normalizeStr(payload.hari);
+    const reqHari = normalizeDayName(payload.hari);
     const reqKelas = normalizeStr(payload.kelas);
     const reqSlots = this.parseJpSlots(payload.jamKe);
 
@@ -1005,31 +1212,31 @@ class PintarStore {
 
     for (const existing of this.db.schedules) {
       if (payload.excludeId && existing.id === payload.excludeId) continue;
-      if (normalizeStr(existing.hari) !== reqHari) continue;
+      if (normalizeDayName(existing.hari) !== reqHari) continue;
 
       const exSlots = this.parseJpSlots(existing.jamKe);
       const overlap = reqSlots.filter((jp) => exSlots.includes(jp));
       if (overlap.length === 0) continue;
 
-      // 1. Teacher Clash: Same teacher assigned to a different class at the same day & JP
-      if (normalizeStr(existing.guru) === reqGuru && normalizeStr(existing.kelas) !== reqKelas) {
+      // 1. Teacher Clash: Same teacher already has a schedule at the same day & JP/Session (either same or different class)
+      if (matchTeacherName(existing.guru, payload.guru)) {
         return {
           hasClash: true,
           clashType: 'GURU',
           conflictingSchedule: existing,
           overlappingJp: overlap,
-          message: `Bentrok Jadwal Guru: ${existing.guru} sudah terjadwal mengajar ${existing.mapel} di kelas ${existing.kelas} pada hari ${existing.hari} Jam ke-${existing.jamKe} (irisan JP: ${overlap.join(', ')}).`,
+          message: `Bentrok Jadwal Guru: ${existing.guru} sudah terjadwal mengajar ${existing.mapel} di ${existing.kelas} pada hari ${existing.hari} Jam/Sesi ${existing.jamKe}.`,
         };
       }
 
-      // 2. Class Clash: Same class already has another teacher/subject at the same day & JP
-      if (normalizeStr(existing.kelas) === reqKelas && normalizeStr(existing.guru) !== reqGuru) {
+      // 2. Class/Halaqah Clash: Same class/halaqah already has another teacher at the same day & JP/Session
+      if (reqKelas && (normalizeStr(existing.kelas) === reqKelas || matchGroupCode(existing.kelas, payload.kelas))) {
         return {
           hasClash: true,
           clashType: 'KELAS',
           conflictingSchedule: existing,
           overlappingJp: overlap,
-          message: `Bentrok Ruang/Kelas: Kelas ${existing.kelas} sudah memiliki jadwal ${existing.mapel} bersama ${existing.guru} pada hari ${existing.hari} Jam ke-${existing.jamKe} (irisan JP: ${overlap.join(', ')}).`,
+          message: `Bentrok Kelas / Halaqah: ${existing.kelas} sedang diajar oleh ${existing.guru} (${existing.mapel}) pada hari ${existing.hari} Jam/Sesi ${existing.jamKe}.`,
         };
       }
     }
@@ -1043,22 +1250,32 @@ class PintarStore {
     kelas: string;
     mapel: string;
     jamKe: string;
+    ruang?: string;
     gender: Gender;
     kategori?: 'Akademik' | 'Al-Quran';
+    approvalStatus?: 'APPROVED' | 'PENDING_APPROVAL';
     isPerubahan?: boolean;
     catatanPerubahan?: string;
   }): ScheduleItem {
+    this.db.settings.scheduleApprovalRequired = false;
+    const cleanGuru = cleanTeacherDisplayName(payload.guru) || payload.guru.trim().toUpperCase();
     const item: ScheduleItem = {
       id: `J_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      guru: payload.guru.trim().toUpperCase(),
-      hari: payload.hari.trim().toUpperCase(),
+      guru: cleanGuru,
+      hari: normalizeDayName(payload.hari) || payload.hari.trim().toUpperCase(),
       kelas: payload.kelas.trim().toUpperCase(),
       mapel: payload.mapel.trim().toUpperCase(),
       jamKe: payload.jamKe.trim(),
+      ruang: payload.ruang?.trim() || '',
       gender: payload.gender,
       kategori:
         payload.kategori ||
-        (payload.mapel.toUpperCase().includes('QUR') || payload.mapel.toUpperCase().includes('TAHFIDZ') ? 'Al-Quran' : 'Akademik'),
+        (payload.mapel.toUpperCase().includes('QUR') ||
+        payload.mapel.toUpperCase().includes('TAHFIDZ') ||
+        payload.mapel.toUpperCase().includes('HALAQAH')
+          ? 'Al-Quran'
+          : 'Akademik'),
+      approvalStatus: 'APPROVED',
       isPerubahan: Boolean(payload.isPerubahan),
       catatanPerubahan: payload.catatanPerubahan?.trim() || '',
       updatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
@@ -1076,26 +1293,58 @@ class PintarStore {
   ): ScheduleItem | null {
     const idx = this.db.schedules.findIndex((s) => s.id === id);
     if (idx < 0) return null;
+    this.db.settings.scheduleApprovalRequired = false;
     const current = this.db.schedules[idx];
     const updated: ScheduleItem = {
       ...current,
       ...payload,
-      guru: payload.guru ? payload.guru.trim().toUpperCase() : current.guru,
-      hari: payload.hari ? payload.hari.trim().toUpperCase() : current.hari,
+      guru: payload.guru ? cleanTeacherDisplayName(payload.guru) || payload.guru.trim().toUpperCase() : current.guru,
+      hari: payload.hari ? normalizeDayName(payload.hari) || payload.hari.trim().toUpperCase() : current.hari,
       kelas: payload.kelas ? payload.kelas.trim().toUpperCase() : current.kelas,
       mapel: payload.mapel ? payload.mapel.trim().toUpperCase() : current.mapel,
+      ruang: payload.ruang !== undefined ? payload.ruang.trim() : current.ruang,
+      approvalStatus: 'APPROVED',
+      isPerubahan: true,
       updatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
     };
     this.db.schedules[idx] = updated;
+    this.reconcileDatabaseRelations();
     this.batchedWrites++;
     this.persist();
     return updated;
+  }
+
+  public approveSchedule(id: string): ScheduleItem | null {
+    const idx = this.db.schedules.findIndex((s) => s.id === id);
+    if (idx < 0) return null;
+    this.db.schedules[idx] = {
+      ...this.db.schedules[idx],
+      approvalStatus: 'APPROVED',
+      updatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    };
+    this.batchedWrites++;
+    this.persist();
+    return this.db.schedules[idx];
+  }
+
+  public setScheduleApprovalMode(_required: boolean): { scheduleApprovalRequired: boolean } {
+    // Mode ✓ Berlaku Otomatis is permanently active by default
+    this.db.settings.scheduleApprovalRequired = false;
+    for (const s of this.db.schedules) {
+      if (s.approvalStatus === 'PENDING_APPROVAL') {
+        s.approvalStatus = 'APPROVED';
+      }
+    }
+    this.batchedWrites++;
+    this.persist();
+    return { scheduleApprovalRequired: false };
   }
 
   public deleteSchedule(id: string): boolean {
     const before = this.db.schedules.length;
     this.db.schedules = this.db.schedules.filter((s) => s.id !== id);
     if (this.db.schedules.length !== before) {
+      this.reconcileDatabaseRelations();
       this.batchedWrites++;
       this.persist();
       return true;
@@ -1107,18 +1356,24 @@ class PintarStore {
     return [...this.db.rooms].sort((a, b) => a.kamar.localeCompare(b.kamar));
   }
 
-  public assignRoomMusyrif(payload: { kamar: string; musyrif: string; gender: Gender }): RoomMapping {
+  public assignRoomMusyrif(payload: { kamar: string; musyrif: string; gender: Gender; kapasitas?: number }): RoomMapping {
     const kamarClean = payload.kamar.trim();
     const musyrifClean = payload.musyrif.trim().toUpperCase();
     const existing = this.db.rooms.find((r) => normalizeStr(r.kamar) === normalizeStr(kamarClean));
     if (existing) {
       existing.musyrif = musyrifClean;
       existing.gender = payload.gender;
+      if (payload.kapasitas) existing.kapasitas = payload.kapasitas;
       this.batchedWrites++;
       this.persist();
       return existing;
     }
-    const created: RoomMapping = { kamar: kamarClean, musyrif: musyrifClean, gender: payload.gender };
+    const created: RoomMapping = {
+      kamar: kamarClean,
+      musyrif: musyrifClean,
+      gender: payload.gender,
+      kapasitas: payload.kapasitas || 16,
+    };
     this.db.rooms.push(created);
     this.batchedWrites++;
     this.persist();
@@ -1134,6 +1389,400 @@ class PintarStore {
       return true;
     }
     return false;
+  }
+
+  // ==============================================================
+  // WALI ASRAMA (MUSYRIF): SOFT DETACH, ANTI-DUPLICATION CLAIM & TEMPLATE ADMIN
+  // ==============================================================
+  public detachStudentFromRoom(payload: {
+    studentIdOrName: string;
+    musyrif?: string;
+    alasan?: string;
+  }): { ok: boolean; student?: Student; message: string } {
+    const target = normalizeStr(payload.studentIdOrName);
+    const st = this.db.students.find(
+      (s) => s.id === payload.studentIdOrName || normalizeStr(s.nama) === target,
+    );
+    if (!st) {
+      return { ok: false, message: 'Data siswa tidak ditemukan di sistem.' };
+    }
+    const oldKamar = st.kamar && st.kamar !== 'BELUM DAPAT KAMAR' ? st.kamar : st.kamarSebelumnya || '-';
+    st.kamarSebelumnya = oldKamar;
+    st.kamar = 'BELUM DAPAT KAMAR';
+    st.musyrif = '';
+    if (payload.alasan) {
+      st.catatanKamar = payload.alasan.trim();
+    }
+    this.batchedWrites++;
+    this.persist();
+    return {
+      ok: true,
+      student: st,
+      message: `${st.nama} dilepas dari Kamar ${oldKamar} ke daftar "Siswa Belum Dapat Kamar" (Soft Detach). Seluruh riwayat mutabaah & presensi tetap tersimpan aman.`,
+    };
+  }
+
+  public updateRoomMemberDetails(payload: {
+    studentIdOrName: string;
+    posisiRanjang?: string;
+    catatanKamar?: string;
+    prioritas?: PrioritasPembinaan;
+    kamar?: string;
+    musyrif?: string;
+  }): { ok: boolean; student?: Student; message: string } {
+    const target = normalizeStr(payload.studentIdOrName);
+    const st = this.db.students.find(
+      (s) => s.id === payload.studentIdOrName || normalizeStr(s.nama) === target,
+    );
+    if (!st) return { ok: false, message: 'Data siswa tidak ditemukan.' };
+    if (payload.posisiRanjang !== undefined) st.posisiRanjang = payload.posisiRanjang.trim();
+    if (payload.catatanKamar !== undefined) st.catatanKamar = payload.catatanKamar.trim();
+    if (payload.prioritas !== undefined) st.prioritas = payload.prioritas;
+    if (payload.kamar !== undefined && payload.kamar.trim()) st.kamar = payload.kamar.trim();
+    if (payload.musyrif !== undefined) st.musyrif = payload.musyrif.trim().toUpperCase();
+    this.batchedWrites++;
+    this.persist();
+    return {
+      ok: true,
+      student: st,
+      message: `Data anggota kamar ${st.nama} berhasil diperbarui.`,
+    };
+  }
+
+  public claimStudentsToRoom(payload: {
+    musyrif: string;
+    targetKamar: string;
+    gender?: Gender;
+    studentIdsOrNames: string[];
+    allowAdminOverride?: boolean;
+  }): {
+    ok: boolean;
+    claimedCount: number;
+    skippedLocked: Array<{ nama: string; kamar: string; musyrif: string }>;
+    message: string;
+  } {
+    const cleanMusyrif = payload.musyrif.trim().toUpperCase();
+    const cleanKamar = payload.targetKamar.trim();
+    if (!cleanMusyrif || !cleanKamar) {
+      return {
+        ok: false,
+        claimedCount: 0,
+        skippedLocked: [],
+        message: 'Nama Musyrif dan Kamar Tujuan wajib dipilih.',
+      };
+    }
+
+    const keys = new Set(payload.studentIdsOrNames.map((x) => normalizeStr(x)));
+    let claimedCount = 0;
+    const skippedLocked: Array<{ nama: string; kamar: string; musyrif: string }> = [];
+
+    for (const st of this.db.students) {
+      if (!keys.has(normalizeStr(st.id)) && !keys.has(normalizeStr(st.nama))) continue;
+
+      const isUnassigned =
+        !st.kamar ||
+        st.kamar === '-' ||
+        st.kamar.toUpperCase().includes('BELUM') ||
+        st.kamar.toUpperCase() === 'KOSONG';
+      const isAlreadyInMyRoom = matchGroupCode(st.kamar, cleanKamar);
+
+      // Anti-duplication guard: Cannot claim a student who is already locked in another Musyrif's room unless detached first or Admin override
+      if (!isUnassigned && !isAlreadyInMyRoom && !payload.allowAdminOverride) {
+        skippedLocked.push({
+          nama: st.nama,
+          kamar: st.kamar,
+          musyrif: st.musyrif || 'Musyrif Lain',
+        });
+        continue;
+      }
+
+      st.kamar = cleanKamar;
+      st.musyrif = cleanMusyrif;
+      if (!st.posisiRanjang) {
+        st.posisiRanjang = `Ranjang ${claimedCount + 1}`;
+      }
+      claimedCount++;
+    }
+
+    // Ensure room mapping exists
+    if (claimedCount > 0) {
+      this.assignRoomMusyrif({
+        kamar: cleanKamar,
+        musyrif: cleanMusyrif,
+        gender: payload.gender || (cleanKamar.toUpperCase().includes('PUTRI') ? 'Putri' : 'Putra'),
+      });
+      this.batchedWrites++;
+      this.persist();
+    }
+
+    const lockedNote =
+      skippedLocked.length > 0
+        ? ` (${skippedLocked.length} siswa dilewati karena sudah terkunci di kamar Musyrif lain).`
+        : '';
+
+    return {
+      ok: claimedCount > 0 || skippedLocked.length === 0,
+      claimedCount,
+      skippedLocked,
+      message:
+        claimedCount > 0
+          ? `Berhasil mengambil ${claimedCount} siswa ke Kamar ${cleanKamar} (${cleanMusyrif}).${lockedNote}`
+          : `Tidak ada siswa yang dapat diambil.${lockedNote}`,
+    };
+  }
+
+  public applyRoomSemesterTransition(payload: {
+    musyrif: string;
+    targetKamar: string;
+    mode: 'TEMPLATE_ADMIN' | 'RELEASE_ROOM_TO_POOL';
+  }): { ok: boolean; affectedCount: number; message: string } {
+    const cleanMusyrif = payload.musyrif.trim().toUpperCase();
+    const cleanKamar = payload.targetKamar.trim();
+
+    if (payload.mode === 'RELEASE_ROOM_TO_POOL') {
+      let released = 0;
+      for (const st of this.db.students) {
+        const inRoom =
+          cleanKamar && cleanKamar !== 'SEMUA'
+            ? matchGroupCode(st.kamar, cleanKamar)
+            : st.musyrif && matchTeacherName(st.musyrif, cleanMusyrif);
+        if (inRoom && st.kamar !== 'BELUM DAPAT KAMAR') {
+          st.kamarSebelumnya = st.kamar;
+          st.kamar = 'BELUM DAPAT KAMAR';
+          st.musyrif = '';
+          released++;
+        }
+      }
+      this.batchedWrites++;
+      this.persist();
+      return {
+        ok: true,
+        affectedCount: released,
+        message: `${released} siswa dilepas ke daftar "Siswa Belum Dapat Kamar" untuk pengisian kamar semester baru. Riwayat mutabaah semester lama tetap aman.`,
+      };
+    }
+
+    // Mode TEMPLATE_ADMIN: Restore/sync students whose kamarSebelumnya matches this room or assign room musyrif
+    let synced = 0;
+    for (const st of this.db.students) {
+      if (
+        (st.kamar === 'BELUM DAPAT KAMAR' &&
+          st.kamarSebelumnya &&
+          (cleanKamar === 'SEMUA' || matchGroupCode(st.kamarSebelumnya, cleanKamar))) ||
+        (cleanKamar !== 'SEMUA' && matchGroupCode(st.kamar, cleanKamar))
+      ) {
+        if (st.kamar === 'BELUM DAPAT KAMAR' && st.kamarSebelumnya) {
+          st.kamar = st.kamarSebelumnya;
+        }
+        st.musyrif = cleanMusyrif;
+        if (!st.posisiRanjang) {
+          st.posisiRanjang = `Ranjang ${synced + 1}`;
+        }
+        synced++;
+      }
+    }
+    this.batchedWrites++;
+    this.persist();
+    return {
+      ok: true,
+      affectedCount: synced,
+      message: `Mode Template Admin diterapkan: ${synced} siswa pada ${cleanKamar === 'SEMUA' ? 'seluruh kamar binaan' : `Kamar ${cleanKamar}`} telah disinkronkan dengan penempatan Admin.`,
+    };
+  }
+
+  // ==============================================================
+  // WALI KELAS: SOFT DETACH KELAS, AMBIL SISWA & KENAIKAN KELAS + ARSIP OTOMATIS
+  // ==============================================================
+  public detachStudentFromClass(payload: {
+    studentIdOrName: string;
+    alasan?: string;
+  }): { ok: boolean; student?: Student; message: string } {
+    const target = normalizeStr(payload.studentIdOrName);
+    const st = this.db.students.find(
+      (s) => s.id === payload.studentIdOrName || normalizeStr(s.nama) === target,
+    );
+    if (!st) return { ok: false, message: 'Data siswa tidak ditemukan.' };
+    const oldKelas = st.kelas;
+    st.kelas = 'BELUM ADA KELAS';
+    st.waliKelas = '';
+    if (payload.alasan) {
+      st.catatanRaporWali = payload.alasan.trim();
+    }
+    this.batchedWrites++;
+    this.persist();
+    return {
+      ok: true,
+      student: st,
+      message: `${st.nama} dikeluarkan dari Kelas ${oldKelas} ke daftar "Belum Ada Kelas" (Soft Detach). Seluruh riwayat nilai & absensi tetap tersimpan aman.`,
+    };
+  }
+
+  public claimStudentsToClass(payload: {
+    waliKelas: string;
+    targetKelas: string;
+    studentIdsOrNames: string[];
+  }): { ok: boolean; claimedCount: number; message: string } {
+    const cleanWali = payload.waliKelas.trim().toUpperCase();
+    const cleanKelas = payload.targetKelas.trim().toUpperCase();
+    if (!cleanKelas) {
+      return { ok: false, claimedCount: 0, message: 'Kelas tujuan wajib dipilih.' };
+    }
+    const keys = new Set(payload.studentIdsOrNames.map((x) => normalizeStr(x)));
+    let claimed = 0;
+    for (const st of this.db.students) {
+      if (!keys.has(normalizeStr(st.id)) && !keys.has(normalizeStr(st.nama))) continue;
+      st.kelas = cleanKelas;
+      if (cleanWali) st.waliKelas = cleanWali;
+      claimed++;
+    }
+    this.batchedWrites++;
+    this.persist();
+    return {
+      ok: true,
+      claimedCount: claimed,
+      message: `Berhasil memasukkan ${claimed} siswa ke Kelas ${cleanKelas}.`,
+    };
+  }
+
+  public promoteStudentsWithArchive(payload: {
+    waliKelas: string;
+    tahunAjaranLama?: string;
+    tahunAjaranBaru?: string;
+    semester?: string;
+    promotions: Array<{
+      studentIdOrName: string;
+      statusKenaikan: StatusKenaikanKelas;
+      targetKelas: string;
+      ringkasanNilai?: string;
+      catatanAkhir?: string;
+    }>;
+  }): {
+    ok: boolean;
+    promotedCount: number;
+    archivedEntries: AcademicArchiveEntry[];
+    message: string;
+  } {
+    if (!Array.isArray(payload.promotions) || payload.promotions.length === 0) {
+      return {
+        ok: false,
+        promotedCount: 0,
+        archivedEntries: [],
+        message: 'Pilih minimal 1 siswa untuk diproses kenaikan kelasnya.',
+      };
+    }
+
+    if (!this.db.academicArchives) {
+      this.db.academicArchives = [];
+    }
+
+    const taLama = (payload.tahunAjaranLama || 'TA 2026/2027').trim();
+    const taBaru = (payload.tahunAjaranBaru || 'TA 2027/2028').trim();
+    const sem = (payload.semester || 'Semester Genap (Akhir Tahun)').trim();
+    const cleanWali = (payload.waliKelas || 'WALI KELAS').trim().toUpperCase();
+    const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 19);
+
+    const archivedEntries: AcademicArchiveEntry[] = [];
+    let promotedCount = 0;
+
+    for (const item of payload.promotions) {
+      const key = normalizeStr(item.studentIdOrName);
+      const st = this.db.students.find(
+        (s) => s.id === item.studentIdOrName || normalizeStr(s.nama) === key,
+      );
+      if (!st) continue;
+
+      const kelasLama = st.kelas;
+      const logs = this.db.attendanceLogs.filter((l) => normalizeStr(l.namaSiswa) === normalizeStr(st.nama));
+      const akLogs = logs.filter((l) => l.jenisPresensi === 'Belajar');
+      const asrLogs = logs.filter((l) => l.jenisPresensi === 'Asrama');
+      const qrLogs = logs.filter((l) => l.jenisPresensi === 'Al-Quran');
+      const pctOf = (arr: AttendanceLog[]) =>
+        arr.length === 0
+          ? 100
+          : Math.round((arr.filter((l) => l.status === 'H' || l.status === 'T').length / arr.length) * 100);
+
+      const pb = this.db.pembinaanRecords.filter((p) => normalizeStr(p.namaSantri) === normalizeStr(st.nama));
+      const wajibKeys: Array<keyof IbadahChecklist> = ['subuh', 'dzuhur', 'ashar', 'maghrib', 'isya'];
+      let wDone = 0;
+      for (const r of pb) {
+        wDone += wajibKeys.filter((k) => r.ibadah[k]).length;
+      }
+      const wajibPct = pb.length > 0 ? Math.round((wDone / (pb.length * 5)) * 100) : 100;
+      const netPoin = pb.reduce((acc, r) => acc + r.poin, 0);
+
+      let nextKelas = (item.targetKelas || '').trim().toUpperCase();
+      if (item.statusKenaikan === 'Tinggal Kelas' && !nextKelas) {
+        nextKelas = kelasLama;
+      } else if (item.statusKenaikan === 'Lulus' && !nextKelas) {
+        nextKelas = 'ALUMNI / LULUS';
+      } else if (item.statusKenaikan === 'Pindah' && !nextKelas) {
+        nextKelas = 'PINDAH / MUTASI KELUAR';
+      } else if (!nextKelas) {
+        nextKelas = kelasLama.replace(/^10\b/, '11').replace(/^11\b/, '12');
+      }
+
+      // 1. Lock historical data in AcademicArchiveEntry
+      const archive: AcademicArchiveEntry = {
+        id: `ARC_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+        archivedAt: nowStr,
+        tahunAjaranLama: taLama,
+        tahunAjaranBaru: taBaru,
+        semester: sem,
+        waliKelas: cleanWali,
+        studentId: st.id,
+        nis: st.nis || st.id,
+        namaSantri: st.nama,
+        gender: st.gender,
+        kelasLama,
+        kelasBaru: nextKelas,
+        statusKenaikan: item.statusKenaikan,
+        ringkasanNilai: item.ringkasanNilai || st.ringkasanNilaiRapor || 'Tuntas KKM (Rapor Lengkap)',
+        persenHadirAkademik: pctOf(akLogs),
+        persenHadirAsrama: pctOf(asrLogs),
+        persenHadirQuran: pctOf(qrLogs),
+        totalSakit: logs.filter((l) => l.status === 'S').length,
+        totalIzin: logs.filter((l) => l.status === 'I').length,
+        totalAlfa: logs.filter((l) => l.status === 'A').length,
+        skorIbadahWajibPct: wajibPct,
+        netPoinKarakter: netPoin,
+        totalCatatanPembinaan: pb.length,
+        catatanAkhirWali:
+          item.catatanAkhir ||
+          st.catatanRaporWali ||
+          `Arsip ${sem} (${taLama}) dikunci otomatis saat proses ${item.statusKenaikan} ke ${nextKelas}.`,
+        locked: true,
+      };
+      this.db.academicArchives.unshift(archive);
+      archivedEntries.push(archive);
+
+      // 2. Move student to new class for the next academic year
+      st.statusKenaikan = item.statusKenaikan;
+      st.kelasTujuanKenaikan = nextKelas;
+      if (item.ringkasanNilai) st.ringkasanNilaiRapor = item.ringkasanNilai;
+      if (item.catatanAkhir) st.catatanRaporWali = item.catatanAkhir;
+      st.kelas = nextKelas;
+
+      const targetWali = this.db.teachers.find(
+        (t) => t.waliKelasOf && matchGroupCode(t.waliKelasOf, nextKelas),
+      );
+      if (targetWali) {
+        st.waliKelas = targetWali.nama;
+      }
+
+      promotedCount++;
+    }
+
+    if (promotedCount > 0) {
+      this.batchedWrites++;
+      this.persist();
+    }
+
+    return {
+      ok: promotedCount > 0,
+      promotedCount,
+      archivedEntries,
+      message: `Proses Kenaikan Kelas berhasil! ${promotedCount} siswa diproses ke tingkat/status baru dan data nilai/absensi di kelas lama telah dikunci sebagai Arsip Riwayat (${taLama}).`,
+    };
   }
 
   // ==============================================================
@@ -1525,12 +2174,16 @@ class PintarStore {
       username?: string;
       pin?: string;
     }>;
+    strictTemplateRoles?: boolean;
   }) {
     let added = 0;
     let updated = 0;
+    const isAsramaRole = (role: UserRole) =>
+      role === 'Musyrif' || role === 'Musyrifah' || role === 'Wali Asrama';
     for (const r of payload.rows) {
-      const cleanNama = r.nama.trim().toUpperCase();
-      if (!cleanNama || cleanNama.includes('ADMIN SUPER') || r.peran === 'Admin Super') continue;
+      const cleanNama = cleanTeacherDisplayName(r.nama);
+      if (!cleanNama || isPureGenericAdminName(cleanNama)) continue;
+      const effectivePeran: UserRole = r.peran === 'Admin Super' ? 'Guru' : r.peran;
       const existing = this.db.teachers.find(
         (t) =>
           t.id !== SUPER_ADMIN_ID &&
@@ -1541,18 +2194,47 @@ class PintarStore {
               normalizeStr(t.username) === normalizeStr(r.username))),
       );
       if (existing) {
-        const extras = new Set<UserRole>(existing.peranTambahan || []);
-        (r.peranTambahan || []).forEach((p) => extras.add(p));
-        if (existing.peran && existing.peran !== r.peran) {
-          extras.add(existing.peran);
-          extras.add(r.peran);
-          if (existing.peran === 'Guru') {
-            existing.peran = r.peran;
-          }
+        if (payload.strictTemplateRoles) {
+          existing.peran = effectivePeran;
+          const strictExtras = Array.from(
+            new Set(
+              (r.peranTambahan || []).filter(
+                (p) =>
+                  Boolean(p) &&
+                  p !== effectivePeran &&
+                  p !== 'Admin Super' &&
+                  !(isAsramaRole(p) && isAsramaRole(effectivePeran))
+              )
+            )
+          );
+          existing.peranTambahan = strictExtras.length > 0 ? strictExtras : [];
         } else {
-          existing.peran = r.peran;
+          const extras = new Set<UserRole>(existing.peranTambahan || []);
+          (r.peranTambahan || []).forEach((p) => {
+            if (p !== 'Admin Super') extras.add(p);
+          });
+          if (existing.peran && existing.peran !== effectivePeran) {
+            if (!(isAsramaRole(existing.peran) && isAsramaRole(effectivePeran))) {
+              extras.add(existing.peran);
+            }
+            if (existing.peran === 'Guru') {
+              existing.peran = effectivePeran;
+            } else {
+              extras.add(effectivePeran);
+            }
+          } else {
+            existing.peran = effectivePeran;
+          }
+          extras.delete(existing.peran);
+          if (isAsramaRole(existing.peran)) {
+            extras.delete('Wali Asrama');
+            extras.delete('Musyrif');
+            extras.delete('Musyrifah');
+          } else if (extras.has('Musyrif') || extras.has('Musyrifah')) {
+            extras.delete('Wali Asrama');
+          }
+          existing.peranTambahan = extras.size > 0 ? Array.from(extras) : [];
         }
-        existing.peranTambahan = extras.size > 0 ? Array.from(extras) : undefined;
         existing.jabatan = roleToJabatan(existing.peran, existing.peranTambahan);
         if (existing.genderScope !== r.genderScope && existing.genderScope !== 'Semua') {
           existing.genderScope = 'Semua';
@@ -1560,16 +2242,28 @@ class PintarStore {
           existing.genderScope = r.genderScope;
         }
         if (r.waliKelasOf && r.waliKelasOf !== '-') existing.waliKelasOf = r.waliKelasOf;
+        else if (payload.strictTemplateRoles) existing.waliKelasOf = undefined;
+
         if (r.kamarBinaan && r.kamarBinaan.length > 0) {
-          const mergedRooms = Array.from(new Set([...(existing.kamarBinaan || []), ...r.kamarBinaan]));
+          const mergedRooms = payload.strictTemplateRoles
+            ? Array.from(new Set(r.kamarBinaan))
+            : Array.from(new Set([...(existing.kamarBinaan || []), ...r.kamarBinaan]));
           existing.kamarBinaan = mergedRooms;
+        } else if (payload.strictTemplateRoles) {
+          existing.kamarBinaan = [];
         }
+
         if (r.kelompokQuranBinaan && r.kelompokQuranBinaan.length > 0) {
-          const mergedKlp = Array.from(
-            new Set([...(existing.kelompokQuranBinaan || []), ...r.kelompokQuranBinaan]),
-          );
+          const mergedKlp = payload.strictTemplateRoles
+            ? Array.from(new Set(r.kelompokQuranBinaan))
+            : Array.from(
+                new Set([...(existing.kelompokQuranBinaan || []), ...r.kelompokQuranBinaan]),
+              );
           existing.kelompokQuranBinaan = mergedKlp;
+        } else if (payload.strictTemplateRoles) {
+          existing.kelompokQuranBinaan = [];
         }
+
         if (r.whatsapp && r.whatsapp !== '628') existing.whatsapp = r.whatsapp;
         if (r.username) existing.username = r.username.toLowerCase();
         if (r.pin && r.pin.trim()) {
@@ -1579,10 +2273,17 @@ class PintarStore {
         }
         updated++;
       } else {
+        const rawExtras = (r.peranTambahan || []).filter(
+          (p) =>
+            Boolean(p) &&
+            p !== effectivePeran &&
+            p !== 'Admin Super' &&
+            !(isAsramaRole(p) && isAsramaRole(effectivePeran))
+        );
         const extras =
-          r.peranTambahan && r.peranTambahan.length > 0
-            ? Array.from(new Set(r.peranTambahan.filter((p) => p !== r.peran)))
-            : undefined;
+          rawExtras.length > 0
+            ? Array.from(new Set(rawExtras))
+            : [];
         const cleanPin =
           r.pin && r.pin.trim()
             ? r.pin.trim()
@@ -1591,9 +2292,9 @@ class PintarStore {
           id: `G_${Date.now()}_${added}`,
           username: (r.username || makeUsername(cleanNama)).toLowerCase(),
           nama: cleanNama,
-          peran: r.peran,
+          peran: effectivePeran,
           peranTambahan: extras,
-          jabatan: roleToJabatan(r.peran, extras),
+          jabatan: roleToJabatan(effectivePeran, extras),
           genderScope: r.genderScope,
           waliKelasOf: r.waliKelasOf,
           kamarBinaan: r.kamarBinaan,
@@ -1692,15 +2393,24 @@ class PintarStore {
   }
 
   public reconcileDatabaseRelations(_defaultPin = '1234') {
+    const isAsramaRole = (r: UserRole) =>
+      r === 'Musyrif' || r === 'Musyrifah' || r === 'Wali Asrama';
+
     const ensurePegawaiInDb = (
       rawName: string | undefined,
       role: UserRole,
       gender: Gender | 'Semua',
-      opts?: { waliKelasOf?: string; kamar?: string; kelompokQuran?: string },
+      opts?: {
+        waliKelasOf?: string;
+        kamar?: string;
+        kelompokQuran?: string;
+        doNotAddRoleIfExisting?: boolean;
+      },
     ) => {
       if (!rawName || isPlaceholderTeacherName(rawName)) return;
-      const cleanNama = rawName.trim().replace(/\s+/g, ' ').toUpperCase();
-      if (cleanNama.includes('ADMIN SUPER')) return;
+      const cleanNama = cleanTeacherDisplayName(rawName);
+      if (isPureGenericAdminName(cleanNama)) return;
+      const effectiveRole: UserRole = role === 'Admin Super' ? 'Guru' : role;
       let rec = this.db.teachers.find(
         (t) =>
           t.id !== SUPER_ADMIN_ID &&
@@ -1713,9 +2423,9 @@ class PintarStore {
           id: `G_DB_${Date.now()}_${this.db.teachers.length}`,
           username: makeUsername(cleanNama),
           nama: cleanNama,
-          peran: role,
+          peran: effectiveRole,
           peranTambahan: [],
-          jabatan: roleToJabatan(role, []),
+          jabatan: roleToJabatan(effectiveRole, []),
           genderScope: gender,
           waliKelasOf: opts?.waliKelasOf ? opts.waliKelasOf.trim().toUpperCase() : undefined,
           kamarBinaan: opts?.kamar && opts.kamar !== '-' ? [opts.kamar.trim()] : [],
@@ -1733,11 +2443,18 @@ class PintarStore {
         rec.pin = generateTeacherAccessToken(rec.nama);
       }
 
-      // Merge role into peran / peranTambahan
-      if (rec.peran !== role) {
-        const extras = new Set<UserRole>(rec.peranTambahan || []);
-        extras.add(role);
-        rec.peranTambahan = Array.from(extras);
+      if (!opts?.doNotAddRoleIfExisting) {
+        // Merge role into peran / peranTambahan without duplicating equivalent asrama roles
+        const currentRoles = [rec.peran, ...(rec.peranTambahan || [])];
+        const alreadyHasRole =
+          currentRoles.includes(effectiveRole) ||
+          (isAsramaRole(effectiveRole) && currentRoles.some(isAsramaRole));
+        if (!alreadyHasRole) {
+          const extras = new Set<UserRole>(rec.peranTambahan || []);
+          extras.add(effectiveRole);
+          extras.delete(rec.peran);
+          rec.peranTambahan = Array.from(extras);
+        }
       }
       rec.jabatan = roleToJabatan(rec.peran, rec.peranTambahan);
 
@@ -1764,11 +2481,28 @@ class PintarStore {
       }
     };
 
-    // 1. Ensure all existing teachers have a valid Token Login
+    // 1. Ensure all existing teachers have a valid Token Login and clean duplicate asrama roles
     for (const t of this.db.teachers) {
       if (t.id === SUPER_ADMIN_ID) continue;
       if (!t.pin) {
         t.pin = generateTeacherAccessToken(t.nama);
+      }
+      if (Array.isArray(t.peranTambahan) && t.peranTambahan.length > 0) {
+        const hasSpecificMusyrif =
+          t.peran === 'Musyrif' ||
+          t.peran === 'Musyrifah' ||
+          t.peranTambahan.includes('Musyrif') ||
+          t.peranTambahan.includes('Musyrifah');
+        t.peranTambahan = Array.from(
+          new Set(
+            t.peranTambahan.filter(
+              (r) =>
+                Boolean(r) &&
+                r !== t.peran &&
+                !(hasSpecificMusyrif && r === 'Wali Asrama')
+            )
+          )
+        );
       }
       t.jabatan = roleToJabatan(t.peran, t.peranTambahan);
     }
@@ -1858,7 +2592,7 @@ class PintarStore {
       }
     }
 
-    // Sync teachers from students (Pengampu Al-Quran, Wali Kelas, Wali Asrama/Musyrif, Guru Wali)
+    // Sync teachers from students (Pengampu Al-Quran, Wali Kelas, Musyrif/Musyrifah, Guru Wali)
     for (const st of this.db.students) {
       if (st.pengampuQuran) {
         ensurePegawaiInDb(st.pengampuQuran, 'Pengampu Al-Quran', st.gender, {
@@ -1875,21 +2609,17 @@ class PintarStore {
         ensurePegawaiInDb(st.musyrif, asramaRole, st.gender, {
           kamar: st.kamar,
         });
-        ensurePegawaiInDb(st.musyrif, 'Wali Asrama', st.gender, {
-          kamar: st.kamar,
-        });
       }
       if (st.guruWali) {
         ensurePegawaiInDb(st.guruWali, 'Guru Wali', st.gender);
       }
     }
 
-    // 3. Sync teachers from rooms
+    // 3. Sync teachers from rooms (single clean asrama role, no duplicate Wali Asrama)
     for (const rm of this.db.rooms) {
       if (rm.musyrif) {
         const asramaRole: UserRole = rm.gender === 'Putri' ? 'Musyrifah' : 'Musyrif';
         ensurePegawaiInDb(rm.musyrif, asramaRole, rm.gender, { kamar: rm.kamar });
-        ensurePegawaiInDb(rm.musyrif, 'Wali Asrama', rm.gender, { kamar: rm.kamar });
       }
     }
 
@@ -1906,43 +2636,29 @@ class PintarStore {
       }
     }
 
-    // 5. Sync teachers from attendanceLogs, pembinaanRecords, examLogs, and labkomBookings
+    // 5. Ensure teachers referenced in historical logs exist in DB without mutating roles of existing teachers
     for (const log of this.db.attendanceLogs) {
       if (log.guru) {
-        const role: UserRole =
-          log.jenisPresensi === 'Asrama'
-            ? 'Wali Asrama'
-            : log.jenisPresensi === 'Al-Quran'
-            ? 'Pengampu Al-Quran'
-            : 'Guru';
-        ensurePegawaiInDb(log.guru, role, log.gender);
+        ensurePegawaiInDb(log.guru, 'Guru', log.gender, { doNotAddRoleIfExisting: true });
       }
     }
 
     for (const pb of this.db.pembinaanRecords) {
       if (pb.pembinaNama) {
-        const track = resolvePembinaanTrack(pb);
-        const role: UserRole =
-          track.jalurPembinaan === 'Wali Kelas'
-            ? 'Wali Kelas'
-            : track.jalurPembinaan === 'Guru Wali'
-            ? 'Guru Wali'
-            : 'Wali Asrama';
-        ensurePegawaiInDb(pb.pembinaNama, role, pb.gender, {
-          waliKelasOf: role === 'Wali Kelas' ? pb.kelas : undefined,
-          kamar: role === 'Wali Asrama' ? pb.kamar : undefined,
-        });
+        ensurePegawaiInDb(pb.pembinaNama, 'Guru', pb.gender, { doNotAddRoleIfExisting: true });
       }
     }
 
     for (const ex of this.db.examLogs) {
-      if (ex.pengawas1) ensurePegawaiInDb(ex.pengawas1, 'Guru', ex.gender);
-      if (ex.pengawas2) ensurePegawaiInDb(ex.pengawas2, 'Guru', ex.gender);
+      if (ex.pengawas1) ensurePegawaiInDb(ex.pengawas1, 'Guru', ex.gender, { doNotAddRoleIfExisting: true });
+      if (ex.pengawas2) ensurePegawaiInDb(ex.pengawas2, 'Guru', ex.gender, { doNotAddRoleIfExisting: true });
     }
 
     for (const lb of this.db.labkomBookings || []) {
       if (lb.guru) {
-        ensurePegawaiInDb(lb.guru, 'Guru', lb.kampus === 'PUTRI' ? 'Putri' : 'Putra');
+        ensurePegawaiInDb(lb.guru, 'Guru', lb.kampus === 'PUTRI' ? 'Putri' : 'Putra', {
+          doNotAddRoleIfExisting: true,
+        });
       }
     }
 
@@ -2046,6 +2762,49 @@ class PintarStore {
         const mappedPengampu = pengampuByKelompok.get(code);
         if (mappedPengampu && (!st.pengampuQuran || isPlaceholderTeacherName(st.pengampuQuran))) {
           st.pengampuQuran = mappedPengampu;
+        }
+      }
+    }
+
+    // 9. Always ensure SAHIDIN also exists as a teaching record (Guru) in this.db.teachers
+    // without force-injecting extra roles not backed by template/schedule assignments
+    ensurePegawaiInDb('SAHIDIN', 'Guru', 'Semua', { doNotAddRoleIfExisting: true });
+    const sahidinTeacher = this.db.teachers.find(
+      (t) => t.id !== SUPER_ADMIN_ID && t.peran !== 'Admin Super' && matchTeacherName(t.nama, 'SAHIDIN'),
+    );
+    const superAdminRec = this.db.teachers.find((t) => t.id === SUPER_ADMIN_ID);
+    if (sahidinTeacher) {
+      // Clean up legacy hardcoded 6-role inflation on SAHIDIN if not backed by actual assignments
+      const currentRoles = [sahidinTeacher.peran, ...(sahidinTeacher.peranTambahan || [])];
+      if (currentRoles.length >= 5) {
+        const hasWk =
+          Boolean(sahidinTeacher.waliKelasOf && sahidinTeacher.waliKelasOf !== '-') ||
+          this.db.students.some((st) => st.waliKelas && matchTeacherName(st.waliKelas, 'SAHIDIN'));
+        const hasKm =
+          (Array.isArray(sahidinTeacher.kamarBinaan) && sahidinTeacher.kamarBinaan.length > 0) ||
+          this.db.rooms.some((rm) => rm.musyrif && matchTeacherName(rm.musyrif, 'SAHIDIN'));
+        const hasQr =
+          (Array.isArray(sahidinTeacher.kelompokQuranBinaan) && sahidinTeacher.kelompokQuranBinaan.length > 0) ||
+          this.db.schedules.some((sc) => isQuranScheduleItem(sc) && matchTeacherName(sc.guru, 'SAHIDIN'));
+        const hasGw = this.db.students.some((st) => st.guruWali && matchTeacherName(st.guruWali, 'SAHIDIN'));
+        const cleanedRoles: UserRole[] = ['Guru'];
+        if (hasWk) cleanedRoles.push('Wali Kelas');
+        if (hasKm) cleanedRoles.push('Musyrif');
+        if (hasQr) cleanedRoles.push('Pengampu Al-Quran');
+        if (hasGw) cleanedRoles.push('Guru Wali');
+        sahidinTeacher.peran = cleanedRoles[0];
+        sahidinTeacher.peranTambahan = cleanedRoles.slice(1);
+      }
+      sahidinTeacher.jabatan = roleToJabatan(sahidinTeacher.peran, sahidinTeacher.peranTambahan);
+      if (superAdminRec) {
+        if (sahidinTeacher.waliKelasOf && !superAdminRec.waliKelasOf) {
+          superAdminRec.waliKelasOf = sahidinTeacher.waliKelasOf;
+        }
+        if (sahidinTeacher.kamarBinaan?.length && !superAdminRec.kamarBinaan?.length) {
+          superAdminRec.kamarBinaan = [...sahidinTeacher.kamarBinaan];
+        }
+        if (sahidinTeacher.kelompokQuranBinaan?.length && !superAdminRec.kelompokQuranBinaan?.length) {
+          superAdminRec.kelompokQuranBinaan = [...sahidinTeacher.kelompokQuranBinaan];
         }
       }
     }
@@ -2849,19 +3608,24 @@ class PintarStore {
 
       if (Array.isArray(snapshot.teachers)) {
         for (const t of snapshot.teachers) {
-          if (!t?.nama || t.id === SUPER_ADMIN_ID || t.peran === 'Admin Super') continue;
+          if (!t?.nama || t.id === SUPER_ADMIN_ID) continue;
+          const cleanTName = cleanTeacherDisplayName(t.nama);
+          if (isPureGenericAdminName(cleanTName)) continue;
+          const effectivePeran: UserRole = t.peran === 'Admin Super' ? 'Guru' : t.peran;
           const exists = this.db.teachers.find(
             (x) =>
               x.id !== SUPER_ADMIN_ID &&
               x.peran !== 'Admin Super' &&
-              (normalizeStr(x.nama) === normalizeStr(t.nama) ||
+              (normalizeStr(x.nama) === normalizeStr(cleanTName) ||
                 normalizeStr(x.username) === normalizeStr(t.username) ||
-                matchTeacherName(x.nama, t.nama)),
+                matchTeacherName(x.nama, cleanTName)),
           );
           if (!exists) {
             this.db.teachers.push({
               ...t,
-              pin: t.pin || generateTeacherAccessToken(t.nama),
+              nama: cleanTName,
+              peran: effectivePeran,
+              pin: t.pin || generateTeacherAccessToken(cleanTName),
             });
             teachersRestored++;
           } else {
@@ -3468,16 +4232,15 @@ class PintarStore {
         addResult(`HALAQAH ${namaGuru.trim().toUpperCase()}`, "HALAQAH AL-QUR'AN", 'Halaqah');
       }
 
-      if (results.length === 0) {
-        const anyDayQuranSchedules = this.db.schedules.filter(
-          (sc) =>
-            isQuranScheduleItem(sc) &&
-            (sc.gender === gender || !sc.gender) &&
-            matchTeacherName(sc.guru, namaGuru),
-        );
-        for (const sc of anyDayQuranSchedules) {
-          addResult(sc.kelas, sc.mapel || "HALAQAH AL-QUR'AN", sc.hari ? `${sc.hari} · ${sc.jamKe}` : sc.jamKe);
-        }
+      // Also include any other-day Al-Qur'an schedules of this teacher from the Weekly Matrix
+      const otherDayQuranSchedules = this.db.schedules.filter(
+        (sc) =>
+          isQuranScheduleItem(sc) &&
+          (sc.gender === gender || !sc.gender) &&
+          matchTeacherName(sc.guru, namaGuru),
+      );
+      for (const sc of otherDayQuranSchedules) {
+        addResult(sc.kelas, sc.mapel || "HALAQAH AL-QUR'AN", sc.hari ? `${sc.hari} · ${sc.jamKe}` : sc.jamKe);
       }
 
       // 4. Fallback if teacher has no bound Al-Qur'an group yet: show all distinct kelompokQuran of that gender
@@ -3517,19 +4280,17 @@ class PintarStore {
       addResult(sc.kelas, sc.mapel, sc.jamKe);
     }
 
-    // 2. Fallback if teacher has no schedule on reqHari (e.g. Sunday/Holiday or different day in template):
-    // show their schedules from other days (with day label in jamKe) so the teacher is never blocked from filling presensi
-    if (results.length === 0) {
-      const anyDayAcademicSchedules = this.db.schedules.filter(
-        (sc) =>
-          !isQuranScheduleItem(sc) &&
-          (sc.gender === gender || !sc.gender || !oppositeGenderRegex.test(sc.kelas || '')) &&
-          matchTeacherName(sc.guru, namaGuru),
-      );
-      for (const sc of anyDayAcademicSchedules) {
-        const jamWithDay = sc.hari ? `${sc.hari} · Jam ${sc.jamKe || '1-2'}` : sc.jamKe || '1-2';
-        addResult(sc.kelas, sc.mapel, jamWithDay);
-      }
+    // 2. Also include any other schedules of this teacher from other days in the Weekly Matrix
+    // so newly added/edited schedules on any day are immediately selectable in Menu Presensi
+    const anyDayAcademicSchedules = this.db.schedules.filter(
+      (sc) =>
+        !isQuranScheduleItem(sc) &&
+        (sc.gender === gender || !sc.gender || !oppositeGenderRegex.test(sc.kelas || '')) &&
+        matchTeacherName(sc.guru, namaGuru),
+    );
+    for (const sc of anyDayAcademicSchedules) {
+      const jamWithDay = sc.hari ? `${sc.hari} · Jam ${sc.jamKe || '1-2'}` : sc.jamKe || '1-2';
+      addResult(sc.kelas, sc.mapel, jamWithDay);
     }
 
     // 3. Fallback if teacher is a Wali Kelas or has classes in students/teachers without explicit schedule rows yet
@@ -5686,12 +6447,16 @@ class PintarStore {
   // AKUN GURU & REKAP PRIBADI OTOMATIS (GURU, WALI KELAS, WALI ASRAMA, GURU WALI)
   // ==============================================================
   public getTeacherPersonalRecap(namaGuru: string, tanggal: string) {
-    const req = normalizeStr(namaGuru);
+    const cleanReqName = cleanTeacherDisplayName(namaGuru);
+    const req = normalizeStr(cleanReqName || namaGuru);
     const teacher =
-      this.db.teachers.find((t) => normalizeStr(t.nama) === req || normalizeStr(t.username) === req) ||
       this.db.teachers.find(
-        (t) => t.id !== SUPER_ADMIN_ID && t.peran !== 'Admin Super' && matchTeacherName(t.nama, namaGuru),
+        (t) =>
+          t.id !== SUPER_ADMIN_ID &&
+          t.peran !== 'Admin Super' &&
+          (normalizeStr(t.nama) === req || normalizeStr(t.username) === req || matchTeacherName(t.nama, cleanReqName || namaGuru)),
       ) ||
+      this.db.teachers.find((t) => normalizeStr(t.nama) === req || normalizeStr(t.username) === req) ||
       this.db.teachers.find((t) => matchTeacherName(t.nama, namaGuru));
     if (!teacher) return null;
 
@@ -6067,6 +6832,8 @@ class PintarStore {
       const klasikalCount = pb.filter((r) => r.lingkup === 'Klasikal').length;
       const khususCount = pb.filter((r) => r.lingkup !== 'Klasikal').length;
       return {
+        id: st.id,
+        nis: st.nis || st.id,
         nama: st.nama,
         kelas: st.kelas,
         kamar: st.kamar,
@@ -6075,6 +6842,10 @@ class PintarStore {
         musyrif: st.musyrif || '-',
         guruWali: st.guruWali || '-',
         prioritas: st.prioritas || '-',
+        statusKenaikan: st.statusKenaikan || 'Naik Kelas',
+        kelasTujuanKenaikan: st.kelasTujuanKenaikan || '',
+        ringkasanNilaiRapor: st.ringkasanNilaiRapor || 'Tuntas KKM',
+        catatanRaporWali: st.catatanRaporWali || '',
         totalPembinaan: pb.length,
         klasikalCount,
         khususCount,
@@ -6095,6 +6866,25 @@ class PintarStore {
 
     const waliSantriProgress = waliStudents.map(buildWaliStudentRow);
     const allClassesSantriProgress = allClassStudentsForWali.map(buildWaliStudentRow);
+
+    const unassignedClassStudents = this.db.students
+      .filter(
+        (s) =>
+          (teacher.genderScope === 'Semua' || s.gender === teacher.genderScope) &&
+          (!s.kelas ||
+            s.kelas === '-' ||
+            s.kelas.toUpperCase().includes('BELUM') ||
+            s.kelas.toUpperCase().includes('TUNGGU') ||
+            s.kelas.toUpperCase().includes('WAITING')),
+      )
+      .map((s) => ({
+        id: s.id,
+        nis: s.nis || s.id,
+        nama: s.nama,
+        kelas: s.kelas || 'BELUM ADA KELAS',
+        kamar: s.kamar,
+        gender: s.gender,
+      }));
 
     const waliPembinaanAll = this.db.pembinaanRecords.filter(
       (p) =>
@@ -6122,14 +6912,18 @@ class PintarStore {
       rataSholatSunnahPct: waliIbadahAvg.sunnahPct,
       santriProgress: waliSantriProgress,
       allClassesSantriProgress,
+      unassignedClassStudents,
+      academicArchives: (this.db.academicArchives || []).slice(0, 80),
     };
 
     // --- 3. WALI ASRAMA (MUSYRIF / MUSYRIFAH) PROGRESS (PER KAMAR / SEMUA KAMAR) ---
     const musyrifRoomList = myRooms.map((r) => r.kamar);
     const musyrifStudents = this.db.students.filter(
       (s) =>
-        musyrifRoomList.some((rk) => matchGroupCode(s.kamar, rk)) ||
-        (s.musyrif && matchTeacherName(s.musyrif, teacher.nama))
+        s.kamar &&
+        !s.kamar.toUpperCase().includes('BELUM') &&
+        (musyrifRoomList.some((rk) => matchGroupCode(s.kamar, rk)) ||
+          (s.musyrif && matchTeacherName(s.musyrif, teacher.nama)))
     );
     const musyrifPembinaanAll = this.db.pembinaanRecords.filter(
       (p) =>
@@ -6145,7 +6939,7 @@ class PintarStore {
       (l) => l.tanggal === tanggal && l.jenisPresensi === 'Asrama'
     );
 
-    const musyrifSantriProgress = musyrifStudents.map((st) => {
+    const musyrifSantriProgress = musyrifStudents.map((st, idx) => {
       const pb = this.db.pembinaanRecords
         .filter((p) => normalizeStr(p.namaSantri) === normalizeStr(st.nama))
         .sort((a, b) => b.tanggal.localeCompare(a.tanggal));
@@ -6155,10 +6949,16 @@ class PintarStore {
       const klasikalCount = pb.filter((r) => r.lingkup === 'Klasikal').length;
       const khususCount = pb.filter((r) => r.lingkup !== 'Klasikal').length;
       return {
+        id: st.id,
+        nis: st.nis || st.id,
         nama: st.nama,
         kelas: st.kelas,
         kamar: st.kamar,
         gender: st.gender,
+        posisiRanjang: st.posisiRanjang || `Ranjang ${idx + 1}`,
+        catatanKamar: st.catatanKamar || '',
+        kamarSebelumnya: st.kamarSebelumnya || st.kamar,
+        prioritas: st.prioritas || 'Mandiri',
         waliKelas: st.waliKelas || '-',
         guruWali: st.guruWali || '-',
         totalPembinaan: pb.length,
@@ -6188,14 +6988,16 @@ class PintarStore {
     });
 
     const musyrifKamarList = Array.from(
-      new Set([...myRooms.map((r) => r.kamar), ...musyrifStudents.map((s) => s.kamar)].filter((k) => k && k !== '-')),
+      new Set([...myRooms.map((r) => r.kamar), ...musyrifStudents.map((s) => s.kamar)].filter((k) => k && k !== '-' && !k.toUpperCase().includes('BELUM'))),
     ).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
 
     const roomSummaries = musyrifKamarList.map((kamarName) => {
       const rmStudents = musyrifSantriProgress.filter((s) => matchGroupCode(s.kamar, kamarName));
       const rmObj = myRooms.find((r) => matchGroupCode(r.kamar, kamarName));
+      const dbRoom = this.db.rooms.find((r) => matchGroupCode(r.kamar, kamarName));
       return {
         kamar: kamarName,
+        kapasitas: dbRoom?.kapasitas || 16,
         filledToday: Boolean(rmObj?.filled),
         totalSantri: rmStudents.length,
         santriDibina: rmStudents.filter((s) => s.totalPembinaan > 0).length,
@@ -6215,6 +7017,48 @@ class PintarStore {
         keterangan: s.keteranganHariIni,
       }));
 
+    // Unassigned dormitory students ("Siswa Belum Dapat Kamar") & locked students in other Musyrif's rooms
+    const scopedAllStudents = this.db.students.filter(
+      (s) => teacher.genderScope === 'Semua' || s.gender === teacher.genderScope,
+    );
+    const unassignedAsramaStudents = scopedAllStudents
+      .filter(
+        (s) =>
+          !s.kamar ||
+          s.kamar === '-' ||
+          s.kamar.toUpperCase().includes('BELUM') ||
+          s.kamar.toUpperCase() === 'KOSONG',
+      )
+      .map((s) => ({
+        id: s.id,
+        nis: s.nis || s.id,
+        nama: s.nama,
+        kelas: s.kelas,
+        kamarSebelumnya: s.kamarSebelumnya || '-',
+        gender: s.gender,
+      }));
+
+    const myStudentIdSet = new Set(musyrifStudents.map((s) => s.id));
+    const lockedOtherRoomStudents = scopedAllStudents
+      .filter(
+        (s) =>
+          !myStudentIdSet.has(s.id) &&
+          s.kamar &&
+          s.kamar !== '-' &&
+          !s.kamar.toUpperCase().includes('BELUM') &&
+          s.kamar.toUpperCase() !== 'KOSONG',
+      )
+      .slice(0, 60)
+      .map((s) => ({
+        id: s.id,
+        nis: s.nis || s.id,
+        nama: s.nama,
+        kelas: s.kelas,
+        kamar: s.kamar,
+        musyrif: s.musyrif || 'Musyrif Kamar Lain',
+        gender: s.gender,
+      }));
+
     const musyrifProgress = {
       kamarList: musyrifKamarList,
       roomSummaries,
@@ -6232,6 +7076,8 @@ class PintarStore {
       rataSholatSunnahPct: musyrifIbadahAvg.sunnahPct,
       absenHariIni: musyrifAbsenHariIni,
       santriProgress: musyrifSantriProgress,
+      unassignedAsramaStudents,
+      lockedOtherRoomStudents,
     };
 
     // --- 4. GURU WALI PROGRESS (SESUAI JUMLAH SISWA DI DALAMNYA) ---
@@ -6330,6 +7176,8 @@ class PintarStore {
       examSessionsCount,
       sessions,
       allMySchedules,
+      allSystemSchedules: this.db.schedules,
+      scheduleApprovalRequired: Boolean(this.db.settings.scheduleApprovalRequired),
       todaySchedules,
       learningPacing,
       studentAttentionAcademic,
@@ -6762,6 +7610,11 @@ class PintarStore {
       }
     }
     for (const sc of this.db.schedules) {
+      const g = cleanTeacherDisplayName(sc.guru);
+      if (g && g !== '-' && !isPureGenericAdminName(g) && !guruSet.has(g)) {
+        mergedMasters.push({ id: `LM_G_SC_${guruSet.size + 1}`, kategori: 'GURU', nilai: g });
+        guruSet.add(g);
+      }
       const kls = (sc.kelas || '').trim().toUpperCase();
       if (kls && kls !== '-' && !kelasSet.has(kls)) {
         mergedMasters.push({ id: `LM_K_${kelasSet.size + 1}`, kategori: 'KELAS', nilai: kls });
@@ -7976,9 +8829,10 @@ class PintarStore {
     const superAdmin = createSuperAdminRecord();
     const teacherMap = new Map<string, TeacherRecord>();
     for (const t of this.db.teachers) {
-      if (t.id === SUPER_ADMIN_ID || t.peran === 'Admin Super') continue;
-      const nama = cleanWs(t.nama).toUpperCase();
-      if (!nama || nama === '-') continue;
+      if (t.id === SUPER_ADMIN_ID) continue;
+      const nama = cleanTeacherDisplayName(cleanWs(t.nama));
+      if (!nama || nama === '-' || isPureGenericAdminName(nama)) continue;
+      const effectiveRole: UserRole = t.peran === 'Admin Super' ? 'Guru' : t.peran;
       const waliKelasOf = cleanWs(t.waliKelasOf).toUpperCase() || undefined;
       const kamarBinaan = Array.from(
         new Set((t.kamarBinaan || []).map((k) => cleanWs(k)).filter((k) => k && k !== '-')),
@@ -7995,8 +8849,8 @@ class PintarStore {
       } else if (PUTRI_REGEX.test(nama) || t.peran === 'Musyrifah') {
         genderScope = 'Putri';
       }
-      const roles = new Set<UserRole>([t.peran, ...(t.peranTambahan || [])]);
-      let primaryRole = t.peran;
+      const roles = new Set<UserRole>([effectiveRole, ...(t.peranTambahan || [])]);
+      let primaryRole = effectiveRole;
       if (genderScope === 'Putri' && primaryRole === 'Musyrif') {
         primaryRole = 'Musyrifah';
         roles.delete('Musyrif');

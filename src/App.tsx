@@ -56,6 +56,8 @@ import {
   DB_EXPLICIT_EMPTY_KEY,
   DB_MIRROR_KEY,
   LEGACY_BUNDLED_MIRROR_KEY,
+  buildInstantBootstrapFromMirror,
+  cleanGuruDisplayName,
   ensureServerHydratedFromMirror,
   loadPersistedModule,
   loadPersistedQuickGuru,
@@ -247,20 +249,22 @@ export default function App() {
     'Akademik & Operasional': true,
     'Akun Peran & Admin': true,
   });
-  const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
+  const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(() =>
+    buildInstantBootstrapFromMirror(),
+  );
   const [unlockedTeacher, setUnlockedTeacher] = useState<TeacherPublic | null>(() =>
     loadPersistedUser(),
   );
   const [quickGuru, setQuickGuru] = useState<string>(() => {
     const u = loadPersistedUser();
-    const fallbackName =
-      u && u.peran !== 'Admin Super' && u.peran !== 'Admin SIM' ? u.nama : '';
+    const fallbackName = u ? cleanGuruDisplayName(u.nama) : '';
     return loadPersistedQuickGuru(fallbackName);
   });
   const [presensiPreset, setPresensiPreset] = useState<{
     key: number;
     jenis?: PresensiType;
     gender?: Gender;
+    target?: string;
   }>({ key: 0 });
   const [pembinaanPreset, setPembinaanPreset] = useState<{
     key: number;
@@ -426,7 +430,7 @@ export default function App() {
       if (syncTimer) window.clearTimeout(syncTimer);
       syncTimer = window.setTimeout(() => {
         syncBrowserMirror();
-      }, 200);
+      }, 30);
     };
 
     const onVisibilityOrHide = () => {
@@ -926,6 +930,7 @@ export default function App() {
               initialGuru={quickGuru}
               initialJenis={presensiPreset.jenis}
               initialGender={presensiPreset.gender}
+              initialTarget={presensiPreset.target}
               presetKey={presensiPreset.key}
               loggedInUser={unlockedTeacher}
               onSaved={loadBootstrap}
@@ -1017,12 +1022,22 @@ export default function App() {
               onUnlock={(t) => {
                 setUnlockedTeacher(t);
                 persistSessionUser(t);
-                if (t && t.peran !== 'Admin Super' && t.peran !== 'Admin SIM') {
-                  setQuickGuru(t.nama);
+                if (t) {
+                  const cleaned = cleanGuruDisplayName(t.nama);
+                  if (cleaned) setQuickGuru(cleaned);
                 }
               }}
-              onOpenQuickPresensi={(nama) => {
-                setQuickGuru(nama);
+              onOpenQuickPresensi={(nama, opts) => {
+                const cleaned = cleanGuruDisplayName(nama);
+                if (cleaned) setQuickGuru(cleaned);
+                if (opts) {
+                  setPresensiPreset((prev) => ({
+                    key: prev.key + 1,
+                    jenis: opts.jenis,
+                    gender: opts.gender,
+                    target: opts.target,
+                  }));
+                }
                 setActiveModule('presensi');
               }}
               onOpenWaliKelas={() => setActiveModule('walikelas')}

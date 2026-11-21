@@ -43,7 +43,13 @@ import {
   resolveTeacherToken,
 } from '../utils/exportHelpers';
 import { auth, pushSnapshotToFirestore } from '../firebase';
-import { loadSubTab, saveSnapshotToLocalMirror, saveSubTab } from '../utils/sessionPersistence';
+import {
+  getLocalMirrorSnapshot,
+  loadSubTab,
+  matchTeacherClient,
+  saveSnapshotToLocalMirror,
+  saveSubTab,
+} from '../utils/sessionPersistence';
 
 const IMPORT_TABS: readonly AdminTab[] = ['excel_upload', 'pegawai_amanah', 'kelola'];
 
@@ -162,11 +168,32 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const [assignWaliKelas, setAssignWaliKelas] = useState<string>('');
   const [assignKamarBinaan, setAssignKamarBinaan] = useState<string[]>([]);
   const [customKamarInput, setCustomKamarInput] = useState<string>('');
+  const [assignKelompokQuran, setAssignKelompokQuran] = useState<string[]>([]);
+  const [customKelompokInput, setCustomKelompokInput] = useState<string>('');
   const [assignWhatsapp, setAssignWhatsapp] = useState<string>('');
   const [assignPin, setAssignPin] = useState<string>('');
   const [savingAssign, setSavingAssign] = useState<boolean>(false);
 
-  const [adminStudents, setAdminStudents] = useState<Student[]>([]);
+  // Dasbor Manajemen Peran Guru state
+  const [roleDashboardFilter, setRoleDashboardFilter] = useState<
+    | 'SEMUA'
+    | 'GURU_SAJA'
+    | 'MULTI_PERAN'
+    | 'Wali Kelas'
+    | 'ASRAMA'
+    | 'Pengampu Al-Quran'
+    | 'Guru Wali'
+    | 'Pimpinan'
+  >('SEMUA');
+  const [syncingRolesTemplate, setSyncingRolesTemplate] = useState<boolean>(false);
+  const [updatingTeacherRoleId, setUpdatingTeacherRoleId] = useState<string | null>(null);
+  const [addingRolePopoverId, setAddingRolePopoverId] = useState<string | null>(null);
+  const roleDetailEditorRef = useRef<HTMLDivElement | null>(null);
+
+  const [adminStudents, setAdminStudents] = useState<Student[]>(() => {
+    const snap = getLocalMirrorSnapshot();
+    return Array.isArray(snap?.students) ? (snap.students as Student[]) : [];
+  });
   const [studentSearchQ, setStudentSearchQ] = useState('');
   const [studentWilayahFilter, setStudentWilayahFilter] = useState<'Semua' | 'Putra' | 'Putri'>('Semua');
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
@@ -179,7 +206,10 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   const [sPengampu, setSPengampu] = useState('');
   const [savingStudentDirect, setSavingStudentDirect] = useState(false);
 
-  const [adminSchedules, setAdminSchedules] = useState<ScheduleItem[]>([]);
+  const [adminSchedules, setAdminSchedules] = useState<ScheduleItem[]>(() => {
+    const snap = getLocalMirrorSnapshot();
+    return Array.isArray(snap?.schedules) ? (snap.schedules as ScheduleItem[]) : [];
+  });
   const [scheduleSearchQ, setScheduleSearchQ] = useState('');
   const [scheduleWilayahFilter, setScheduleWilayahFilter] = useState<'Semua' | 'Putra' | 'Putri'>('Semua');
   const [tidyingData, setTidyingData] = useState(false);
@@ -506,6 +536,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     setAssignRoles(Array.from(roleSet));
     setAssignWaliKelas(selectedPegawai.waliKelasOf || '');
     setAssignKamarBinaan(selectedPegawai.kamarBinaan || []);
+    setAssignKelompokQuran(selectedPegawai.kelompokQuranBinaan || []);
     setAssignWhatsapp(selectedPegawai.whatsapp || '');
     setAssignPin('');
   }, [selectedPegawai]);
@@ -532,6 +563,56 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     return Array.from(set).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
   }, [rooms, teachers, assignKamarBinaan]);
 
+  const getTeacherRoleList = useCallback((t: TeacherPublic): UserRole[] => {
+    return Array.from(new Set<UserRole>([t.peran, ...(t.peranTambahan || [])].filter(Boolean)));
+  }, []);
+
+  const roleDashboardStats = useMemo(() => {
+    let guruSaja = 0;
+    let multiPeran = 0;
+    let waliKelas = 0;
+    let asrama = 0;
+    let quran = 0;
+    let guruWali = 0;
+    let pimpinan = 0;
+
+    for (const t of staffDirectory) {
+      if (
+        pegawaiWilayahFilter !== 'Semua' &&
+        t.genderScope !== pegawaiWilayahFilter &&
+        t.genderScope !== 'Semua'
+      ) {
+        continue;
+      }
+      const roles = getTeacherRoleList(t);
+      if (roles.length === 1 && roles[0] === 'Guru') guruSaja++;
+      if (roles.length > 1) multiPeran++;
+      if (roles.includes('Wali Kelas')) waliKelas++;
+      if (roles.includes('Musyrif') || roles.includes('Musyrifah') || roles.includes('Wali Asrama')) {
+        asrama++;
+      }
+      if (roles.includes('Pengampu Al-Quran')) quran++;
+      if (roles.includes('Guru Wali')) guruWali++;
+      if (roles.includes('Pimpinan')) pimpinan++;
+    }
+
+    return {
+      total: staffDirectory.filter(
+        (t) =>
+          pegawaiWilayahFilter === 'Semua' ||
+          t.genderScope === pegawaiWilayahFilter ||
+          t.genderScope === 'Semua'
+      ).length,
+      guruSaja,
+      multiPeran,
+      waliKelas,
+      asrama,
+      quran,
+      guruWali,
+      pimpinan,
+    };
+  }, [staffDirectory, pegawaiWilayahFilter, getTeacherRoleList]);
+
   const filteredStaffList = useMemo(() => {
     const q = pegawaiSearch.trim().toLowerCase();
     return staffDirectory.filter((t) => {
@@ -542,13 +623,30 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       ) {
         return false;
       }
+      const roles = getTeacherRoleList(t);
+      if (roleDashboardFilter === 'GURU_SAJA') {
+        if (!(roles.length === 1 && roles[0] === 'Guru')) return false;
+      } else if (roleDashboardFilter === 'MULTI_PERAN') {
+        if (roles.length <= 1) return false;
+      } else if (roleDashboardFilter === 'ASRAMA') {
+        if (
+          !roles.includes('Musyrif') &&
+          !roles.includes('Musyrifah') &&
+          !roles.includes('Wali Asrama')
+        ) {
+          return false;
+        }
+      } else if (roleDashboardFilter !== 'SEMUA') {
+        if (!roles.includes(roleDashboardFilter)) return false;
+      }
+
       if (q) {
-        const hay = `${t.nama} ${t.peran} ${(t.peranTambahan || []).join(' ')} ${t.waliKelasOf || ''} ${(t.kamarBinaan || []).join(' ')}`.toLowerCase();
+        const hay = `${t.nama} ${t.peran} ${(t.peranTambahan || []).join(' ')} ${t.waliKelasOf || ''} ${(t.kamarBinaan || []).join(' ')} ${(t.kelompokQuranBinaan || []).join(' ')}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
-  }, [staffDirectory, pegawaiWilayahFilter, pegawaiSearch]);
+  }, [staffDirectory, pegawaiWilayahFilter, pegawaiSearch, roleDashboardFilter, getTeacherRoleList]);
 
   const toggleAssignRole = (role: UserRole) => {
     setAssignRoles((prev) => {
@@ -578,6 +676,128 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
     setCustomKamarInput('');
   };
 
+  const handleAddCustomKelompokToAssign = () => {
+    const parts = customKelompokInput
+      .split(/[;,]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (parts.length === 0) return;
+    setAssignKelompokQuran((prev) => Array.from(new Set([...prev, ...parts])));
+    setCustomKelompokInput('');
+  };
+
+  const handleSyncRolesWithTemplate = async () => {
+    setSyncingRolesTemplate(true);
+    try {
+      const res = await fetch('/api/guru/sync-roles-template', { method: 'POST' });
+      const data = await parseJsonSafe<{
+        ok: boolean;
+        updatedCount: number;
+        totalTeachers: number;
+      }>(res);
+      onDataUpdated();
+      notify(
+        `Sinkronisasi Peran Sesuai Template selesai! ${data.updatedCount} akun guru dirapikan (peran berlebih dihapus, guru tanpa tugas tambahan diset ke Guru Jadwal Saja, multi-peran dipertahankan).`,
+        'success'
+      );
+    } catch (err) {
+      notify((err as Error).message || 'Gagal menyinkronkan peran guru sesuai template.', 'error');
+    } finally {
+      setSyncingRolesTemplate(false);
+    }
+  };
+
+  const handleRemoveSingleRoleFromTeacher = async (t: TeacherPublic, roleToRemove: UserRole) => {
+    setUpdatingTeacherRoleId(t.id);
+    try {
+      const currentRoles = getTeacherRoleList(t);
+      const remaining = currentRoles.filter((r) => r !== roleToRemove);
+      const finalRoles: UserRole[] = remaining.length > 0 ? remaining : ['Guru'];
+      const nextPrimary = finalRoles[0];
+      const nextExtras = finalRoles.slice(1);
+
+      const res = await fetch(`/api/guru/${t.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          peran: nextPrimary,
+          peranTambahan: nextExtras,
+        }),
+      });
+      const data = await parseJsonSafe(res);
+      if (!data) throw new Error('Gagal menghapus peran.');
+      onDataUpdated();
+      notify(
+        remaining.length > 0
+          ? `Peran "${roleToRemove}" dihapus dari ${t.nama}. Peran aktif sekarang: ${finalRoles.join(' + ')}.`
+          : `Peran "${roleToRemove}" dihapus. ${t.nama} kini diset sebagai Guru (Jadwal Saja).`,
+        'success'
+      );
+    } catch (err) {
+      notify((err as Error).message || 'Gagal menghapus peran guru.', 'error');
+    } finally {
+      setUpdatingTeacherRoleId(null);
+    }
+  };
+
+  const handleAddSingleRoleToTeacher = async (t: TeacherPublic, roleToAdd: UserRole) => {
+    setUpdatingTeacherRoleId(t.id);
+    setAddingRolePopoverId(null);
+    try {
+      const currentRoles = getTeacherRoleList(t);
+      if (currentRoles.includes(roleToAdd)) return;
+      const finalRoles: UserRole[] = [...currentRoles, roleToAdd];
+      const nextPrimary = finalRoles[0];
+      const nextExtras = finalRoles.slice(1);
+
+      const res = await fetch(`/api/guru/${t.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          peran: nextPrimary,
+          peranTambahan: nextExtras,
+        }),
+      });
+      await parseJsonSafe(res);
+      onDataUpdated();
+      notify(
+        `Peran "${roleToAdd}" ditambahkan ke ${t.nama} (Multi-Peran: ${finalRoles.join(' + ')}).`,
+        'success'
+      );
+    } catch (err) {
+      notify((err as Error).message || 'Gagal menambahkan peran guru.', 'error');
+    } finally {
+      setUpdatingTeacherRoleId(null);
+    }
+  };
+
+  const handleResetTeacherToGuruOnly = async (t: TeacherPublic) => {
+    setUpdatingTeacherRoleId(t.id);
+    try {
+      const res = await fetch(`/api/guru/${t.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          peran: 'Guru',
+          peranTambahan: [],
+          waliKelasOf: '',
+          kamarBinaan: [],
+          kelompokQuranBinaan: [],
+        }),
+      });
+      await parseJsonSafe(res);
+      onDataUpdated();
+      notify(
+        `${t.nama} berhasil direset menjadi Guru Akademik (Jadwal Saja) tanpa peran tambahan.`,
+        'success'
+      );
+    } catch (err) {
+      notify((err as Error).message || 'Gagal mereset peran guru.', 'error');
+    } finally {
+      setUpdatingTeacherRoleId(null);
+    }
+  };
+
   const handleSavePegawaiAmanah = async () => {
     if (!selectedPegawai) return;
     setSavingAssign(true);
@@ -592,6 +812,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
         genderScope: assignGenderScope,
         waliKelasOf: assignWaliKelas.trim(),
         kamarBinaan: assignKamarBinaan,
+        kelompokQuranBinaan: assignKelompokQuran,
         whatsapp: assignWhatsapp.trim(),
       };
       if (assignPin.trim()) {
@@ -606,7 +827,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
       if (!res.ok) throw new Error(data.error || 'Gagal menyimpan amanah pegawai.');
       onDataUpdated();
       loadWorkbookSpec();
-      notify(`Amanah untuk ${selectedPegawai.nama} berhasil diperbarui.`, 'success');
+      notify(`Peran & Amanah untuk ${selectedPegawai.nama} berhasil diperbarui.`, 'success');
     } catch (err) {
       notify((err as Error).message, 'error');
     } finally {
@@ -1528,6 +1749,30 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                 <span>Hapus Data Siswa (Reset 0)</span>
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('pegawai_amanah');
+                setTimeout(() => {
+                  managementPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }, 60);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1 text-[11px] font-bold text-white hover:bg-indigo-700 shadow-xs"
+              title="Buka UI Dasbor Peran di Admin Super untuk melihat, mengedit, dan menghapus semua peran guru"
+            >
+              <ShieldCheck className="h-3.5 w-3.5" />
+              <span>Dasbor Peran &amp; Hak Akses Guru ({staffDirectory.length})</span>
+            </button>
+            <button
+              type="button"
+              disabled={syncingRolesTemplate}
+              onClick={handleSyncRolesWithTemplate}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1 text-[11px] font-bold text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
+              title="Sesuaikan seluruh peran guru dengan yang ada di template & jadwal (hapus peran berlebih)"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 text-emerald-700 ${syncingRolesTemplate ? 'animate-spin' : ''}`} />
+              <span>{syncingRolesTemplate ? 'Menyinkronkan...' : 'Sesuaikan Peran dgn Template'}</span>
+            </button>
             <button
               type="button"
               disabled={tidyingData}
@@ -2657,7 +2902,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                   : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'
               }`}
             >
-              2. Pegawai, Amanah &amp; Token ({staffDirectory.length})
+              2. Dasbor Peran, Amanah &amp; Token ({staffDirectory.length})
             </button>
             <button
               type="button"
@@ -3133,18 +3378,35 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
           </div>
         ) : activeTab === 'pegawai_amanah' ? (
           <div className="space-y-5">
-            {/* Top Bar: Tambah / Paste Banyak Nama Pegawai tanpa harus pakai semua template */}
-            <div className="rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-50/70 via-sky-50/50 to-white p-4 space-y-3">
+            {/* Top Bar: Dasbor Manajemen Peran Guru & Sinkronisasi Template */}
+            <div className="rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-50/70 via-sky-50/50 to-white p-4 space-y-3.5">
               <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900">
-                    Database Master Pegawai, Token Login &amp; Penetapan Amanah (Klik Nama → Pilih Amanah)
-                  </h3>
-                  <p className="text-xs text-slate-600 mt-0.5">
-                    Setiap guru/pembina otomatis masuk ke Database Pegawai dan memiliki <b>Token / PIN Akses unik</b> sesuai perannya (<b>Guru, Guru Wali, Wali Kelas, Wali Asrama, Pengampu Al-Qur&apos;an, Pimpinan</b>). Admin dapat mencetak <b>Kartu Akses Login (PDF)</b> untuk dibagikan kepada pegawai.
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-bold text-slate-900">
+                      Dasbor Manajemen Peran &amp; Hak Akses Guru (Lihat, Edit, Tambah &amp; Hapus Semua Peran)
+                    </h3>
+                    <span className="rounded-md bg-emerald-100 border border-emerald-300 px-2 py-0.5 text-[11px] font-bold text-emerald-900">
+                      Sesuai Template &amp; Jadwal
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1">
+                    Guru yang hanya mengajar akan otomatis berstatus <b>Guru (Jadwal Saja)</b> tanpa peran berlebih. Guru yang memiliki <b>Multi-Peran</b> mendapatkan seluruh peran sesuai amanahnya. Klik tanda <b>×</b> pada chip peran untuk menghapus peran tertentu, atau klik <b>+ Peran</b> untuk menambah multi-peran.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={syncingRolesTemplate}
+                    onClick={handleSyncRolesWithTemplate}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50 shadow-xs whitespace-nowrap shrink-0"
+                    title="Otomatis hapus peran berlebih yang tidak ada di template/jadwal, sisakan Guru (Jadwal Saja) atau Multi-Peran sesuai tugas"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${syncingRolesTemplate ? 'animate-spin' : ''}`} />
+                    {syncingRolesTemplate
+                      ? 'Menyinkronkan Peran...'
+                      : 'Sinkronkan Peran Sesuai Template & Jadwal'}
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -3158,7 +3420,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                     className="inline-flex items-center gap-1.5 rounded-lg bg-[#0B1324] px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 whitespace-nowrap shrink-0"
                   >
                     <KeyRound className="h-3.5 w-3.5 text-amber-300" />
-                    Unduh Kartu Login ({filteredStaffList.length} Pegawai PDF)
+                    Kartu Login ({filteredStaffList.length} PDF)
                   </button>
                   <button
                     type="button"
@@ -3170,7 +3432,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                     className="inline-flex items-center gap-1.5 rounded-lg border border-teal-300 bg-white px-3 py-2 text-xs font-semibold text-teal-900 hover:bg-teal-50 whitespace-nowrap shrink-0"
                   >
                     <FileText className="h-3.5 w-3.5 text-teal-700" />
-                    Tabel Token &amp; PIN (PDF)
+                    Tabel Token (PDF)
                   </button>
                   <button
                     type="button"
@@ -3178,9 +3440,103 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                     className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap shrink-0"
                   >
                     <UserPlus className="h-3.5 w-3.5" />
-                    {showBulkPegawaiBox ? 'Tutup Input Daftar Nama' : '+ Tambah / Paste Nama Pegawai'}
+                    {showBulkPegawaiBox ? 'Tutup Input Daftar Nama' : '+ Tambah Pegawai'}
                   </button>
                 </div>
+              </div>
+
+              {/* 8 Role Summary & Instant Filter Cards */}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
+                {[
+                  {
+                    id: 'SEMUA' as const,
+                    label: 'Semua Pegawai',
+                    count: roleDashboardStats.total,
+                    sub: 'Total Akun Guru',
+                    activeCls: 'border-slate-700 bg-slate-900 text-white',
+                    idleCls: 'border-slate-200 bg-white text-slate-800 hover:border-slate-400',
+                  },
+                  {
+                    id: 'GURU_SAJA' as const,
+                    label: 'Guru (Jadwal Saja)',
+                    count: roleDashboardStats.guruSaja,
+                    sub: '1 Peran Murni',
+                    activeCls: 'border-teal-600 bg-teal-600 text-white',
+                    idleCls: 'border-teal-200 bg-teal-50/70 text-teal-950 hover:bg-teal-100/70',
+                  },
+                  {
+                    id: 'MULTI_PERAN' as const,
+                    label: 'Multi-Peran',
+                    count: roleDashboardStats.multiPeran,
+                    sub: 'Rangkap ≥ 2 Peran',
+                    activeCls: 'border-indigo-600 bg-indigo-600 text-white',
+                    idleCls: 'border-indigo-200 bg-indigo-50/70 text-indigo-950 hover:bg-indigo-100/70',
+                  },
+                  {
+                    id: 'Wali Kelas' as const,
+                    label: 'Wali Kelas',
+                    count: roleDashboardStats.waliKelas,
+                    sub: 'Rombel Akademik',
+                    activeCls: 'border-sky-600 bg-sky-600 text-white',
+                    idleCls: 'border-sky-200 bg-sky-50/70 text-sky-950 hover:bg-sky-100/70',
+                  },
+                  {
+                    id: 'ASRAMA' as const,
+                    label: 'Musyrif / Asrama',
+                    count: roleDashboardStats.asrama,
+                    sub: 'Pembina Kamar',
+                    activeCls: 'border-emerald-600 bg-emerald-600 text-white',
+                    idleCls: 'border-emerald-200 bg-emerald-50/70 text-emerald-950 hover:bg-emerald-100/70',
+                  },
+                  {
+                    id: 'Pengampu Al-Quran' as const,
+                    label: 'Guru Al-Qur’an',
+                    count: roleDashboardStats.quran,
+                    sub: 'Pengampu Halaqah',
+                    activeCls: 'border-amber-600 bg-amber-600 text-white',
+                    idleCls: 'border-amber-200 bg-amber-50/70 text-amber-950 hover:bg-amber-100/70',
+                  },
+                  {
+                    id: 'Guru Wali' as const,
+                    label: 'Guru Wali',
+                    count: roleDashboardStats.guruWali,
+                    sub: 'Pendamping Santri',
+                    activeCls: 'border-violet-600 bg-violet-600 text-white',
+                    idleCls: 'border-violet-200 bg-violet-50/70 text-violet-950 hover:bg-violet-100/70',
+                  },
+                  {
+                    id: 'Pimpinan' as const,
+                    label: 'Pimpinan',
+                    count: roleDashboardStats.pimpinan,
+                    sub: 'Laporan Eksekutif',
+                    activeCls: 'border-rose-600 bg-rose-600 text-white',
+                    idleCls: 'border-rose-200 bg-rose-50/70 text-rose-950 hover:bg-rose-100/70',
+                  },
+                ].map((card) => {
+                  const isActive = roleDashboardFilter === card.id;
+                  return (
+                    <button
+                      key={card.id}
+                      type="button"
+                      onClick={() => setRoleDashboardFilter(card.id)}
+                      className={`rounded-xl border p-2.5 text-left transition-all cursor-pointer ${
+                        isActive ? `${card.activeCls} shadow-xs` : card.idleCls
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-[11px] font-bold truncate">{card.label}</span>
+                        <span className="font-mono-num text-sm font-extrabold">{card.count}</span>
+                      </div>
+                      <div
+                        className={`mt-0.5 text-[10px] truncate ${
+                          isActive ? 'text-white/85' : 'text-slate-500'
+                        }`}
+                      >
+                        {card.sub}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
 
               {showBulkPegawaiBox && (
@@ -3232,8 +3588,309 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
               )}
             </div>
 
+            {/* Tabel Interaktif Dasbor Peran Guru (Lihat, Edit, Tambah & Hapus Semua Peran Langsung) */}
+            <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-xs">
+              <div className="border-b border-slate-200 bg-slate-50/90 px-4 py-3 flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-wrap items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-indigo-600" />
+                  <span className="text-xs font-bold text-slate-900">
+                    Tabel Interaktif Dasbor Peran &amp; Hak Akses Guru ({filteredStaffList.length} Pegawai)
+                  </span>
+                  {roleDashboardFilter !== 'SEMUA' && (
+                    <button
+                      type="button"
+                      onClick={() => setRoleDashboardFilter('SEMUA')}
+                      className="inline-flex items-center gap-1 rounded-md bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-900 hover:bg-indigo-200"
+                    >
+                      Filter: {roleDashboardFilter} ✕
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white p-0.5 text-[11px]">
+                    {(['Semua', 'Putra', 'Putri'] as const).map((w) => (
+                      <button
+                        key={w}
+                        type="button"
+                        onClick={() => setPegawaiWilayahFilter(w)}
+                        className={`rounded-md px-2.5 py-1 font-semibold transition-colors ${
+                          pegawaiWilayahFilter === w
+                            ? 'bg-teal-600 text-white'
+                            : 'text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {w}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="relative min-w-[230px]">
+                    <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={pegawaiSearch}
+                      onChange={(e) => setPegawaiSearch(e.target.value)}
+                      placeholder="Cari nama guru, peran, kelas, kamar..."
+                      className="h-8 w-full rounded-lg border border-slate-300 bg-white pl-8 pr-3 text-xs focus:border-teal-600 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="max-h-[430px] overflow-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="sticky top-0 bg-slate-100 text-[11px] font-bold uppercase text-slate-700 border-b border-slate-200 z-10">
+                    <tr>
+                      <th className="px-3 py-2.5 w-10">No</th>
+                      <th className="px-3 py-2.5">Nama Guru &amp; Token Login</th>
+                      <th className="px-3 py-2.5">Status Kategori</th>
+                      <th className="px-3 py-2.5">Peran Aktif (Klik × Hapus Peran / + Tambah)</th>
+                      <th className="px-3 py-2.5">Tugas Sesuai Template &amp; Jadwal</th>
+                      <th className="px-3 py-2.5 text-right">Aksi Cepat</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredStaffList.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                          Tidak ada akun guru/pegawai yang cocok dengan filter peran ini.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredStaffList.map((t, idx) => {
+                        const allRoles = getTeacherRoleList(t);
+                        const isPureGuruOnly = allRoles.length === 1 && allRoles[0] === 'Guru';
+                        const isBusy = updatingTeacherRoleId === t.id;
+                        const mySchedules = adminSchedules.filter((sc) =>
+                          matchTeacherClient(sc.guru, t.nama)
+                        );
+                        const academicSchedCount = mySchedules.filter(
+                          (sc) => sc.kategori !== 'Al-Quran'
+                        ).length;
+                        const quranSchedCount = mySchedules.filter(
+                          (sc) => sc.kategori === 'Al-Quran'
+                        ).length;
+                        const isSelected = selectedPegawai?.id === t.id;
+                        const availableRolesToAdd = AMANAH_ROLES.filter(
+                          (r) => !allRoles.includes(r)
+                        );
+
+                        return (
+                          <tr
+                            key={t.id}
+                            className={`transition-colors ${
+                              isSelected ? 'bg-teal-50/70' : 'hover:bg-slate-50/90'
+                            }`}
+                          >
+                            <td className="px-3 py-2.5 font-mono-num text-slate-500">{idx + 1}</td>
+                            <td className="px-3 py-2.5">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedPegawaiId(t.id);
+                                    roleDetailEditorRef.current?.scrollIntoView({
+                                      behavior: 'smooth',
+                                      block: 'nearest',
+                                    });
+                                  }}
+                                  className="font-bold text-slate-900 hover:text-teal-700 text-left"
+                                >
+                                  {t.nama}
+                                </button>
+                                <span
+                                  className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                    t.genderScope === 'Putri'
+                                      ? 'bg-rose-100 text-rose-800'
+                                      : t.genderScope === 'Putra'
+                                      ? 'bg-sky-100 text-sky-800'
+                                      : 'bg-slate-200 text-slate-700'
+                                  }`}
+                                >
+                                  {t.genderScope}
+                                </span>
+                              </div>
+                              <div className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-500 font-mono-num">
+                                <span className="rounded bg-amber-100 border border-amber-300 px-1.5 py-0.5 font-bold text-amber-950">
+                                  Token: {resolveTeacherToken(t)}
+                                </span>
+                                <span>@{t.username}</span>
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5">
+                              {isPureGuruOnly ? (
+                                <span className="inline-flex items-center gap-1 rounded-md border border-teal-300 bg-teal-50 px-2 py-0.5 text-[11px] font-bold text-teal-900">
+                                  Guru (Jadwal Saja)
+                                </span>
+                              ) : allRoles.length > 1 ? (
+                                <span className="inline-flex items-center gap-1 rounded-md border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-[11px] font-bold text-indigo-900">
+                                  Multi-Peran ({allRoles.length} Peran)
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 rounded-md border border-sky-300 bg-sky-50 px-2 py-0.5 text-[11px] font-bold text-sky-900">
+                                  1 Peran ({allRoles[0]})
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2.5">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {allRoles.map((r) => {
+                                  const chipColor =
+                                    r === 'Guru'
+                                      ? 'border-teal-300 bg-teal-50 text-teal-900'
+                                      : r === 'Wali Kelas'
+                                      ? 'border-sky-300 bg-sky-50 text-sky-900'
+                                      : r === 'Musyrif' || r === 'Musyrifah' || r === 'Wali Asrama'
+                                      ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                                      : r === 'Pengampu Al-Quran'
+                                      ? 'border-amber-300 bg-amber-50 text-amber-950'
+                                      : r === 'Pimpinan'
+                                      ? 'border-rose-300 bg-rose-50 text-rose-900'
+                                      : 'border-violet-300 bg-violet-50 text-violet-900';
+
+                                  return (
+                                    <span
+                                      key={r}
+                                      className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-bold ${chipColor}`}
+                                    >
+                                      <span>{r === 'Guru' ? 'Guru (Jadwal)' : r}</span>
+                                      {!(isPureGuruOnly && r === 'Guru') && (
+                                        <button
+                                          type="button"
+                                          disabled={isBusy}
+                                          onClick={() => handleRemoveSingleRoleFromTeacher(t, r)}
+                                          title={`Hapus peran "${r}" dari ${t.nama}`}
+                                          className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-rose-600 hover:text-white text-rose-700 transition-colors"
+                                        >
+                                          ×
+                                        </button>
+                                      )}
+                                    </span>
+                                  );
+                                })}
+
+                                {/* Inline + Peran Dropdown / Popover */}
+                                <div className="relative inline-block">
+                                  <button
+                                    type="button"
+                                    disabled={isBusy}
+                                    onClick={() =>
+                                      setAddingRolePopoverId((prev) =>
+                                        prev === t.id ? null : t.id
+                                      )
+                                    }
+                                    className="inline-flex items-center gap-0.5 rounded-md border border-dashed border-indigo-300 bg-white px-2 py-0.5 text-[10px] font-bold text-indigo-700 hover:bg-indigo-50"
+                                    title="Tambah peran tambahan (Multi-Peran)"
+                                  >
+                                    <Plus className="h-3 w-3" />
+                                    Peran
+                                  </button>
+                                  {addingRolePopoverId === t.id && (
+                                    <div className="absolute left-0 top-full mt-1 z-30 w-48 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg space-y-1">
+                                      <div className="px-2 py-1 text-[10px] font-bold text-slate-500 border-b border-slate-100 flex items-center justify-between">
+                                        <span>Tambah Multi-Peran</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => setAddingRolePopoverId(null)}
+                                          className="text-slate-400 hover:text-slate-700"
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+                                      {availableRolesToAdd.map((roleOpt) => (
+                                        <button
+                                          key={roleOpt}
+                                          type="button"
+                                          onClick={() => handleAddSingleRoleToTeacher(t, roleOpt)}
+                                          className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[11px] font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-900"
+                                        >
+                                          <span>+ {roleOpt}</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5">
+                              <div className="flex flex-wrap items-center gap-1 text-[10px]">
+                                <span
+                                  className={`rounded px-1.5 py-0.5 font-semibold ${
+                                    academicSchedCount > 0
+                                      ? 'bg-teal-100/80 text-teal-900'
+                                      : 'bg-slate-100 text-slate-500'
+                                  }`}
+                                >
+                                  Jadwal Mapel: {academicSchedCount} Sesi
+                                </span>
+                                {t.waliKelasOf && (
+                                  <span className="rounded bg-sky-100/80 px-1.5 py-0.5 font-semibold text-sky-900">
+                                    Wali Kelas: {t.waliKelasOf}
+                                  </span>
+                                )}
+                                {t.kamarBinaan && t.kamarBinaan.length > 0 && (
+                                  <span className="rounded bg-emerald-100/80 px-1.5 py-0.5 font-semibold text-emerald-900">
+                                    Kamar: {t.kamarBinaan.join(', ')}
+                                  </span>
+                                )}
+                                {((t.kelompokQuranBinaan && t.kelompokQuranBinaan.length > 0) ||
+                                  quranSchedCount > 0) && (
+                                  <span className="rounded bg-amber-100/80 px-1.5 py-0.5 font-semibold text-amber-900">
+                                    Halaqah:{' '}
+                                    {t.kelompokQuranBinaan && t.kelompokQuranBinaan.length > 0
+                                      ? t.kelompokQuranBinaan.join(', ')
+                                      : `${quranSchedCount} Sesi`}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                              <div className="inline-flex items-center gap-1">
+                                {!isPureGuruOnly && (
+                                  <button
+                                    type="button"
+                                    disabled={isBusy}
+                                    onClick={() => handleResetTeacherToGuruOnly(t)}
+                                    title="Hapus semua peran tambahan dan jadikan Guru Akademik (Jadwal Saja)"
+                                    className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                                  >
+                                    Hanya Jadwal
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedPegawaiId(t.id);
+                                    roleDetailEditorRef.current?.scrollIntoView({
+                                      behavior: 'smooth',
+                                      block: 'nearest',
+                                    });
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-indigo-800 hover:bg-indigo-50"
+                                >
+                                  <Edit3 className="h-3 w-3" />
+                                  Edit Peran
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteAccount(t.id, t.nama)}
+                                  title="Hapus akun pegawai"
+                                  className="inline-flex items-center rounded-lg border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
             {/* Two-Column Click-to-Assign Workbench */}
-            <div className="grid grid-cols-1 gap-5 lg:grid-cols-12 items-start">
+            <div ref={roleDetailEditorRef} className="grid grid-cols-1 gap-5 lg:grid-cols-12 items-start">
               {/* Left: Daftar Nama Pegawai yang Bisa Diktik */}
               <div className="lg:col-span-5 rounded-xl border border-slate-200 bg-white overflow-hidden">
                 <div className="border-b border-slate-200 bg-slate-50/90 p-3.5 space-y-2.5">
@@ -3636,6 +4293,62 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
                         >
                           <Plus className="h-3.5 w-3.5" />
                           Tambah Kamar
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* D2. Amanah Kelompok Halaqah Al-Qur'an (Pengampu Al-Quran) */}
+                    <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-3.5 space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="text-xs font-bold text-amber-950">
+                          Amanah Pengampu Al-Qur&apos;an — Kelompok Halaqah ({assignKelompokQuran.length} kelompok)
+                        </label>
+                        {assignKelompokQuran.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setAssignKelompokQuran([])}
+                            className="text-[11px] font-semibold text-rose-700 hover:underline"
+                          >
+                            Kosongkan Halaqah
+                          </button>
+                        )}
+                      </div>
+                      {assignKelompokQuran.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {assignKelompokQuran.map((klp) => (
+                            <span
+                              key={klp}
+                              className="inline-flex items-center gap-1 rounded-lg border border-amber-400 bg-amber-100 px-2.5 py-1 text-[11px] font-bold text-amber-950"
+                            >
+                              <span>{klp}</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAssignKelompokQuran((prev) => prev.filter((x) => x !== klp))
+                                }
+                                className="ml-0.5 text-rose-700 hover:text-rose-900"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={customKelompokInput}
+                          onChange={(e) => setCustomKelompokInput(e.target.value)}
+                          placeholder="Tambah kelompok Halaqah Al-Qur'an (contoh: KELOMPOK 1; KELOMPOK 2)"
+                          className="h-9 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-xs focus:border-amber-600 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleAddCustomKelompokToAssign}
+                          className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-900 hover:bg-amber-50"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          Tambah Halaqah
                         </button>
                       </div>
                     </div>

@@ -209,9 +209,10 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
     );
   };
 
-  const localMirrorHasSchedules = (): boolean => {
+  const localMirrorHasData = (): boolean => {
     const snap = getLocalMirrorSnapshot();
-    return Boolean(snap && Array.isArray(snap.schedules) && snap.schedules.length > 0);
+    if (snap) return true;
+    return (options?.akademik?.kelas?.length || 0) > 0;
   };
 
   const fetchMonitoring = async (tgl: string, silent = false) => {
@@ -223,8 +224,8 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
       const scheduleCount = countScheduleCells(data);
       const roomCount = (data?.putra?.asrama?.length || 0) + (data?.putri?.asrama?.length || 0);
 
-      // Detect unhydrated Vercel serverless container (0 rooms OR 0 schedules when local mirror has schedules)
-      if (roomCount === 0 || (scheduleCount === 0 && localMirrorHasSchedules())) {
+      // Detect unhydrated Vercel serverless container (0 rooms OR 0 schedules when local mirror has data)
+      if ((roomCount === 0 || scheduleCount === 0) && localMirrorHasData()) {
         const restored = await ensureServerHydratedFromMirror(true);
         if (restored) {
           res = await fetch(`/api/monitoring?tanggal=${encodeURIComponent(tgl)}`);
@@ -270,7 +271,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
       const totalKbmAn =
         (dataAn?.monitoringRingkasan?.Putra?.totalJadwalKbm || 0) +
         (dataAn?.monitoringRingkasan?.Putri?.totalJadwalKbm || 0);
-      if (totalSantriAn === 0 && totalKbmAn === 0 && localMirrorHasSchedules()) {
+      if (totalSantriAn === 0 && totalKbmAn === 0 && localMirrorHasData()) {
         const restored = await ensureServerHydratedFromMirror(true);
         if (restored) {
           [resAn, resSt] = await Promise.all([
@@ -304,7 +305,7 @@ export const MonitoringLaporanModule: React.FC<Props> = ({
         (data?.meta?.totalSantri || 0) === 0 &&
         (data?.presensiSummary?.totalSesi || 0) === 0 &&
         (!data?.classComparison || data.classComparison.length === 0) &&
-        localMirrorHasSchedules()
+        localMirrorHasData()
       ) {
         const restored = await ensureServerHydratedFromMirror(true);
         if (restored) {

@@ -30,10 +30,14 @@ import {
   shiftDateStr,
 } from '../utils/exportHelpers';
 import {
+  cleanGuruDisplayName,
   emitDataMutated,
   ensureServerHydratedFromMirror,
+  isAdminSuperName,
   loadScopedState,
   loadSubTab,
+  matchGroupClient,
+  matchTeacherClient,
   saveScopedState,
   saveSubTab,
 } from '../utils/sessionPersistence';
@@ -42,6 +46,7 @@ interface PresensiModuleProps {
   initialGuru?: string;
   initialJenis?: PresensiType;
   initialGender?: Gender;
+  initialTarget?: string;
   presetKey?: number;
   loggedInUser?: TeacherPublic | null;
   onSaved?: () => void;
@@ -68,6 +73,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   initialGuru,
   initialJenis,
   initialGender,
+  initialTarget,
   presetKey,
   loggedInUser,
   onSaved,
@@ -88,6 +94,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
     ),
   );
   const [gender, setGender] = useState<Gender>(() =>
+    initialGender ||
     loadSubTab(
       'pintar_presensi_gender_v1',
       ['Putra', 'Putri'] as const,
@@ -97,21 +104,16 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   const [tanggal, setTanggal] = useState<string>(getTodayDateStr());
   const [teachers, setTeachers] = useState<TeacherPublic[]>([]);
   const isRealTeachingUser = (u?: TeacherPublic | null): boolean =>
-    Boolean(u?.nama && u.peran !== 'Admin Super' && u.peran !== 'Admin SIM');
+    Boolean(u?.nama && !isAdminSuperName(u.nama));
 
   const isValidGuruName = (name?: string | null): boolean =>
-    Boolean(
-      name &&
-        name.trim() &&
-        !name.trim().toUpperCase().includes('ADMIN SUPER') &&
-        name.trim().toUpperCase() !== 'ADMIN SIM',
-    );
+    Boolean(name && !isAdminSuperName(name));
 
   const [namaGuru, setNamaGuru] = useState<string>(() => {
-    if (isValidGuruName(initialGuru)) return initialGuru!.trim();
-    const saved = loadScopedState<string>('pintar_presensi_guru_v1', '');
+    if (isValidGuruName(initialGuru)) return cleanGuruDisplayName(initialGuru);
+    const saved = cleanGuruDisplayName(loadScopedState<string>('pintar_presensi_guru_v1', ''));
     if (isValidGuruName(saved)) return saved;
-    return isRealTeachingUser(loggedInUser) ? loggedInUser!.nama : '';
+    return isRealTeachingUser(loggedInUser) ? cleanGuruDisplayName(loggedInUser!.nama) : '';
   });
 
   useEffect(() => {
@@ -124,11 +126,11 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
 
   useEffect(() => {
     if (isValidGuruName(namaGuru)) {
-      saveScopedState('pintar_presensi_guru_v1', namaGuru);
+      saveScopedState('pintar_presensi_guru_v1', cleanGuruDisplayName(namaGuru));
     }
   }, [namaGuru]);
   const [targetOptions, setTargetOptions] = useState<TargetOption[]>([]);
-  const [selectedTarget, setSelectedTarget] = useState<string>('');
+  const [selectedTarget, setSelectedTarget] = useState<string>(initialTarget || '');
   const [loadingTargets, setLoadingTargets] = useState<boolean>(false);
   const [targetRefreshTick, setTargetRefreshTick] = useState<number>(0);
 
@@ -146,14 +148,15 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   useEffect(() => {
     if (presetKey && initialJenis) setJenis(initialJenis);
     if (presetKey && initialGender) setGender(initialGender);
-  }, [presetKey, initialJenis, initialGender]);
+    if (presetKey && initialTarget) setSelectedTarget(initialTarget);
+  }, [presetKey, initialJenis, initialGender, initialTarget]);
 
   // Sync only when external initialGuru or loggedInUser prop changes — never fight user dropdown clicks
   useEffect(() => {
     if (isValidGuruName(initialGuru)) {
-      setNamaGuru(initialGuru!.trim());
+      setNamaGuru(cleanGuruDisplayName(initialGuru));
     } else if (isRealTeachingUser(loggedInUser)) {
-      setNamaGuru((prev) => (isValidGuruName(prev) ? prev : loggedInUser!.nama));
+      setNamaGuru((prev) => (isValidGuruName(prev) ? prev : cleanGuruDisplayName(loggedInUser!.nama)));
       if (loggedInUser!.genderScope === 'Putri' || loggedInUser!.genderScope === 'Putra') {
         setGender(loggedInUser!.genderScope);
       }
@@ -163,11 +166,15 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
   }, [initialGuru, loggedInUser]);
 
   useEffect(() => {
-    const onRestored = () => {
+    const onSync = () => {
       setTargetRefreshTick((n) => n + 1);
     };
-    window.addEventListener('pintar:data-restored', onRestored);
-    return () => window.removeEventListener('pintar:data-restored', onRestored);
+    window.addEventListener('pintar:data-restored', onSync);
+    window.addEventListener('pintar:data-mutated', onSync);
+    return () => {
+      window.removeEventListener('pintar:data-restored', onSync);
+      window.removeEventListener('pintar:data-mutated', onSync);
+    };
   }, []);
 
   // Load filtered teacher list whenever jenis, gender, or targetRefreshTick changes
@@ -213,21 +220,21 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
         if (Array.isArray(list) && list.length > 0) {
           setNamaGuru((prev) => {
             if (prev) {
-              const exactOrCaseMatch = list.find(
-                (t) => t.nama.trim().toUpperCase() === prev.trim().toUpperCase(),
-              );
-              if (exactOrCaseMatch) return exactOrCaseMatch.nama;
+              const exactOrFlexMatch =
+                list.find((t) => cleanGuruDisplayName(t.nama).toUpperCase() === cleanGuruDisplayName(prev).toUpperCase()) ||
+                list.find((t) => matchTeacherClient(t.nama, prev));
+              if (exactOrFlexMatch) return exactOrFlexMatch.nama;
             }
             if (isRealTeachingUser(loggedInUser)) {
-              const matchedUser = list.find(
-                (t) => t.nama.trim().toUpperCase() === loggedInUser!.nama.trim().toUpperCase(),
-              );
+              const matchedUser =
+                list.find((t) => cleanGuruDisplayName(t.nama).toUpperCase() === cleanGuruDisplayName(loggedInUser!.nama).toUpperCase()) ||
+                list.find((t) => matchTeacherClient(t.nama, loggedInUser!.nama));
               if (matchedUser) return matchedUser.nama;
             }
             return list[0].nama;
           });
         } else {
-          setNamaGuru((prev) => (prev.toUpperCase().includes('ADMIN SUPER') ? '' : prev));
+          setNamaGuru((prev) => (isAdminSuperName(prev) ? '' : cleanGuruDisplayName(prev)));
         }
       } catch {
         // Ignore network errors
@@ -327,6 +334,18 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
         }
         setTargetOptions(opts);
         setSelectedTarget((prev) => {
+          const desired = initialTarget || prev;
+          if (desired) {
+            const exact = opts.find((o) => o.value.toUpperCase() === desired.toUpperCase());
+            if (exact) return exact.value;
+            const [dGrup, dMapel] = desired.split('|');
+            const byGroup = opts.find(
+              (o) =>
+                matchGroupClient(o.grup, dGrup) &&
+                (!dMapel || o.mapel.toUpperCase() === dMapel.toUpperCase()),
+            );
+            if (byGroup) return byGroup.value;
+          }
           if (prev && opts.some((o) => o.value === prev)) {
             return prev;
           }
@@ -342,7 +361,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
     return () => {
       active = false;
     };
-  }, [jenis, gender, namaGuru, tanggal, hari, targetRefreshTick]);
+  }, [jenis, gender, namaGuru, tanggal, hari, targetRefreshTick, initialTarget]);
 
   // Load student roster when selectedTarget changes
   useEffect(() => {

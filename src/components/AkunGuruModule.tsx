@@ -40,9 +40,12 @@ import {
   YAxis,
 } from 'recharts';
 import type {
+  AcademicArchiveEntry,
   Gender,
   PimpinanExecutiveReport,
+  PresensiType,
   ScheduleItem,
+  StatusKenaikanKelas,
   TeacherAbsenceLog,
   TeacherPublic,
   UserRole,
@@ -98,6 +101,8 @@ interface TeacherRecapResponse {
     timestamp: string;
   }>;
   allMySchedules: ScheduleItem[];
+  allSystemSchedules?: ScheduleItem[];
+  scheduleApprovalRequired?: boolean;
   todaySchedules: Array<{
     id: string;
     kelas: string;
@@ -171,6 +176,8 @@ interface TeacherRecapResponse {
     rataSholatWajibPct: number;
     rataSholatSunnahPct: number;
     santriProgress: Array<{
+      id?: string;
+      nis?: string;
       nama: string;
       kelas: string;
       kamar: string;
@@ -178,6 +185,10 @@ interface TeacherRecapResponse {
       waliKelas?: string;
       musyrif?: string;
       guruWali?: string;
+      statusKenaikan?: StatusKenaikanKelas;
+      kelasTujuanKenaikan?: string;
+      ringkasanNilaiRapor?: string;
+      catatanRaporWali?: string;
       prioritas: string;
       totalPembinaan: number;
       klasikalCount?: number;
@@ -196,6 +207,8 @@ interface TeacherRecapResponse {
       sunnahPct?: number;
     }>;
     allClassesSantriProgress?: Array<{
+      id?: string;
+      nis?: string;
       nama: string;
       kelas: string;
       kamar: string;
@@ -203,6 +216,10 @@ interface TeacherRecapResponse {
       waliKelas?: string;
       musyrif?: string;
       guruWali?: string;
+      statusKenaikan?: StatusKenaikanKelas;
+      kelasTujuanKenaikan?: string;
+      ringkasanNilaiRapor?: string;
+      catatanRaporWali?: string;
       prioritas: string;
       totalPembinaan: number;
       klasikalCount?: number;
@@ -252,12 +269,17 @@ interface TeacherRecapResponse {
       keterangan: string;
     }>;
     santriProgress: Array<{
+      id?: string;
+      nis?: string;
       nama: string;
       kelas: string;
       kamar: string;
       gender?: Gender;
       waliKelas?: string;
       guruWali?: string;
+      posisiRanjang?: string;
+      catatanKamar?: string;
+      kamarSebelumnya?: string;
       totalPembinaan: number;
       klasikalCount?: number;
       khususCount?: number;
@@ -283,6 +305,32 @@ interface TeacherRecapResponse {
       absenAlfa?: number;
     }>;
   };
+  unassignedAsramaStudents?: Array<{
+    id: string;
+    nis: string;
+    nama: string;
+    kelas: string;
+    kamarSebelumnya?: string;
+    gender: Gender;
+  }>;
+  lockedOtherRoomStudents?: Array<{
+    id: string;
+    nis: string;
+    nama: string;
+    kelas: string;
+    kamar: string;
+    musyrif: string;
+    gender: Gender;
+  }>;
+  unassignedClassStudents?: Array<{
+    id: string;
+    nis: string;
+    nama: string;
+    kamar: string;
+    statusKenaikan?: string;
+    gender: Gender;
+  }>;
+  academicArchives?: AcademicArchiveEntry[];
   guruWaliProgress?: {
     totalSantri: number;
     santriSudahDibina: number;
@@ -335,7 +383,10 @@ interface AkunGuruModuleProps {
   teachers: TeacherPublic[];
   unlockedTeacher: TeacherPublic | null;
   onUnlock: (teacher: TeacherPublic | null) => void;
-  onOpenQuickPresensi: (namaGuru: string) => void;
+  onOpenQuickPresensi: (
+    namaGuru: string,
+    opts?: { jenis?: PresensiType; gender?: Gender; target?: string },
+  ) => void;
   onOpenWaliKelas: () => void;
   onOpenJadwal?: () => void;
   onOpenRegisterPortal?: () => void;
@@ -451,8 +502,52 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
   const [inJadwalKelas, setInJadwalKelas] = useState(unlockedTeacher?.waliKelasOf || '');
   const [inMapel, setInMapel] = useState('');
   const [inJam, setInJam] = useState('1-2');
+  const [inRuang, setInRuang] = useState('');
   const [savingJadwal, setSavingJadwal] = useState(false);
   const [uploadingJadwalExcel, setUploadingJadwalExcel] = useState(false);
+  const [clashCheckResult, setClashCheckResult] = useState<{
+    clash: boolean;
+    type?: 'GURU' | 'KELAS';
+    reason?: string;
+    conflictingItem?: ScheduleItem;
+  } | null>(null);
+  const [activeMatrixCell, setActiveMatrixCell] = useState<ScheduleItem | null>(null);
+  const [togglingApprovalMode, setTogglingApprovalMode] = useState(false);
+
+  // Wali Asrama (Musyrif) Room Management & Semester Transition states
+  const [showRoomManagerPanel, setShowRoomManagerPanel] = useState<boolean>(false);
+  const [musyrifTransitionMode, setMusyrifTransitionMode] = useState<'TEMPLATE_ADMIN' | 'AMBIL_MANDIRI'>('AMBIL_MANDIRI');
+  const [selectedUnassignedAsramaIds, setSelectedUnassignedAsramaIds] = useState<string[]>([]);
+  const [asramaClaimTargetRoom, setAsramaClaimTargetRoom] = useState<string>('');
+  const [asramaUnassignedSearch, setAsramaUnassignedSearch] = useState<string>('');
+  const [claimingAsramaStudents, setClaimingAsramaStudents] = useState<boolean>(false);
+  const [editingRoomMember, setEditingRoomMember] = useState<{
+    studentId?: string;
+    nama: string;
+    kamar: string;
+    posisiRanjang: string;
+    catatanKamar: string;
+  } | null>(null);
+  const [savingRoomMember, setSavingRoomMember] = useState<boolean>(false);
+
+  // Wali Kelas Promotion & Archive states
+  const [waliPromotionMode, setWaliPromotionMode] = useState<'MASSAL' | 'INDIVIDUAL' | 'AMBIL_SISWA'>('MASSAL');
+  const [bulkTargetClass, setBulkTargetClass] = useState<string>('11 IPA 1');
+  const [bulkTahunAjaranBaru, setBulkTahunAjaranBaru] = useState<string>('2027/2028');
+  const [promotingStudents, setPromotingStudents] = useState<boolean>(false);
+  const [individualPromotionDraft, setIndividualPromotionDraft] = useState<
+    Record<string, { statusKenaikan: StatusKenaikanKelas; kelasTujuan: string }>
+  >({});
+  const [selectedUnassignedClassIds, setSelectedUnassignedClassIds] = useState<string[]>([]);
+  const [claimingClassStudents, setClaimingClassStudents] = useState<boolean>(false);
+  const [editingWaliStudentModal, setEditingWaliStudentModal] = useState<{
+    nama: string;
+    nis: string;
+    kelas: string;
+    ringkasanNilaiRapor: string;
+    statusKenaikan: StatusKenaikanKelas;
+    kelasTujuanKenaikan: string;
+  } | null>(null);
 
   const [editScope, setEditScope] = useState<'Putra' | 'Putri' | 'Semua'>(unlockedTeacher?.genderScope || 'Putra');
   const [editWaliKelas, setEditWaliKelas] = useState(unlockedTeacher?.waliKelasOf || '');
@@ -518,10 +613,41 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
         unlockedTeacher.peran,
         ...(unlockedTeacher.peranTambahan || []),
       ]);
+      const isAdminRole = allRoles.has('Admin Super') || allRoles.has('Admin SIM');
+      const allowedRoleTabs = new Set<AkunProgressTab>(['upload']);
+      if (isAdminRole || allRoles.has('Pimpinan')) allowedRoleTabs.add('pimpinan');
+      if (isAdminRole || allRoles.has('Guru') || allRoles.size === 0) allowedRoleTabs.add('mengajar');
+      if (isAdminRole || allRoles.has('Pengampu Al-Quran')) allowedRoleTabs.add('quran');
+      if (
+        isAdminRole ||
+        allRoles.has('Wali Asrama') ||
+        allRoles.has('Musyrif') ||
+        allRoles.has('Musyrifah')
+      ) {
+        allowedRoleTabs.add('musyrif');
+      }
+      if (isAdminRole || allRoles.has('Wali Kelas')) allowedRoleTabs.add('walikelas');
+      if (isAdminRole || allRoles.has('Guru Wali')) allowedRoleTabs.add('guruwali');
+      if (
+        isAdminRole ||
+        allRoles.has('Pimpinan') ||
+        allRoles.has('Wali Kelas') ||
+        allRoles.has('Wali Asrama') ||
+        allRoles.has('Musyrif') ||
+        allRoles.has('Musyrifah') ||
+        allRoles.has('Guru Wali')
+      ) {
+        allowedRoleTabs.add('whatsapp');
+      }
+
       if (unlockedTeacher.genderScope === 'Putra' || unlockedTeacher.genderScope === 'Putri') {
         setPimpinanWilayah(unlockedTeacher.genderScope);
       } else {
         setPimpinanWilayah('Semua');
+      }
+
+      if (!isAdminRole) {
+        setShowAllRoleTabs(false);
       }
 
       const tabKey = `pintar_akunguru_tab_${unlockedTeacher.id || 'default'}`;
@@ -531,10 +657,14 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
       } catch {
         savedTab = null;
       }
-      if (allRoles.has('Pimpinan')) {
-        setProgressTab('pimpinan');
-      } else if (savedTab && (AKUN_TABS as readonly string[]).includes(savedTab)) {
+      if (
+        savedTab &&
+        (AKUN_TABS as readonly string[]).includes(savedTab) &&
+        allowedRoleTabs.has(savedTab as AkunProgressTab)
+      ) {
         setProgressTab(savedTab as AkunProgressTab);
+      } else if (allRoles.has('Pimpinan') && !allRoles.has('Guru')) {
+        setProgressTab('pimpinan');
       } else if (
         unlockedTeacher.peran === 'Musyrif' ||
         unlockedTeacher.peran === 'Musyrifah' ||
@@ -547,8 +677,11 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
         setProgressTab('guruwali');
       } else if (unlockedTeacher.peran === 'Pengampu Al-Quran') {
         setProgressTab('quran');
-      } else {
+      } else if (allowedRoleTabs.has('mengajar')) {
         setProgressTab('mengajar');
+      } else {
+        const firstAllowed = Array.from(allowedRoleTabs)[0] || 'mengajar';
+        setProgressTab(firstAllowed);
       }
     }
   }, [unlockedTeacher]);
@@ -560,6 +693,18 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
   }, [progressTab, unlockedTeacher]);
 
   const fetchRecap = (namaGuru: string) => {
+    const cacheKey = `pintar_recap_cache_${unlockedTeacher?.id || namaGuru}`;
+    if (!recap) {
+      try {
+        const cachedRaw = sessionStorage.getItem(cacheKey);
+        if (cachedRaw) {
+          const parsed = JSON.parse(cachedRaw) as TeacherRecapResponse;
+          if (parsed && parsed.teacher) setRecap(parsed);
+        }
+      } catch {
+        // Ignore
+      }
+    }
     setLoadingRecap(true);
     const qs = new URLSearchParams({ namaGuru, tanggal: today });
     if (unlockedTeacher?.username) qs.set('username', unlockedTeacher.username);
@@ -570,23 +715,32 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
         return (await r.json()) as TeacherRecapResponse;
       })
       .then((data) => {
-        if (data && data.teacher) setRecap(data);
+        if (data && data.teacher) {
+          setRecap(data);
+          try {
+            sessionStorage.setItem(cacheKey, JSON.stringify(data));
+          } catch {
+            // Ignore
+          }
+        }
       })
       .catch(() => {})
       .finally(() => setLoadingRecap(false));
   };
 
-  const fetchHalaqahRecap = (namaGuru: string) => {
+  const fetchHalaqahRecap = (namaGuru: string, isSuperOrPimpinan = false) => {
     setLoadingHalaqah(true);
     fetch(`/api/halaqah/rekap?guru=${encodeURIComponent(namaGuru)}`)
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data?.rows) && data.rows.length > 0) {
           setHalaqahRows(data.rows);
-        } else {
+        } else if (isSuperOrPimpinan) {
           fetch('/api/halaqah/rekap')
             .then((r2) => r2.json())
             .then((allData) => setHalaqahRows(allData?.rows || []));
+        } else {
+          setHalaqahRows([]);
         }
       })
       .finally(() => setLoadingHalaqah(false));
@@ -622,10 +776,22 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
 
   useEffect(() => {
     if (unlockedTeacher) {
+      const roles = new Set<UserRole>([
+        unlockedTeacher.peran,
+        ...(unlockedTeacher.peranTambahan || []),
+      ]);
+      const isSuperOrPimpinan =
+        roles.has('Admin Super') || roles.has('Admin SIM') || roles.has('Pimpinan');
       fetchRecap(unlockedTeacher.nama);
-      fetchHalaqahRecap(unlockedTeacher.nama);
+      if (isSuperOrPimpinan || roles.has('Pengampu Al-Quran')) {
+        fetchHalaqahRecap(unlockedTeacher.nama, isSuperOrPimpinan);
+      } else {
+        setHalaqahRows([]);
+      }
       fetchWaDashboard();
-      fetchPimpinanExecutiveReport(pimpinanWilayah);
+      if (isSuperOrPimpinan) {
+        fetchPimpinanExecutiveReport(pimpinanWilayah);
+      }
     } else {
       setRecap(null);
       setPimpinanReport(null);
@@ -634,16 +800,32 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
 
   useEffect(() => {
     if (unlockedTeacher) {
-      fetchPimpinanExecutiveReport(pimpinanWilayah);
+      const roles = new Set<UserRole>([
+        unlockedTeacher.peran,
+        ...(unlockedTeacher.peranTambahan || []),
+      ]);
+      if (roles.has('Admin Super') || roles.has('Admin SIM') || roles.has('Pimpinan') || showAllRoleTabs) {
+        fetchPimpinanExecutiveReport(pimpinanWilayah);
+      }
     }
-  }, [pimpinanWilayah, unlockedTeacher]);
+  }, [pimpinanWilayah, unlockedTeacher, showAllRoleTabs]);
 
   useEffect(() => {
     if (!unlockedTeacher) return;
     const onSync = () => {
+      const roles = new Set<UserRole>([
+        unlockedTeacher.peran,
+        ...(unlockedTeacher.peranTambahan || []),
+      ]);
+      const isSuperOrPimpinan =
+        roles.has('Admin Super') || roles.has('Admin SIM') || roles.has('Pimpinan');
       fetchRecap(unlockedTeacher.nama);
-      fetchHalaqahRecap(unlockedTeacher.nama);
-      fetchPimpinanExecutiveReport(pimpinanWilayah);
+      if (isSuperOrPimpinan || roles.has('Pengampu Al-Quran')) {
+        fetchHalaqahRecap(unlockedTeacher.nama, isSuperOrPimpinan);
+      }
+      if (isSuperOrPimpinan || showAllRoleTabs) {
+        fetchPimpinanExecutiveReport(pimpinanWilayah);
+      }
     };
     window.addEventListener('pintar:data-restored', onSync);
     window.addEventListener('pintar:data-mutated', onSync);
@@ -651,7 +833,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
       window.removeEventListener('pintar:data-restored', onSync);
       window.removeEventListener('pintar:data-mutated', onSync);
     };
-  }, [unlockedTeacher, pimpinanWilayah]);
+  }, [unlockedTeacher, pimpinanWilayah, showAllRoleTabs]);
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -897,15 +1079,84 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
     }
   };
 
+  // Live Clash Detection whenever Hari, Jam/Sesi, Kelas/Halaqah, or Wilayah changes
+  useEffect(() => {
+    if (!unlockedTeacher || !inJadwalKelas.trim() || !inJam.trim()) {
+      setClashCheckResult(null);
+      return;
+    }
+    let cancelled = false;
+    fetch('/api/jadwal/check-clash', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        guru: unlockedTeacher.nama,
+        hari: inHari,
+        kelas: inJadwalKelas.trim(),
+        jamKe: inJam.trim(),
+        gender: inJadwalWilayah,
+        excludeId: editingJadwalId || undefined,
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((res) => {
+        if (!cancelled && res) {
+          setClashCheckResult(res);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [unlockedTeacher, inHari, inJam, inJadwalKelas, inJadwalWilayah, editingJadwalId]);
+
+  const handleToggleScheduleApprovalMode = async (required: boolean) => {
+    if (!unlockedTeacher) return;
+    setTogglingApprovalMode(true);
+    try {
+      const res = await fetch('/api/jadwal/approval-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ required }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        fetchRecap(unlockedTeacher.nama);
+        notify(data.message, 'info');
+      }
+    } finally {
+      setTogglingApprovalMode(false);
+    }
+  };
+
+  const handleApproveScheduleItem = async (id: string) => {
+    if (!unlockedTeacher) return;
+    const res = await fetch(`/api/jadwal/${id}/approve`, { method: 'POST' });
+    if (res.ok) {
+      fetchRecap(unlockedTeacher.nama);
+      onDataUpdated?.();
+      notify('Perubahan jadwal telah disetujui oleh Kurikulum / Admin dan langsung aktif.', 'success');
+    }
+  };
+
   const handleDirectSaveJadwal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!unlockedTeacher) return;
     if (!inJadwalKelas.trim() || !inMapel.trim()) {
-      notify('Kelas/Halaqah dan Mata Pelajaran wajib diisi.', 'error');
+      notify('Kelas/Halaqah dan Mata Pelajaran/Program wajib diisi.', 'error');
+      return;
+    }
+    if (clashCheckResult?.clash) {
+      notify(
+        clashCheckResult.reason ||
+          'Terdeteksi bentrok jadwal pada hari dan jam yang sama. Silakan pilih jam/sesi atau kelas lain.',
+        'error',
+      );
       return;
     }
     setSavingJadwal(true);
     try {
+      const approvalStatus = 'APPROVED';
       if (editingJadwalId) {
         const res = await fetch(`/api/jadwal/${editingJadwalId}`, {
           method: 'PUT',
@@ -916,18 +1167,26 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
             kelas: inJadwalKelas.trim(),
             mapel: inMapel.trim(),
             jamKe: inJam.trim() || '1-2',
+            ruang: inRuang.trim() || undefined,
             gender: inJadwalWilayah,
             kategori: inKategoriJadwal,
-            allowOverride: true,
+            approvalStatus,
+            allowOverride: false,
           }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Gagal memperbarui jadwal.');
+        if (!res.ok) throw new Error(data.error || 'Gagal memperbarui jadwal (terdeteksi bentrok).');
         setEditingJadwalId(null);
         setInMapel('');
+        setInRuang('');
+        setActiveMatrixCell(null);
         fetchRecap(unlockedTeacher.nama);
         onDataUpdated?.();
-        notify(`Jadwal ${inHari} (${inJadwalKelas.toUpperCase()}) berhasil diperbarui.`, 'success');
+        window.dispatchEvent(new CustomEvent('pintar:data-mutated'));
+        notify(
+          `Jadwal ${inHari} (${inJadwalKelas.toUpperCase()}) berhasil diperbarui & langsung berlaku otomatis di Matriks Pekanan serta Menu Presensi.`,
+          'success',
+        );
       } else {
         const res = await fetch('/api/jadwal', {
           method: 'POST',
@@ -938,17 +1197,25 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
             kelas: inJadwalKelas.trim(),
             mapel: inMapel.trim(),
             jamKe: inJam.trim() || '1-2',
+            ruang: inRuang.trim() || undefined,
             gender: inJadwalWilayah,
             kategori: inKategoriJadwal,
-            allowOverride: true,
+            approvalStatus,
+            allowOverride: false,
           }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Gagal menambahkan jadwal.');
+        if (!res.ok) throw new Error(data.error || 'Gagal menambahkan jadwal (terdeteksi bentrok).');
         setInMapel('');
+        setInRuang('');
+        setActiveMatrixCell(null);
         fetchRecap(unlockedTeacher.nama);
         onDataUpdated?.();
-        notify(`Jadwal ${inHari} (${inJadwalKelas.toUpperCase()}) ditambahkan ke akun Anda.`, 'success');
+        window.dispatchEvent(new CustomEvent('pintar:data-mutated'));
+        notify(
+          `Jadwal ${inHari} (${inJadwalKelas.toUpperCase()}) ditambahkan & langsung berlaku otomatis di Matriks Pekanan serta Menu Presensi.`,
+          'success',
+        );
       }
     } catch (err) {
       notify((err as Error).message, 'error');
@@ -970,6 +1237,8 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
     setInJadwalKelas(item.kelas);
     setInMapel(item.mapel);
     setInJam(item.jamKe);
+    setInRuang(item.ruang || '');
+    setActiveMatrixCell(item);
     notify(`Mode Edit Jadwal aktif: ${item.hari} · ${item.kelas} (${item.mapel}).`, 'info');
   };
 
@@ -980,10 +1249,15 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
       if (editingJadwalId === id) {
         setEditingJadwalId(null);
         setInMapel('');
+        setInRuang('');
+      }
+      if (activeMatrixCell?.id === id) {
+        setActiveMatrixCell(null);
       }
       fetchRecap(unlockedTeacher.nama);
       onDataUpdated?.();
-      notify('Jadwal berhasil dihapus.', 'info');
+      window.dispatchEvent(new CustomEvent('pintar:data-mutated'));
+      notify('Jadwal berhasil dihapus & langsung disinkronkan secara otomatis dari Matriks Pekanan serta Menu Presensi.', 'info');
     }
   };
 
@@ -1059,8 +1333,9 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
         if (!res.ok) throw new Error(data.error || 'Gagal mengimpor jadwal Excel.');
         fetchRecap(unlockedTeacher.nama);
         onDataUpdated?.();
+        window.dispatchEvent(new CustomEvent('pintar:data-mutated'));
         notify(
-          `Upload Excel Jadwal berhasil! (${data.added || 0} jadwal baru ditambahkan, ${data.updated || 0} jadwal lama diperbarui).`,
+          `Upload Excel Jadwal berhasil! (${data.added || 0} jadwal baru ditambahkan, ${data.updated || 0} jadwal lama diperbarui) & langsung berlaku otomatis di Matriks dan Menu Presensi.`,
           'success'
         );
       } catch (err) {
@@ -1073,32 +1348,94 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
   };
 
   const renderInlineScheduleWorkbench = (roleContext: 'Akademik' | 'Al-Quran') => {
+    if (!unlockedTeacher) return null;
     const mySchedules = recap?.allMySchedules || [];
+    const allSysSchedules = recap?.allSystemSchedules || mySchedules;
+    const isApprovalRequired = Boolean(recap?.scheduleApprovalRequired);
+    const daysColumns = ['SENIN', 'SELASA', 'RABU', 'KAMIS', 'JUMAT', 'SABTU', 'AHAD'] as const;
+
+    const defaultSlots =
+      roleContext === 'Al-Quran'
+        ? [
+            { code: "Ba'da Subuh", label: "Sesi 1 · Ba'da Subuh", time: '05.15 – 06.30' },
+            { code: 'Dhuha', label: 'Sesi 2 · Dhuha / Pagi', time: '07.00 – 08.30' },
+            { code: '1-2', label: 'Jam 1-2 (Halaqah Pagi)', time: '07.00 – 08.30' },
+            { code: '3-4', label: 'Jam 3-4 (Halaqah Dhuha)', time: '08.30 – 10.00' },
+            { code: "Ba'da Ashar", label: "Sesi 3 · Ba'da Ashar", time: '15.45 – 17.00' },
+            { code: "Ba'da Maghrib", label: "Sesi 4 · Ba'da Maghrib", time: '18.15 – 19.30' },
+          ]
+        : [
+            { code: '1-2', label: 'Jam 1-2', time: '07.00 – 08.30' },
+            { code: '3-4', label: 'Jam 3-4', time: '08.30 – 10.00' },
+            { code: '5-6', label: 'Jam 5-6', time: '10.15 – 11.45' },
+            { code: '7-8', label: 'Jam 7-8', time: '13.00 – 14.30' },
+            { code: '9-10', label: 'Jam 9-10', time: '14.30 – 16.00' },
+          ];
+
+    // Include any custom jamKe present in teacher's schedules so no schedule is ever hidden
+    const knownCodes = new Set(defaultSlots.map((s) => s.code.toUpperCase()));
+    const extraSlots = mySchedules
+      .map((s) => s.jamKe.trim())
+      .filter((jk) => jk && !knownCodes.has(jk.toUpperCase()))
+      .filter((jk, idx, arr) => arr.findIndex((x) => x.toUpperCase() === jk.toUpperCase()) === idx)
+      .map((jk) => ({
+        code: jk,
+        label: jk.match(/^\d/) ? `Jam ${jk}` : `Sesi ${jk}`,
+        time: 'Sesuai Sesi',
+      }));
+
+    const matrixRows = [...defaultSlots, ...extraSlots];
+
+    const handleMatrixEmptyCellClick = (hari: string, slotCode: string) => {
+      setEditingJadwalId(null);
+      setActiveMatrixCell(null);
+      setInKategoriJadwal(roleContext);
+      setInHari(hari);
+      setInJam(slotCode);
+      if (roleContext === 'Al-Quran' && !inMapel) {
+        setInMapel("HALAQAH AL-QUR'AN");
+      }
+      notify(
+        `Sel kosong dipilih: ${hari} · ${slotCode}. Silakan isi Kelas/Halaqah & Mapel pada form di bawah lalu klik Simpan.`,
+        'info',
+      );
+    };
+
     return (
-      <div className="rounded-xl border border-teal-200 bg-white overflow-hidden">
+      <div className="rounded-xl border border-teal-200 bg-white overflow-hidden shadow-xs space-y-0">
+        {/* Header Bar */}
         <div className="bg-gradient-to-r from-teal-50/90 via-emerald-50/50 to-white px-5 py-4 border-b border-slate-200 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-sm font-bold text-slate-900">
-                Kelola Jadwal {roleContext === 'Al-Quran' ? "Halaqah Al-Qur'an & Mengajar" : 'Guru Akademik & Al-Qur’an'} ({mySchedules.length} Jadwal)
+                1. Modul Jadwal Pekanan (Tabel Matriks Pekanan — {roleContext === 'Al-Quran' ? "Sesi Halaqah Al-Qur'an" : 'Jam Pelajaran Akademik'})
               </h3>
-              <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[10px] font-semibold text-teal-900">
-                Tambah Sistem · Edit Jadwal · Template Excel
+              <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[10px] font-bold text-teal-900">
+                {mySchedules.length} Sesi Terdaftar · Anti-Bentrok Otomatis
               </span>
             </div>
             <p className="text-xs text-slate-600 mt-0.5">
-              Anda bisa menambah jadwal baru lewat form sistem di bawah, klik <b>Edit</b> pada jadwal yang sudah ada, atau <b>Unduh &amp; Upload Template Excel Jadwal (.xlsx)</b>.
+              Klik <b>sel kosong (+ Tambah)</b> pada matriks untuk menambah jadwal di hari/jam tersebut, atau klik <b>sel terisi</b> untuk pintasan langsung <b>&quot;Isi Absensi&quot;</b>, <b>&quot;Catat Progres Materi/Hafalan&quot;</b>, <b>Edit</b>, atau <b>Hapus</b>.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {/* Status Kebijakan Aktif Default: Mode ✓ Berlaku Otomatis */}
+            <div
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-[11px] font-bold text-emerald-900 shadow-2xs"
+              title="Setiap penambahan, perubahan, atau penghapusan jadwal oleh guru langsung berlaku otomatis di Matriks Pekanan dan Menu Presensi selama lolos Validasi Anti-Bentrok"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+              <span>Mode ✓ Berlaku Otomatis (Aktif Default · Sinkron Matriks &amp; Presensi)</span>
+            </div>
+
             <button
               type="button"
               onClick={() => handleDownloadMyJadwalExcel('blank')}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
             >
               <Download className="h-3.5 w-3.5 text-teal-700" />
-              Template Kosong (.xlsx)
+              Template (.xlsx)
             </button>
             <button
               type="button"
@@ -1106,11 +1443,11 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
               className="inline-flex items-center gap-1.5 rounded-lg border border-teal-300 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-900 hover:bg-teal-100 whitespace-nowrap shrink-0"
             >
               <Download className="h-3.5 w-3.5 text-teal-700" />
-              Unduh &amp; Edit Jadwal Saya (.xlsx)
+              Unduh Jadwal (.xlsx)
             </button>
             <label className="inline-flex items-center gap-1.5 rounded-lg bg-[#0B1324] px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 cursor-pointer whitespace-nowrap shrink-0">
               <Upload className="h-3.5 w-3.5 text-teal-300" />
-              <span>{uploadingJadwalExcel ? 'Mengupload...' : 'Upload Excel Jadwal (.xlsx)'}</span>
+              <span>{uploadingJadwalExcel ? 'Mengupload...' : 'Upload Excel'}</span>
               <input
                 type="file"
                 accept=".xlsx,.xls"
@@ -1122,15 +1459,286 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
           </div>
         </div>
 
+        {/* Pintasan Langsung Banner when a Filled Matrix Cell is clicked */}
+        {activeMatrixCell && (
+          <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-sky-600 px-5 py-3 text-white flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="rounded-md bg-white/20 px-2 py-0.5 font-mono-num font-bold">
+                {activeMatrixCell.hari} · {activeMatrixCell.jamKe}
+              </span>
+              <span className="font-extrabold text-sm">
+                {activeMatrixCell.kelas} — {activeMatrixCell.mapel}
+              </span>
+              <span className="text-teal-100">
+                ({activeMatrixCell.ruang || `Ruang ${activeMatrixCell.kelas}`} · Wilayah {activeMatrixCell.gender})
+              </span>
+              {activeMatrixCell.approvalStatus === 'PENDING_APPROVAL' && (
+                <span className="rounded bg-amber-300 px-2 py-0.5 text-[10px] font-extrabold text-amber-950">
+                  Menunggu Approval Kurikulum
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  const isQuranCell =
+                    activeMatrixCell.kategori === 'Al-Quran' ||
+                    activeMatrixCell.mapel.toUpperCase().includes('QUR') ||
+                    activeMatrixCell.mapel.toUpperCase().includes('HALAQAH') ||
+                    roleContext === 'Al-Quran';
+                  onOpenQuickPresensi(unlockedTeacher.nama, {
+                    jenis: isQuranCell ? 'Al-Quran' : 'Belajar',
+                    gender: activeMatrixCell.gender,
+                    target: isQuranCell
+                      ? activeMatrixCell.kelas
+                      : `${activeMatrixCell.kelas}|${activeMatrixCell.mapel}`,
+                  });
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-extrabold text-teal-900 hover:bg-teal-50 shadow-xs"
+              >
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                Isi Absensi Sesi Ini
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const isQuranCell =
+                    activeMatrixCell.kategori === 'Al-Quran' ||
+                    activeMatrixCell.mapel.toUpperCase().includes('QUR') ||
+                    activeMatrixCell.mapel.toUpperCase().includes('HALAQAH') ||
+                    roleContext === 'Al-Quran';
+                  onOpenQuickPresensi(unlockedTeacher.nama, {
+                    jenis: isQuranCell ? 'Al-Quran' : 'Belajar',
+                    gender: activeMatrixCell.gender,
+                    target: isQuranCell
+                      ? activeMatrixCell.kelas
+                      : `${activeMatrixCell.kelas}|${activeMatrixCell.mapel}`,
+                  });
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-400 px-3 py-1.5 text-xs font-extrabold text-slate-950 hover:bg-amber-300 shadow-xs"
+              >
+                <BookOpen className="h-3.5 w-3.5" />
+                {roleContext === 'Al-Quran' ? 'Catat Progres Hafalan / Tahsin' : 'Catat Progres Materi (Silabus)'}
+              </button>
+              {activeMatrixCell.approvalStatus === 'PENDING_APPROVAL' && (
+                <button
+                  type="button"
+                  onClick={() => handleApproveScheduleItem(activeMatrixCell.id)}
+                  className="inline-flex items-center gap-1 rounded-lg bg-emerald-400 px-2.5 py-1.5 text-xs font-extrabold text-slate-950 hover:bg-emerald-300"
+                >
+                  Setujui Jadwal
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => handleStartEditPersonalJadwal(activeMatrixCell)}
+                className="inline-flex items-center gap-1 rounded-lg bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-white/25"
+              >
+                <Edit3 className="h-3.5 w-3.5" />
+                Edit
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeletePersonalJadwal(activeMatrixCell.id)}
+                className="inline-flex items-center gap-1 rounded-lg bg-rose-500/90 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-rose-600"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Hapus
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveMatrixCell(null)}
+                className="rounded-lg bg-white/10 p-1.5 text-white hover:bg-white/20"
+                title="Tutup pintasan"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* TABEL MATRIKS PEKANAN (KOLOM = HARI SENIN-AHAD, BARIS = JAM PELAJARAN / SESI HALAQAH) */}
+        <div className="p-5 border-b border-slate-200 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-bold text-slate-800">
+              Tabel Matriks Pekanan ({unlockedTeacher.nama}) — Kolom: Hari (Senin – Ahad) × Baris: {roleContext === 'Al-Quran' ? 'Sesi Halaqah' : 'Jam Pelajaran'}
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-xs bg-teal-500 inline-block" /> Jadwal Akademik
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-xs bg-amber-500 inline-block" /> Sesi Halaqah Al-Qur&apos;an
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-xs border border-dashed border-slate-300 bg-slate-50 inline-block" /> Sel Kosong (Klik untuk + Tambah)
+              </span>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full border-collapse text-left text-xs">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-100/90 text-slate-800">
+                  <th className="py-2.5 px-3 font-extrabold border-r border-slate-200 min-w-[140px]">
+                    {roleContext === 'Al-Quran' ? 'Sesi Halaqah / Waktu' : 'Jam Pelajaran (JP)'}
+                  </th>
+                  {daysColumns.map((day) => (
+                    <th
+                      key={day}
+                      className={`py-2.5 px-2.5 text-center font-extrabold border-r border-slate-200 min-w-[135px] ${
+                        inHari === day ? 'bg-teal-50 text-teal-900' : ''
+                      }`}
+                    >
+                      {day}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {matrixRows.map((slot) => (
+                  <tr key={slot.code} className="hover:bg-slate-50/50">
+                    <td className="py-2.5 px-3 border-r border-slate-200 bg-slate-50/70 align-middle">
+                      <div className="font-bold text-slate-900">{slot.label}</div>
+                      <div className="font-mono-num text-[10px] text-slate-500">{slot.time}</div>
+                    </td>
+                    {daysColumns.map((day) => {
+                      const matchingCells = mySchedules.filter(
+                        (s) =>
+                          s.hari.toUpperCase() === day &&
+                          s.jamKe.trim().toUpperCase() === slot.code.trim().toUpperCase(),
+                      );
+                      const isTargetEmptySelected =
+                        !editingJadwalId &&
+                        inHari === day &&
+                        inJam.trim().toUpperCase() === slot.code.trim().toUpperCase();
+
+                      return (
+                        <td
+                          key={`${day}|${slot.code}`}
+                          className={`p-1.5 border-r border-slate-200 align-top transition-colors ${
+                            isTargetEmptySelected ? 'bg-teal-50/60' : ''
+                          }`}
+                        >
+                          {matchingCells.length === 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => handleMatrixEmptyCellClick(day, slot.code)}
+                              className={`w-full min-h-[64px] rounded-lg border border-dashed px-2 py-2 text-center transition-all flex flex-col items-center justify-center gap-0.5 ${
+                                isTargetEmptySelected
+                                  ? 'border-teal-500 bg-teal-50/90 text-teal-900 font-bold'
+                                  : 'border-slate-200/90 bg-slate-50/30 text-slate-400 hover:border-teal-400 hover:bg-teal-50/40 hover:text-teal-700'
+                              }`}
+                            >
+                              <span className="text-[11px] font-semibold">
+                                {isTargetEmptySelected ? '+ Mengisi Slot Ini' : '+ Tambah'}
+                              </span>
+                              <span className="text-[9px] font-mono-num opacity-75">
+                                {day.slice(0, 3)} · {slot.code}
+                              </span>
+                            </button>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {matchingCells.map((cell) => {
+                                const isQuranCell =
+                                  cell.kategori === 'Al-Quran' ||
+                                  cell.mapel.toUpperCase().includes('QUR') ||
+                                  cell.mapel.toUpperCase().includes('HALAQAH');
+                                const isActiveCell =
+                                  activeMatrixCell?.id === cell.id || editingJadwalId === cell.id;
+                                return (
+                                  <div
+                                    key={cell.id}
+                                    onClick={() => setActiveMatrixCell(cell)}
+                                    className={`cursor-pointer rounded-lg border p-2 transition-all ${
+                                      isActiveCell
+                                        ? 'ring-2 ring-teal-600 border-teal-600 bg-teal-50 shadow-xs'
+                                        : isQuranCell
+                                        ? 'border-amber-300 bg-gradient-to-br from-amber-50/90 via-white to-amber-50/40 hover:border-amber-400'
+                                        : 'border-teal-300 bg-gradient-to-br from-teal-50/90 via-white to-sky-50/40 hover:border-teal-400'
+                                    }`}
+                                  >
+                                    <div className="flex items-start justify-between gap-1">
+                                      <span
+                                        className={`rounded px-1.5 py-0.2 text-[9px] font-extrabold uppercase ${
+                                          isQuranCell
+                                            ? 'bg-amber-200/80 text-amber-950'
+                                            : 'bg-teal-200/80 text-teal-950'
+                                        }`}
+                                      >
+                                        {cell.kelas}
+                                      </span>
+                                      {cell.approvalStatus === 'PENDING_APPROVAL' && (
+                                        <span className="rounded bg-amber-500 px-1 py-0.2 text-[8px] font-bold text-white">
+                                          Pending
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="mt-1 font-bold text-slate-900 text-[11px] leading-tight line-clamp-1">
+                                      {cell.mapel}
+                                    </div>
+                                    <div className="mt-0.5 text-[10px] text-slate-600 flex items-center justify-between">
+                                      <span className="truncate">
+                                        {cell.ruang || (isQuranCell ? 'Masjid / Saung' : `R. ${cell.kelas.slice(0, 6)}`)}
+                                      </span>
+                                      <span className="font-semibold text-teal-700">{cell.gender}</span>
+                                    </div>
+                                    <div className="mt-1.5 pt-1 border-t border-slate-200/70 flex items-center justify-between gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={(ev) => {
+                                          ev.stopPropagation();
+                                          onOpenQuickPresensi(unlockedTeacher.nama, {
+                                            jenis: isQuranCell ? 'Al-Quran' : 'Belajar',
+                                            gender: cell.gender,
+                                            target: isQuranCell
+                                              ? cell.kelas
+                                              : `${cell.kelas}|${cell.mapel}`,
+                                          });
+                                        }}
+                                        className="rounded bg-emerald-600 px-1.5 py-0.5 text-[9px] font-bold text-white hover:bg-emerald-700"
+                                      >
+                                        Isi Absen
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={(ev) => {
+                                          ev.stopPropagation();
+                                          handleStartEditPersonalJadwal(cell);
+                                        }}
+                                        className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[9px] font-semibold text-slate-700 hover:bg-slate-100"
+                                      >
+                                        Edit
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Form CRUD + Validasi Bentrok & Daftar Jadwal */}
         <div className="p-5 grid grid-cols-1 gap-5 lg:grid-cols-12 items-start">
-          {/* Form Tambah / Edit Jadwal */}
+          {/* Form Tambah / Edit Jadwal dengan Validasi Bentrok Real-Time */}
           <form
             onSubmit={handleDirectSaveJadwal}
             className="lg:col-span-5 rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-3"
           >
             <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
               <div className="text-xs font-bold text-slate-900">
-                {editingJadwalId ? 'Mode Edit Jadwal Saya' : 'Tambah Jadwal Baru via Sistem'}
+                {editingJadwalId
+                  ? 'Mode Edit Jadwal Pekanan'
+                  : `Tambah Jadwal Pekanan (${inHari} · ${inJam})`}
               </div>
               {editingJadwalId && (
                 <button
@@ -1138,6 +1746,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                   onClick={() => {
                     setEditingJadwalId(null);
                     setInMapel('');
+                    setInRuang('');
                   }}
                   className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-700 hover:text-rose-800"
                 >
@@ -1146,6 +1755,26 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                 </button>
               )}
             </div>
+
+            {/* Banner Validasi Bentrok Real-Time */}
+            {clashCheckResult?.clash ? (
+              <div className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-xs text-rose-950 space-y-1">
+                <div className="flex items-center gap-1.5 font-extrabold text-rose-800">
+                  <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                  <span>
+                    Validasi Bentrok ({clashCheckResult.type === 'GURU' ? 'Bentrok Jadwal Anda Sendiri' : 'Bentrok Kelas dengan Guru Lain'})
+                  </span>
+                </div>
+                <p className="text-[11px] leading-relaxed">{clashCheckResult.reason}</p>
+              </div>
+            ) : inJadwalKelas.trim() && inJam.trim() ? (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-[11px] text-emerald-900 flex items-center gap-1.5 font-semibold">
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                <span>
+                  Slot <b>{inHari} ({inJam})</b> di <b>{inJadwalKelas.toUpperCase()}</b> aman &amp; bebas bentrok ({allSysSchedules.length} jadwal sistem diperiksa).
+                </span>
+              </div>
+            ) : null}
 
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -1184,7 +1813,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                   onChange={(e) => setInHari(e.target.value)}
                   className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-xs font-semibold"
                 >
-                  {['SENIN', 'SELASA', 'RABU', 'KAMIS', 'JUMAT', 'SABTU'].map((h) => (
+                  {daysColumns.map((h) => (
                     <option key={h} value={h}>
                       {h}
                     </option>
@@ -1192,88 +1821,120 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                 </select>
               </div>
               <div>
-                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Jam Pelajaran (JP)</label>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  {inKategoriJadwal === 'Al-Quran' ? 'Sesi Halaqah / JP' : 'Jam Pelajaran (JP)'}
+                </label>
                 <input
                   type="text"
+                  list={`slot-options-${roleContext}`}
                   value={inJam}
                   onChange={(e) => setInJam(e.target.value)}
-                  placeholder="Contoh: 1-2 atau 5-6"
+                  placeholder={inKategoriJadwal === 'Al-Quran' ? "Ba'da Subuh / 1-2" : '1-2 / 3-4 / 5-6'}
                   className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-mono-num"
+                />
+                <datalist id={`slot-options-${roleContext}`}>
+                  <option value="1-2" />
+                  <option value="3-4" />
+                  <option value="5-6" />
+                  <option value="7-8" />
+                  <option value="9-10" />
+                  <option value="Ba'da Subuh" />
+                  <option value="Dhuha" />
+                  <option value="Ba'da Ashar" />
+                  <option value="Ba'da Maghrib" />
+                </datalist>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  {inKategoriJadwal === 'Al-Quran' ? 'Kelompok Halaqah *' : 'Nama Kelas Akademik *'}
+                </label>
+                <input
+                  type="text"
+                  value={inJadwalKelas}
+                  onChange={(e) => setInJadwalKelas(e.target.value)}
+                  placeholder={
+                    inKategoriJadwal === 'Al-Quran'
+                      ? inJadwalWilayah === 'Putri'
+                        ? '10-01 Putri'
+                        : '10-08 Putra'
+                      : inJadwalWilayah === 'Putri'
+                      ? '10 KHADIJAH BINTI KHUWAILID'
+                      : '10 ABU BAKAR AS-SHIDDIQ'
+                  }
+                  className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  Ruang Kelas / Lokasi Halaqah
+                </label>
+                <input
+                  type="text"
+                  value={inRuang}
+                  onChange={(e) => setInRuang(e.target.value)}
+                  placeholder={inKategoriJadwal === 'Al-Quran' ? 'Masjid Lt. 1 / Saung B' : 'R. 10 IPA 1 / Labkom'}
+                  className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
                 />
               </div>
             </div>
 
             <div>
               <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                {inKategoriJadwal === 'Al-Quran' ? 'Kelompok Halaqah Al-Qur’an *' : 'Nama Kelas Akademik *'}
-              </label>
-              <input
-                type="text"
-                value={inJadwalKelas}
-                onChange={(e) => setInJadwalKelas(e.target.value)}
-                placeholder={
-                  inKategoriJadwal === 'Al-Quran'
-                    ? inJadwalWilayah === 'Putri'
-                      ? '10-01 Putri'
-                      : '10-08 Putra'
-                    : inJadwalWilayah === 'Putri'
-                    ? '10 KHADIJAH BINTI KHUWAILID'
-                    : '10 ABU BAKAR AS-SHIDDIQ'
-                }
-                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                {inKategoriJadwal === 'Al-Quran' ? 'Agenda Halaqah / Target Tahfidz *' : 'Mata Pelajaran *'}
+                {inKategoriJadwal === 'Al-Quran' ? 'Program Halaqah / Target Tahfidz *' : 'Mata Pelajaran *'}
               </label>
               <input
                 type="text"
                 value={inMapel}
                 onChange={(e) => setInMapel(e.target.value)}
-                placeholder={inKategoriJadwal === 'Al-Quran' ? "HALAQAH AL-QUR'AN" : 'BAHASA ARAB / FIQIH'}
+                placeholder={inKategoriJadwal === 'Al-Quran' ? "HALAQAH AL-QUR'AN (ZIYADAH & TAHSIN)" : 'MATEMATIKA / BAHASA ARAB'}
                 className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs"
               />
             </div>
 
             <button
               type="submit"
-              disabled={savingJadwal}
+              disabled={savingJadwal || Boolean(clashCheckResult?.clash)}
               className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50 whitespace-nowrap shrink-0"
             >
               <Plus className="h-3.5 w-3.5" />
               {savingJadwal
-                ? 'Menyimpan...'
+                ? 'Memvalidasi & Menyimpan...'
+                : clashCheckResult?.clash
+                ? 'Tidak Bisa Simpan (Bentrok Jadwal)'
                 : editingJadwalId
                 ? 'Simpan Perubahan Jadwal'
-                : `Tambah Jadwal ${inKategoriJadwal}`}
+                : `Simpan ke Matriks (${inHari} · ${inJam})`}
             </button>
           </form>
 
-          {/* Tabel Daftar Jadwal Saya + Tombol Edit & Hapus */}
+          {/* Tabel Daftar Jadwal Saya + Pintasan Isi Absensi, Edit & Hapus */}
           <div className="lg:col-span-7 rounded-xl border border-slate-200 bg-white overflow-hidden">
-            <div className="border-b border-slate-200 bg-slate-50 px-4 py-2.5 flex items-center justify-between">
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-semibold text-slate-800">
-                Daftar Jadwal Aktif ({unlockedTeacher?.nama})
+                Daftar Rincian Jadwal Pekanan ({unlockedTeacher?.nama})
               </span>
-              <span className="text-[11px] text-slate-500">Klik Edit untuk mengubah jadwal yang sudah ada</span>
+              <span className="text-[11px] text-emerald-800 font-semibold">
+                Mode: <b>✓ Berlaku Otomatis (Aktif di Matriks &amp; Menu Presensi)</b>
+              </span>
             </div>
-            <div className="max-h-72 overflow-y-auto">
+            <div className="max-h-80 overflow-y-auto">
               <table className="w-full text-left text-xs">
                 <thead className="border-b border-slate-200 bg-slate-50/70 text-slate-600 sticky top-0">
                   <tr>
-                    <th className="px-3 py-2 font-semibold">Hari &amp; JP</th>
-                    <th className="px-3 py-2 font-semibold">Kelas / Halaqah</th>
-                    <th className="px-3 py-2 font-semibold">Mapel / Kategori</th>
-                    <th className="px-3 py-2 text-right font-semibold">Aksi</th>
+                    <th className="px-3 py-2 font-semibold">Hari &amp; Jam/Sesi</th>
+                    <th className="px-3 py-2 font-semibold">Kelas / Halaqah &amp; Ruang</th>
+                    <th className="px-3 py-2 font-semibold">Mapel / Program</th>
+                    <th className="px-3 py-2 text-right font-semibold">Pintasan &amp; Aksi CRUD</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {mySchedules.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
-                        Belum ada jadwal terdaftar. Tambahkan lewat form di samping atau upload Template Excel.
+                        Belum ada jadwal terdaftar. Klik langsung sel kosong pada Tabel Matriks Pekanan di atas atau isi form di samping.
                       </td>
                     </tr>
                   ) : (
@@ -1286,35 +1947,78 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                       >
                         <td className="px-3 py-2.5 whitespace-nowrap">
                           <div className="font-semibold text-slate-900">{sch.hari}</div>
-                          <div className="font-mono-num text-[11px] text-slate-500">JP {sch.jamKe}</div>
+                          <div className="font-mono-num text-[11px] text-slate-500">Sesi/JP: {sch.jamKe}</div>
                         </td>
                         <td className="px-3 py-2.5">
                           <div className="font-semibold text-slate-900">{sch.kelas}</div>
-                          <div className="text-[11px] text-slate-500">Wilayah {sch.gender}</div>
+                          <div className="text-[11px] text-slate-500">
+                            {sch.ruang || `Ruang ${sch.kelas}`} · Wilayah {sch.gender}
+                          </div>
                         </td>
                         <td className="px-3 py-2.5">
                           <div className="font-medium text-slate-800">{sch.mapel}</div>
-                          <div className="text-[10px] font-semibold text-teal-700">
-                            {sch.kategori || (sch.mapel.includes('QUR') ? 'Al-Quran' : 'Akademik')}
+                          <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                            <span className="text-[10px] font-semibold text-teal-700">
+                              {sch.kategori || (sch.mapel.includes('QUR') ? 'Al-Quran' : 'Akademik')}
+                            </span>
+                            {sch.approvalStatus === 'PENDING_APPROVAL' ? (
+                              <span className="rounded bg-amber-100 px-1.5 py-0.2 text-[9px] font-bold text-amber-900">
+                                Menunggu Approval
+                              </span>
+                            ) : (
+                              <span className="rounded bg-emerald-100 px-1.5 py-0.2 text-[9px] font-bold text-emerald-800">
+                                Aktif
+                              </span>
+                            )}
                           </div>
                         </td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                          <button
-                            type="button"
-                            onClick={() => handleStartEditPersonalJadwal(sch)}
-                            className="mr-1.5 inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-50"
-                          >
-                            <Edit3 className="h-3 w-3" />
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeletePersonalJadwal(sch.id)}
-                            className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            Hapus
-                          </button>
+                          <div className="inline-flex flex-wrap items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const isQuranRow =
+                                  sch.kategori === 'Al-Quran' ||
+                                  sch.mapel.toUpperCase().includes('QUR') ||
+                                  sch.mapel.toUpperCase().includes('HALAQAH') ||
+                                  roleContext === 'Al-Quran';
+                                onOpenQuickPresensi(unlockedTeacher.nama, {
+                                  jenis: isQuranRow ? 'Al-Quran' : 'Belajar',
+                                  gender: sch.gender,
+                                  target: isQuranRow ? sch.kelas : `${sch.kelas}|${sch.mapel}`,
+                                });
+                              }}
+                              className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-emerald-700"
+                              title="Isi Absensi & Catat Progres Materi/Hafalan"
+                            >
+                              Isi Absen &amp; Materi
+                            </button>
+                            {sch.approvalStatus === 'PENDING_APPROVAL' && (
+                              <button
+                                type="button"
+                                onClick={() => handleApproveScheduleItem(sch.id)}
+                                className="inline-flex items-center gap-1 rounded-md bg-amber-500 px-2 py-1 text-[10px] font-bold text-white hover:bg-amber-600"
+                              >
+                                Approve
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditPersonalJadwal(sch)}
+                              className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-50"
+                            >
+                              <Edit3 className="h-3 w-3" />
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeletePersonalJadwal(sch.id)}
+                              className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              Hapus
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -1490,39 +2194,40 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
   }
 
   const allMyRoles = Array.from(
-    new Set<UserRole>([unlockedTeacher.peran, ...(unlockedTeacher.peranTambahan || [])]),
+    new Set<UserRole>([unlockedTeacher.peran, ...(unlockedTeacher.peranTambahan || [])].filter(Boolean)),
   );
+  const isAdminSuperOrSim =
+    allMyRoles.includes('Admin Super') || allMyRoles.includes('Admin SIM');
   const isPimpinanOrAdmin =
-    allMyRoles.includes('Pimpinan') ||
-    allMyRoles.includes('Admin Super') ||
-    allMyRoles.includes('Admin SIM');
+    isAdminSuperOrSim || allMyRoles.includes('Pimpinan');
   const hasRoleGuru =
-    isPimpinanOrAdmin ||
+    isAdminSuperOrSim ||
     allMyRoles.includes('Guru') ||
-    (recap?.allMySchedules?.length ?? 0) > 0 ||
-    (recap?.sessions?.length ?? 0) > 0;
+    allMyRoles.length === 0;
   const hasRoleWaliKelas =
-    isPimpinanOrAdmin ||
-    allMyRoles.includes('Wali Kelas') ||
-    Boolean(unlockedTeacher.waliKelasOf);
+    isAdminSuperOrSim ||
+    allMyRoles.includes('Wali Kelas');
   const hasRoleWaliAsrama =
-    isPimpinanOrAdmin ||
+    isAdminSuperOrSim ||
     allMyRoles.includes('Wali Asrama') ||
     allMyRoles.includes('Musyrif') ||
-    allMyRoles.includes('Musyrifah') ||
-    (unlockedTeacher.kamarBinaan?.length ?? 0) > 0 ||
-    (recap?.musyrifProgress?.totalKamar ?? 0) > 0;
+    allMyRoles.includes('Musyrifah');
   const hasRoleGuruWali =
-    isPimpinanOrAdmin ||
-    allMyRoles.includes('Guru Wali') ||
-    (recap?.guruWaliProgress?.totalSantri ?? 0) > 0;
+    isAdminSuperOrSim ||
+    allMyRoles.includes('Guru Wali');
   const hasRoleQuran =
-    isPimpinanOrAdmin ||
-    allMyRoles.includes('Pengampu Al-Quran') ||
-    (recap?.allMySchedules?.some(
-      (s) => s.kategori === 'Al-Quran' || s.mapel.toUpperCase().includes('QUR'),
-    ) ??
-      false);
+    isAdminSuperOrSim ||
+    allMyRoles.includes('Pengampu Al-Quran');
+
+  const ownedRoleModulesCount = [
+    hasRoleGuru,
+    hasRoleQuran,
+    hasRoleWaliAsrama,
+    hasRoleWaliKelas,
+    hasRoleGuruWali,
+    isPimpinanOrAdmin,
+  ].filter(Boolean).length;
+  const isMultiRoleTeacher = ownedRoleModulesCount > 1;
   const activeTokenStr = resolveTeacherToken(unlockedTeacher);
 
   return (
@@ -1536,9 +2241,20 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
             <span className="rounded-md bg-amber-100 border border-amber-300 px-2 py-0.5 font-mono-num text-xs font-bold text-amber-950">
               Token Login: {activeTokenStr}
             </span>
+            <span
+              className={`rounded-md border px-2 py-0.5 text-[11px] font-bold ${
+                isMultiRoleTeacher
+                  ? 'border-indigo-300 bg-indigo-50 text-indigo-900'
+                  : 'border-emerald-300 bg-emerald-50 text-emerald-900'
+              }`}
+            >
+              {isMultiRoleTeacher
+                ? `Multi-Peran (${ownedRoleModulesCount} Amanah)`
+                : '1 Peran Sesuai Template'}
+            </span>
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
-            <span className="font-semibold text-slate-700">Hak Akses Peran:</span>
+            <span className="font-semibold text-slate-700">Hak Akses Peran Sesuai Template:</span>
             {allMyRoles.map((r) => (
               <span
                 key={r}
@@ -1548,18 +2264,18 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                     : 'border-teal-200 bg-teal-50 text-teal-900'
                 }`}
               >
-                {r}
+                {r === 'Guru' ? 'Guru (Jadwal Mengajar)' : r}
               </span>
             ))}
             <span aria-hidden="true">·</span>
             <span>Wilayah {unlockedTeacher.genderScope}</span>
-            {unlockedTeacher.waliKelasOf && (
+            {hasRoleWaliKelas && unlockedTeacher.waliKelasOf && (
               <>
                 <span aria-hidden="true">·</span>
                 <span className="font-semibold text-teal-700">Wali Kelas {unlockedTeacher.waliKelasOf}</span>
               </>
             )}
-            {unlockedTeacher.kamarBinaan && unlockedTeacher.kamarBinaan.length > 0 && (
+            {hasRoleWaliAsrama && unlockedTeacher.kamarBinaan && unlockedTeacher.kamarBinaan.length > 0 && (
               <>
                 <span aria-hidden="true">·</span>
                 <span className="font-semibold text-sky-700">Kamar: {unlockedTeacher.kamarBinaan.join(', ')}</span>
@@ -1599,22 +2315,26 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
             <ExternalLink className="h-3.5 w-3.5" />
             Input Presensi
           </button>
-          <button
-            type="button"
-            onClick={onOpenWaliKelas}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-violet-700 shadow-xs"
-          >
-            <ShieldCheck className="h-3.5 w-3.5" />
-            Pembinaan &amp; Portofolio
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowAllRoleTabs((v) => !v)}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
-            title="Tampilkan atau sembunyikan tab peran di luar amanah utama Anda"
-          >
-            {showAllRoleTabs ? 'Sesuaikan Peran Saya' : 'Tampilkan Semua Tab'}
-          </button>
+          {(hasRoleWaliKelas || hasRoleWaliAsrama || hasRoleGuruWali || isPimpinanOrAdmin) && (
+            <button
+              type="button"
+              onClick={onOpenWaliKelas}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-violet-700 shadow-xs"
+            >
+              <ShieldCheck className="h-3.5 w-3.5" />
+              Pembinaan &amp; Portofolio
+            </button>
+          )}
+          {isAdminSuperOrSim && (
+            <button
+              type="button"
+              onClick={() => setShowAllRoleTabs((v) => !v)}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+              title="Pratinjau Admin Super: Tampilkan semua tab peran"
+            >
+              {showAllRoleTabs ? 'Sesuaikan Peran Saya' : 'Pratinjau Semua Peran'}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => onUnlock(null)}
@@ -1626,133 +2346,173 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
         </div>
       </div>
 
-      {/* Multi-Role Switcher (Pindah Peran dalam 1 Akun) & Fokus Objek Pantauan */}
+      {/* Role Switcher & Navigation Bar — Strictly Filtered by Template Roles (No Excess Roles) */}
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs space-y-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-xs font-bold text-teal-900">
               <Sparkles className="h-3.5 w-3.5 text-teal-600" />
-              Pindah Peran (*Switch Role*) dalam 1 Akun
+              {isMultiRoleTeacher
+                ? 'Pindah Peran (Multi-Peran Sesuai Template)'
+                : 'Fokus Peran Aktif Sesuai Template'}
             </span>
             <span className="text-xs text-slate-600">
-              Satu guru dapat merangkap beberapa amanah sekaligus ({allMyRoles.join(' + ')}) — pilih fokus tampilan di bawah:
+              {isMultiRoleTeacher
+                ? `Akun Anda memiliki ${ownedRoleModulesCount} peran (${allMyRoles.join(' + ')}) — pilih peran di bawah:`
+                : hasRoleGuru && !hasRoleQuran && !hasRoleWaliAsrama && !hasRoleWaliKelas && !hasRoleGuruWali
+                ? 'Akun Guru Akademik murni (Jadwal Mengajar Pekanan, Laju Materi & Kehadiran Kelas) tanpa peran tambahan.'
+                : `Menampilkan modul sesuai peran Anda di template (${allMyRoles.join(', ')}).`}
             </span>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowRoleComparisonMatrix((v) => !v)}
-              className="inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-sky-50/80 px-2.5 py-1 text-[11px] font-semibold text-sky-900 hover:bg-sky-100"
-            >
-              <BarChart3 className="h-3.5 w-3.5 text-sky-600" />
-              {showRoleComparisonMatrix ? 'Tutup Tabel Perbandingan 3 Peran' : 'Lihat Perbedaan Alur 3 Peran Guru'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowAllRoleTabs((v) => !v)}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
-            >
-              {showAllRoleTabs ? 'Hanya Peran Utama Saya' : 'Buka Semua Tab Peran'}
-            </button>
-          </div>
+          {isMultiRoleTeacher && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowRoleComparisonMatrix((v) => !v)}
+                className="inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-sky-50/80 px-2.5 py-1 text-[11px] font-semibold text-sky-900 hover:bg-sky-100"
+              >
+                <BarChart3 className="h-3.5 w-3.5 text-sky-600" />
+                {showRoleComparisonMatrix ? 'Tutup Ringkasan Peran' : 'Ringkasan Fungsi Peran'}
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* 3 Core Role Focus Cards — Instant Switcher between Guru Akademik, Guru Al-Qur'an, and Guru Musyrif */}
-        <div className="grid grid-cols-1 gap-2.5 md:grid-cols-3">
-          <button
-            type="button"
-            onClick={() => setProgressTab('mengajar')}
-            className={`text-left rounded-xl border p-3 transition-all ${
-              progressTab === 'mengajar'
-                ? 'border-teal-400 bg-gradient-to-br from-teal-50 via-emerald-50/40 to-white ring-2 ring-teal-200/70 shadow-xs'
-                : 'border-slate-200 bg-slate-50/60 hover:bg-white hover:border-teal-300'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-teal-900">
-                <BookOpen className="h-4 w-4 text-teal-600" />
-                1. Peran Guru Akademik
-              </span>
-              <span
-                className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+        {/* Role Focus Cards — Only render cards for roles this teacher actually owns (when multi-role or showAllRoleTabs) */}
+        {(isMultiRoleTeacher || showAllRoleTabs) && (
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+            {(hasRoleGuru || showAllRoleTabs) && (
+              <button
+                type="button"
+                onClick={() => setProgressTab('mengajar')}
+                className={`text-left rounded-xl border p-3 transition-all ${
                   progressTab === 'mengajar'
-                    ? 'bg-teal-600 text-white'
-                    : 'bg-teal-100 text-teal-800'
+                    ? 'border-teal-400 bg-gradient-to-br from-teal-50 via-emerald-50/40 to-white ring-2 ring-teal-200/70 shadow-xs'
+                    : 'border-slate-200 bg-slate-50/60 hover:bg-white hover:border-teal-300'
                 }`}
               >
-                {progressTab === 'mengajar' ? 'Aktif' : 'Pilih Peran'}
-              </span>
-            </div>
-            <div className="mt-1.5 text-[11px] text-slate-600 leading-snug">
-              <b>Objek:</b> Rombongan Belajar ({(recap?.learningPacing || []).length} Kelas/Mapel) · <b>Metrik:</b> Laju Materi (*Curriculum Tracker*) &amp; Statistik Kehadiran per Kelas.
-            </div>
-          </button>
+                <div className="flex items-center justify-between">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-teal-900">
+                    <BookOpen className="h-4 w-4 text-teal-600" />
+                    Guru Akademik (Jadwal)
+                  </span>
+                  <span
+                    className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                      progressTab === 'mengajar'
+                        ? 'bg-teal-600 text-white'
+                        : 'bg-teal-100 text-teal-800'
+                    }`}
+                  >
+                    {progressTab === 'mengajar' ? 'Aktif' : 'Pilih'}
+                  </span>
+                </div>
+                <div className="mt-1.5 text-[11px] text-slate-600 leading-snug">
+                  <b>Objek:</b> Rombel ({(recap?.learningPacing || []).length} Kelas) · <b>Fitur:</b> Jadwal Pekanan, Laju Materi &amp; Kehadiran.
+                </div>
+              </button>
+            )}
 
-          <button
-            type="button"
-            onClick={() => setProgressTab('quran')}
-            className={`text-left rounded-xl border p-3 transition-all ${
-              progressTab === 'quran'
-                ? 'border-amber-400 bg-gradient-to-br from-amber-50 via-amber-50/40 to-white ring-2 ring-amber-200/70 shadow-xs'
-                : 'border-slate-200 bg-slate-50/60 hover:bg-white hover:border-amber-300'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-amber-950">
-                <Award className="h-4 w-4 text-amber-600" />
-                2. Peran Guru Al-Qur&apos;an
-              </span>
-              <span
-                className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+            {(hasRoleQuran || showAllRoleTabs) && (
+              <button
+                type="button"
+                onClick={() => setProgressTab('quran')}
+                className={`text-left rounded-xl border p-3 transition-all ${
                   progressTab === 'quran'
-                    ? 'bg-amber-600 text-white'
-                    : 'bg-amber-100 text-amber-900'
+                    ? 'border-amber-400 bg-gradient-to-br from-amber-50 via-amber-50/40 to-white ring-2 ring-amber-200/70 shadow-xs'
+                    : 'border-slate-200 bg-slate-50/60 hover:bg-white hover:border-amber-300'
                 }`}
               >
-                {progressTab === 'quran' ? 'Aktif' : 'Pilih Peran'}
-              </span>
-            </div>
-            <div className="mt-1.5 text-[11px] text-slate-600 leading-snug">
-              <b>Objek:</b> Siswa per Halaqah ({halaqahRows.length} Santri) · <b>Metrik:</b> Setoran Ziyadah, Murojaah, Kualitas Bacaan (Tahsin) &amp; Kehadiran Sesi Halaqah.
-            </div>
-          </button>
+                <div className="flex items-center justify-between">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-amber-950">
+                    <Award className="h-4 w-4 text-amber-600" />
+                    Guru Al-Qur&apos;an
+                  </span>
+                  <span
+                    className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                      progressTab === 'quran'
+                        ? 'bg-amber-600 text-white'
+                        : 'bg-amber-100 text-amber-900'
+                    }`}
+                  >
+                    {progressTab === 'quran' ? 'Aktif' : 'Pilih'}
+                  </span>
+                </div>
+                <div className="mt-1.5 text-[11px] text-slate-600 leading-snug">
+                  <b>Objek:</b> Halaqah ({halaqahRows.length} Santri) · <b>Fitur:</b> Jadwal Sesi Halaqah, Ziyadah, Murojaah &amp; Tahsin.
+                </div>
+              </button>
+            )}
 
-          <button
-            type="button"
-            onClick={() => setProgressTab('musyrif')}
-            className={`text-left rounded-xl border p-3 transition-all ${
-              progressTab === 'musyrif'
-                ? 'border-emerald-400 bg-gradient-to-br from-emerald-50 via-teal-50/40 to-white ring-2 ring-emerald-200/70 shadow-xs'
-                : 'border-slate-200 bg-slate-50/60 hover:bg-white hover:border-emerald-300'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-emerald-950">
-                <Home className="h-4 w-4 text-emerald-600" />
-                3. Peran Guru Musyrif / Asrama
-              </span>
-              <span
-                className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+            {(hasRoleWaliAsrama || showAllRoleTabs) && (
+              <button
+                type="button"
+                onClick={() => setProgressTab('musyrif')}
+                className={`text-left rounded-xl border p-3 transition-all ${
                   progressTab === 'musyrif'
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-emerald-100 text-emerald-900'
+                    ? 'border-emerald-400 bg-gradient-to-br from-emerald-50 via-teal-50/40 to-white ring-2 ring-emerald-200/70 shadow-xs'
+                    : 'border-slate-200 bg-slate-50/60 hover:bg-white hover:border-emerald-300'
                 }`}
               >
-                {progressTab === 'musyrif' ? 'Aktif' : 'Pilih Peran'}
-              </span>
-            </div>
-            <div className="mt-1.5 text-[11px] text-slate-600 leading-snug">
-              <b>Objek:</b> Siswa per Kamar ({recap?.musyrifProgress.totalSantri ?? 0} Santri / {recap?.musyrifProgress.totalKamar ?? 0} Kamar) · <b>Metrik:</b> Mutabaah Yaumiyah, Karakter &amp; Kehadiran Asrama.
-            </div>
-          </button>
-        </div>
+                <div className="flex items-center justify-between">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-emerald-950">
+                    <Home className="h-4 w-4 text-emerald-600" />
+                    Wali Asrama (Musyrif)
+                  </span>
+                  <span
+                    className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                      progressTab === 'musyrif'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-emerald-100 text-emerald-900'
+                    }`}
+                  >
+                    {progressTab === 'musyrif' ? 'Aktif' : 'Pilih'}
+                  </span>
+                </div>
+                <div className="mt-1.5 text-[11px] text-slate-600 leading-snug">
+                  <b>Objek:</b> Kamar ({recap?.musyrifProgress.totalSantri ?? 0} Santri) · <b>Fitur:</b> Mutabaah, Manajemen Kamar &amp; Transisi Semester.
+                </div>
+              </button>
+            )}
 
-        {/* Collapsible Comparison Matrix: Guru Musyrif vs Guru Al-Qur'an vs Guru Akademik */}
+            {(hasRoleWaliKelas || showAllRoleTabs) && (
+              <button
+                type="button"
+                onClick={() => setProgressTab('walikelas')}
+                className={`text-left rounded-xl border p-3 transition-all ${
+                  progressTab === 'walikelas'
+                    ? 'border-sky-400 bg-gradient-to-br from-sky-50 via-indigo-50/40 to-white ring-2 ring-sky-200/70 shadow-xs'
+                    : 'border-slate-200 bg-slate-50/60 hover:bg-white hover:border-sky-300'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-sky-950">
+                    <ShieldCheck className="h-4 w-4 text-sky-600" />
+                    Wali Kelas
+                  </span>
+                  <span
+                    className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                      progressTab === 'walikelas'
+                        ? 'bg-sky-600 text-white'
+                        : 'bg-sky-100 text-sky-900'
+                    }`}
+                  >
+                    {progressTab === 'walikelas' ? 'Aktif' : 'Pilih'}
+                  </span>
+                </div>
+                <div className="mt-1.5 text-[11px] text-slate-600 leading-snug">
+                  <b>Objek:</b> Rombel Kelas ({recap?.waliProgress.totalSantri ?? 0} Siswa) · <b>Fitur:</b> Kelola Kelas, Rapor &amp; Kenaikan Kelas + Arsip.
+                </div>
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Collapsible Comparison Matrix: 4 Peran Guru */}
         {showRoleComparisonMatrix && (
           <div className="rounded-xl border border-sky-200 bg-sky-50/40 overflow-hidden">
             <div className="border-b border-sky-200/80 bg-gradient-to-r from-sky-100/80 via-teal-50/60 to-white px-4 py-2.5 flex items-center justify-between">
               <span className="text-xs font-bold text-sky-950">
-                Ringkasan Perbedaan Alur Tampilan &amp; Fokus Objek Pantauan (3 Peran Guru)
+                Ringkasan Perbedaan Alur Tampilan, Manajemen Transisi &amp; Fokus Objek Pantauan
               </span>
               <span className="text-[11px] font-semibold text-sky-800">
                 Mendukung Multi-Peran (*Switch Role*) dalam 1 Akun
@@ -1763,35 +2523,33 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                 <thead className="border-b border-slate-200 bg-slate-50 text-slate-700">
                   <tr>
                     <th className="px-4 py-2.5 font-bold">Aspek Pantauan</th>
-                    <th className="px-4 py-2.5 font-bold text-emerald-800">Guru Musyrif (Wali Asrama)</th>
+                    <th className="px-4 py-2.5 font-bold text-emerald-800">Wali Asrama (Musyrif)</th>
                     <th className="px-4 py-2.5 font-bold text-amber-800">Guru Al-Qur&apos;an (Halaqah)</th>
-                    <th className="px-4 py-2.5 font-bold text-teal-800">Guru Akademik (Mata Pelajaran)</th>
+                    <th className="px-4 py-2.5 font-bold text-teal-800">Guru Akademik (Mapel)</th>
+                    <th className="px-4 py-2.5 font-bold text-sky-800">Wali Kelas (Rombel)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
                   <tr>
                     <td className="px-4 py-2 font-semibold text-slate-900">Objek Utama</td>
-                    <td className="px-4 py-2">Siswa per Kamar / Binaan</td>
-                    <td className="px-4 py-2">Siswa per Halaqah</td>
-                    <td className="px-4 py-2">Rombongan Belajar (Kelas)</td>
+                    <td className="px-4 py-2">Siswa per Kamar Asrama</td>
+                    <td className="px-4 py-2">Siswa per Kelompok Halaqah</td>
+                    <td className="px-4 py-2">Kelas &amp; Mata Pelajaran</td>
+                    <td className="px-4 py-2">Rombel Akademik &amp; Kenaikan Kelas</td>
                   </tr>
                   <tr>
-                    <td className="px-4 py-2 font-semibold text-slate-900">Metrik Utama</td>
-                    <td className="px-4 py-2">Kedisiplinan &amp; Ibadah Harian (Mutabaah Yaumiyah)</td>
-                    <td className="px-4 py-2">Setoran Ziyadah, Murojaah &amp; Tahsin</td>
-                    <td className="px-4 py-2">Laju Materi (*Curriculum Tracker*) &amp; Nilai Akademik</td>
-                  </tr>
-                  <tr>
-                    <td className="px-4 py-2 font-semibold text-slate-900">Fokus Kehadiran</td>
-                    <td className="px-4 py-2">Kehadiran kegiatan asrama</td>
-                    <td className="px-4 py-2">Kehadiran sesi halaqah</td>
-                    <td className="px-4 py-2">Kehadiran per jam pelajaran per kelas</td>
+                    <td className="px-4 py-2 font-semibold text-slate-900">Metrik &amp; Manajemen</td>
+                    <td className="px-4 py-2">Mutabaah, Posisi Ranjang, Buang (*Soft Detach*), Ambil Mandiri (Anti-Duplikasi)</td>
+                    <td className="px-4 py-2">Matriks Sesi Halaqah, Ziyadah, Murojaah &amp; Tahsin</td>
+                    <td className="px-4 py-2">Matriks Jadwal Pekanan (Anti-Bentrok) &amp; Laju Materi</td>
+                    <td className="px-4 py-2">Kelengkapan Rapor, Kenaikan Kelas (Massal / Individual) &amp; Arsip Terkunci</td>
                   </tr>
                   <tr>
                     <td className="px-4 py-2 font-semibold text-slate-900">Output Rekap</td>
-                    <td className="px-4 py-2">Rapor Karakter / Pembinaan</td>
+                    <td className="px-4 py-2">Rapor Karakter &amp; Kamar</td>
                     <td className="px-4 py-2">Rapor Tahfidz / Al-Qur&apos;an</td>
-                    <td className="px-4 py-2">Rapor Akademik &amp; Jurnal Mengajar</td>
+                    <td className="px-4 py-2">Jurnal Mengajar &amp; Silabus</td>
+                    <td className="px-4 py-2">Rapor Kelas &amp; Arsip Tahun Ajaran</td>
                   </tr>
                 </tbody>
               </table>
@@ -1799,7 +2557,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
           </div>
         )}
 
-        {/* Complete Sub-Tab Bar Including Wali Kelas, Guru Wali, Pimpinan, WhatsApp, and Upload */}
+        {/* Sub-Tab Bar — Strictly shows only tabs corresponding to the teacher's template roles */}
         <div className="flex flex-wrap gap-1.5 rounded-xl bg-slate-100/90 p-1.5 border border-slate-200/80 w-full">
           {(isPimpinanOrAdmin || showAllRoleTabs) && (
             <button
@@ -1815,46 +2573,52 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
               <span className="truncate">Laporan Pimpinan</span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => setProgressTab('mengajar')}
-            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
-              progressTab === 'mengajar'
-                ? 'bg-teal-600 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-            }`}
-          >
-            <BookOpen className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'mengajar' ? 'text-white' : 'text-teal-600'}`} />
-            <span className="truncate">Guru Akademik ({(recap?.learningPacing || []).length})</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setProgressTab('quran')}
-            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
-              progressTab === 'quran'
-                ? 'bg-amber-600 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-            }`}
-          >
-            <Award className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'quran' ? 'text-white' : 'text-amber-600'}`} />
-            <span className="truncate font-mono-num">
-              Guru Al-Qur&apos;an ({halaqahRows.length})
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setProgressTab('musyrif')}
-            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
-              progressTab === 'musyrif'
-                ? 'bg-emerald-600 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-            }`}
-          >
-            <Home className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'musyrif' ? 'text-white' : 'text-emerald-600'}`} />
-            <span className="truncate font-mono-num">
-              Guru Musyrif ({recap?.musyrifProgress.totalSantri ?? 0})
-            </span>
-          </button>
+          {(hasRoleGuru || showAllRoleTabs) && (
+            <button
+              type="button"
+              onClick={() => setProgressTab('mengajar')}
+              className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
+                progressTab === 'mengajar'
+                  ? 'bg-teal-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+              }`}
+            >
+              <BookOpen className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'mengajar' ? 'text-white' : 'text-teal-600'}`} />
+              <span className="truncate">Jadwal &amp; Guru Akademik ({(recap?.learningPacing || []).length})</span>
+            </button>
+          )}
+          {(hasRoleQuran || showAllRoleTabs) && (
+            <button
+              type="button"
+              onClick={() => setProgressTab('quran')}
+              className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
+                progressTab === 'quran'
+                  ? 'bg-amber-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+              }`}
+            >
+              <Award className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'quran' ? 'text-white' : 'text-amber-600'}`} />
+              <span className="truncate font-mono-num">
+                Guru Al-Qur&apos;an ({halaqahRows.length})
+              </span>
+            </button>
+          )}
+          {(hasRoleWaliAsrama || showAllRoleTabs) && (
+            <button
+              type="button"
+              onClick={() => setProgressTab('musyrif')}
+              className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[130px] ${
+                progressTab === 'musyrif'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+              }`}
+            >
+              <Home className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'musyrif' ? 'text-white' : 'text-emerald-600'}`} />
+              <span className="truncate font-mono-num">
+                Wali Asrama / Musyrif ({recap?.musyrifProgress.totalSantri ?? 0})
+              </span>
+            </button>
+          )}
           {(hasRoleWaliKelas || showAllRoleTabs) && (
             <button
               type="button"
@@ -1887,18 +2651,20 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
               </span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => setProgressTab('whatsapp')}
-            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[115px] ${
-              progressTab === 'whatsapp'
-                ? 'bg-green-600 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-            }`}
-          >
-            <ShieldCheck className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'whatsapp' ? 'text-white' : 'text-green-600'}`} />
-            <span className="truncate font-mono-num">WhatsApp ({waLogs.length})</span>
-          </button>
+          {(hasRoleWaliKelas || hasRoleWaliAsrama || hasRoleGuruWali || isPimpinanOrAdmin || showAllRoleTabs) && (
+            <button
+              type="button"
+              onClick={() => setProgressTab('whatsapp')}
+              className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-[115px] ${
+                progressTab === 'whatsapp'
+                  ? 'bg-green-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+              }`}
+            >
+              <ShieldCheck className={`h-3.5 w-3.5 shrink-0 ${progressTab === 'whatsapp' ? 'text-white' : 'text-green-600'}`} />
+              <span className="truncate font-mono-num">WhatsApp ({waLogs.length})</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setProgressTab('upload')}
@@ -3644,7 +4410,9 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
           );
         })()
       ) : progressTab === 'walikelas' ? (
-        /* WALI KELAS PROGRESS TAB (TAMPIL PER KELAS & KEHADIRAN 3 KOMPONEN) */
+        /* ===================================================================== */
+        /* 3. PENAMBAHAN PERAN: AKUN WALI KELAS (ROMBEL & PROSES KENAIKAN KELAS) */
+        /* ===================================================================== */
         (() => {
           const allClassRows = recap.waliProgress.allClassesSantriProgress || recap.waliProgress.santriProgress;
           const activeWaliRows =
@@ -3653,6 +4421,13 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
               : selectedWaliKelasFilter === 'SEMUA'
               ? allClassRows
               : allClassRows.filter((s) => s.kelas.toUpperCase() === selectedWaliKelasFilter.toUpperCase());
+
+          const activeClassName =
+            selectedWaliKelasFilter === 'BINAAN_SAYA'
+              ? recap.waliProgress.kelasBinaan || unlockedTeacher.waliKelasOf || allClassRows[0]?.kelas || '10 IPA 1'
+              : selectedWaliKelasFilter === 'SEMUA'
+              ? recap.waliProgress.kelasBinaan || '10 IPA 1'
+              : selectedWaliKelasFilter;
 
           const activeClassLabel =
             selectedWaliKelasFilter === 'BINAAN_SAYA'
@@ -3666,23 +4441,196 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
             return valid.length === 0 ? 100 : Math.round(valid.reduce((a, b) => a + b, 0) / valid.length);
           };
 
+          const countPutra = activeWaliRows.filter((s) => (s.gender || 'Putra') === 'Putra').length;
+          const countPutri = activeWaliRows.filter((s) => s.gender === 'Putri').length;
+          const avgAkademikKelas = avgPct(activeWaliRows.map((s) => s.akademikPct));
+          const avgAsramaKelas = avgPct(activeWaliRows.map((s) => s.asramaPct));
+          const avgQuranKelas = avgPct(activeWaliRows.map((s) => s.alquranPct));
+
+          // Suggest next grade class name automatically (e.g., 10 -> 11, 11 -> 12, 12 -> LULUS / ALUMNI)
+          const suggestNextGradeClass = (currentKelas: string, status: StatusKenaikanKelas = 'Naik Kelas'): string => {
+            const clean = currentKelas.trim();
+            if (status === 'Tinggal Kelas') return clean;
+            if (status === 'Lulus') return 'ALUMNI / LULUS';
+            if (status === 'Pindah') return 'PINDAH / MUTASI KELUAR';
+            if (clean.startsWith('10')) return clean.replace(/^10/, '11');
+            if (clean.startsWith('11')) return clean.replace(/^11/, '12');
+            if (clean.startsWith('12')) return 'ALUMNI / LULUS';
+            return `11 ${clean}`;
+          };
+
+          const raporCompletedCount = activeWaliRows.filter(
+            (s) => Boolean(s.ringkasanNilaiRapor) || (s.akademikPct ?? 100) >= 75,
+          ).length;
+          const raporCompletedPct =
+            activeWaliRows.length > 0 ? Math.round((raporCompletedCount / activeWaliRows.length) * 100) : 100;
+
+          const unassignedClassList = recap.unassignedClassStudents || [];
+          const classArchives = recap.academicArchives || [];
+
+          const handleSoftDetachFromClass = async (st: (typeof activeWaliRows)[number]) => {
+            const res = await fetch('/api/walikelas/detach-student', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                studentId: st.id,
+                namaSiswa: st.nama,
+                waliKelasName: unlockedTeacher.nama,
+              }),
+            });
+            const data = await res.json();
+            if (res.ok && data.ok) {
+              fetchRecap(unlockedTeacher.nama);
+              emitDataMutated();
+              notify(data.message, 'info');
+            } else {
+              notify(data.error || 'Gagal mengeluarkan siswa dari kelas.', 'error');
+            }
+          };
+
+          const handleBulkPromoteClass = async () => {
+            if (activeWaliRows.length === 0) {
+              notify('Tidak ada siswa di kelas ini untuk dinaikkan.', 'error');
+              return;
+            }
+            const targetKls = bulkTargetClass.trim() || suggestNextGradeClass(activeClassName, 'Naik Kelas');
+            setPromotingStudents(true);
+            try {
+              const res = await fetch('/api/walikelas/promote-students', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  waliKelasName: unlockedTeacher.nama,
+                  tahunAjaranLama: '2026/2027',
+                  semesterLama: 'Genap / Akhir Tahun',
+                  tahunAjaranBaru: bulkTahunAjaranBaru,
+                  promotions: activeWaliRows.map((st) => ({
+                    studentId: st.id,
+                    namaSiswa: st.nama,
+                    statusKenaikan: 'Naik Kelas' as StatusKenaikanKelas,
+                    kelasTujuan: targetKls,
+                    ringkasanNilai:
+                      st.ringkasanNilaiRapor ||
+                      `Rapor Tuntas · Akd ${st.akademikPct ?? 100}% · Asr ${st.asramaPct ?? 100}% · Qur ${st.alquranPct ?? 100}%`,
+                  })),
+                }),
+              });
+              const data = await res.json();
+              if (res.ok && data.ok) {
+                setSelectedWaliKelasFilter(targetKls);
+                fetchRecap(unlockedTeacher.nama);
+                emitDataMutated();
+                notify(data.message, 'success');
+              } else {
+                notify(data.error || 'Gagal memproses kenaikan kelas massal.', 'error');
+              }
+            } finally {
+              setPromotingStudents(false);
+            }
+          };
+
+          const handleSingleOrBatchIndividualPromote = async (targetStudents: typeof activeWaliRows) => {
+            if (targetStudents.length === 0) return;
+            setPromotingStudents(true);
+            try {
+              const promotions = targetStudents.map((st) => {
+                const draft = individualPromotionDraft[st.nama] || {
+                  statusKenaikan: st.statusKenaikan || ('Naik Kelas' as StatusKenaikanKelas),
+                  kelasTujuan:
+                    st.kelasTujuanKenaikan ||
+                    suggestNextGradeClass(st.kelas, st.statusKenaikan || 'Naik Kelas'),
+                };
+                return {
+                  studentId: st.id,
+                  namaSiswa: st.nama,
+                  statusKenaikan: draft.statusKenaikan,
+                  kelasTujuan: draft.kelasTujuan,
+                  ringkasanNilai:
+                    st.ringkasanNilaiRapor ||
+                    `Rapor Tuntas · Akd ${st.akademikPct ?? 100}% · Asr ${st.asramaPct ?? 100}% · Qur ${st.alquranPct ?? 100}%`,
+                };
+              });
+              const res = await fetch('/api/walikelas/promote-students', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  waliKelasName: unlockedTeacher.nama,
+                  tahunAjaranLama: '2026/2027',
+                  semesterLama: 'Genap / Akhir Tahun',
+                  tahunAjaranBaru: bulkTahunAjaranBaru,
+                  promotions,
+                }),
+              });
+              const data = await res.json();
+              if (res.ok && data.ok) {
+                fetchRecap(unlockedTeacher.nama);
+                emitDataMutated();
+                notify(data.message, 'success');
+              } else {
+                notify(data.error || 'Gagal memproses kenaikan kelas individual.', 'error');
+              }
+            } finally {
+              setPromotingStudents(false);
+            }
+          };
+
+          const handleClaimUnassignedToClass = async () => {
+            if (selectedUnassignedClassIds.length === 0) {
+              notify('Centang minimal 1 siswa dari daftar "Belum Ada Kelas".', 'error');
+              return;
+            }
+            setClaimingClassStudents(true);
+            try {
+              const res = await fetch('/api/walikelas/claim-students', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  targetKelas: activeClassName,
+                  waliKelasName: unlockedTeacher.nama,
+                  studentIds: selectedUnassignedClassIds,
+                }),
+              });
+              const data = await res.json();
+              if (res.ok && data.ok) {
+                setSelectedUnassignedClassIds([]);
+                fetchRecap(unlockedTeacher.nama);
+                emitDataMutated();
+                notify(data.message, 'success');
+              } else {
+                notify(data.error || 'Gagal mengambil siswa ke kelas.', 'error');
+              }
+            } finally {
+              setClaimingClassStudents(false);
+            }
+          };
+
           return (
             <div className="space-y-6">
-              {/* Filter Pilih Per Kelas */}
-              <div className="rounded-xl border border-sky-200 bg-sky-50/40 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              {/* Header & Pilih Kelas Binaan */}
+              <div className="rounded-xl border border-sky-200 bg-gradient-to-r from-sky-50/80 via-white to-indigo-50/50 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between shadow-xs">
                 <div>
                   <div className="text-xs font-bold text-slate-900">
-                    Monitoring Wali Kelas Per Kelas · Kehadiran 3 Komponen &amp; Pembinaan (Klasikal Pekanan &amp; Khusus)
+                    3. Tampilan Akun Wali Kelas · Rombel Akademik, Kelengkapan Rapor &amp; Proses Kenaikan Kelas
                   </div>
                   <div className="text-[11px] text-slate-600">
-                    Menampilkan keterhubungan data presensi Akademik, Asrama, dan Al-Qur&apos;an beserta pembinaan Momen Klasikal Pekanan dan Pembinaan Khusus Satu per Satu untuk setiap siswa di kelas.
+                    Struktur seragam dengan Wali Asrama: dukung <b>Keluarkan dari Kelas (*Soft Detach*)</b> ke daftar <i>&quot;Belum Ada Kelas&quot;</i>, serta <b>Proses Kenaikan Kelas (Massal / Individual)</b> dengan <b>Arsip Riwayat Kelas Terkunci</b>.
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <label className="text-xs font-semibold text-slate-700">Pilih Kelas:</label>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <label className="text-xs font-semibold text-slate-700">Pilih Rombel Kelas:</label>
                   <select
                     value={selectedWaliKelasFilter}
-                    onChange={(e) => setSelectedWaliKelasFilter(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedWaliKelasFilter(val);
+                      const sampleKls =
+                        val === 'BINAAN_SAYA'
+                          ? recap.waliProgress.kelasBinaan || '10 IPA 1'
+                          : val === 'SEMUA'
+                          ? '10 IPA 1'
+                          : val;
+                      setBulkTargetClass(suggestNextGradeClass(sampleKls, 'Naik Kelas'));
+                    }}
                     className="h-9 rounded-lg border border-sky-300 bg-white px-3 text-xs font-semibold text-slate-900"
                   >
                     <option value="BINAAN_SAYA">
@@ -3698,54 +4646,293 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                 </div>
               </div>
 
+              {/* A. KARTU STATISTIK KELAS (4 SUMMARY CARDS SESUAI SPESIFIKASI WALI KELAS) */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <div className="text-xs font-medium text-slate-500">Siswa di {activeClassLabel}</div>
+                <div className="rounded-xl border border-sky-200/80 border-t-4 border-t-sky-500 bg-gradient-to-b from-sky-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-sky-950">Nama Kelas Binaan</span>
+                    <span className="rounded-md bg-sky-100 px-2 py-0.5 font-mono-num text-[10px] font-bold text-sky-900">
+                      Wali Kelas
+                    </span>
+                  </div>
+                  <div className="mt-2 text-lg font-extrabold text-slate-900 truncate">
+                    {activeClassName}
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-600 truncate">
+                    Wali Kelas: <b>{unlockedTeacher.nama}</b>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-teal-200/80 border-t-4 border-t-teal-500 bg-gradient-to-b from-teal-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-teal-950">Total Siswa (L / P)</span>
+                    <span className="rounded-md bg-teal-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-teal-800">
+                      L: {countPutra} · P: {countPutri}
+                    </span>
+                  </div>
                   <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
-                    {activeWaliRows.length}
+                    {activeWaliRows.length} <span className="text-sm font-semibold text-slate-500">Siswa</span>
                   </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Terbina: {activeWaliRows.filter((s) => s.totalPembinaan > 0).length} siswa
-                  </div>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <div className="text-xs font-medium text-slate-500">Kehadiran 3 Komponen Kelas</div>
-                  <div className="mt-2 font-mono-num text-xl font-bold text-teal-700">
-                    Akd {avgPct(activeWaliRows.map((s) => s.akademikPct))}% · Asr {avgPct(activeWaliRows.map((s) => s.asramaPct))}% · Qur {avgPct(activeWaliRows.map((s) => s.alquranPct))}%
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Rata-rata kehadiran Akademik, Asrama &amp; Al-Qur&apos;an
+                  <div className="mt-1 text-[11px] text-slate-600">
+                    Belum Ada Kelas: <b>{unassignedClassList.length}</b> siswa di daftar tunggu
                   </div>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <div className="text-xs font-medium text-slate-500">Momen Klasikal &amp; Khusus</div>
-                  <div className="mt-2 font-mono-num text-2xl font-bold text-violet-700">
-                    {activeWaliRows.reduce((a, b) => a + (b.klasikalCount || 0), 0)} Klasikal ·{' '}
-                    {activeWaliRows.reduce((a, b) => a + (b.khususCount || 0), 0)} Khusus
+
+                <div className="rounded-xl border border-emerald-200/80 border-t-4 border-t-emerald-500 bg-gradient-to-b from-emerald-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-950">Kehadiran Rata-rata Kelas</span>
+                    <span className="rounded-md bg-emerald-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-emerald-800">
+                      3 Komponen
+                    </span>
                   </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Pekanan klasikal &amp; pendampingan satu per satu
+                  <div className="mt-2 font-mono-num text-3xl font-bold text-emerald-700">
+                    {avgAkademikKelas}%
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-600 font-mono-num">
+                    Akd {avgAkademikKelas}% · Asr {avgAsramaKelas}% · Qur {avgQuranKelas}%
                   </div>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <div className="text-xs font-medium text-slate-500">Rata-rata Ibadah Kelas</div>
-                  <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
-                    {avgPct(activeWaliRows.map((s) => s.wajibPct))}%
+
+                <div className="rounded-xl border border-amber-200/80 border-t-4 border-t-amber-500 bg-gradient-to-b from-amber-50/60 via-white to-white p-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-amber-950">Status Kelengkapan Nilai Rapor</span>
+                    <span
+                      className={`rounded-md px-2 py-0.5 font-mono-num text-[10px] font-bold ${
+                        raporCompletedPct >= 90
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-amber-100 text-amber-900'
+                      }`}
+                    >
+                      {raporCompletedPct}% Lengkap
+                    </span>
                   </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Sholat Wajib 5 Waktu &amp; Sunnah
+                  <div className="mt-2 font-mono-num text-2xl font-bold text-slate-900">
+                    {raporCompletedCount}/{activeWaliRows.length}{' '}
+                    <span className="text-xs font-semibold text-slate-500">Rapor Siap</span>
+                  </div>
+                  <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-amber-100">
+                    <div
+                      style={{ width: `${raporCompletedPct}%` }}
+                      className="h-full bg-emerald-500"
+                    />
                   </div>
                 </div>
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+              {/* B. MODE "PROSES KENAIKAN KELAS" (AKHIR TAHUN AJARAN) & LOGIKA ARSIP DATA */}
+              <div className="rounded-xl border border-sky-200 bg-white overflow-hidden shadow-xs">
+                <div className="border-b border-sky-100 bg-gradient-to-r from-sky-50/90 via-indigo-50/50 to-white px-5 py-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-bold text-slate-900">
+                        Mode &quot;Proses Kenaikan Kelas&quot; (Akhir Tahun Ajaran) &amp; Penguncian Arsip Rapor
+                      </h3>
+                      <span className="rounded-md bg-sky-100 border border-sky-200 px-2 py-0.5 text-[10px] font-bold text-sky-900">
+                        Arsip Kelas Lama Otomatis Terkunci ({classArchives.length} Arsip)
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      Saat siswa dinaikkan ke kelas baru, <b>riwayat nilai, kehadiran, dan pembinaan di kelas lama otomatis dikunci &amp; diarsipkan</b> agar data siap menyambut tahun ajaran baru tanpa merusak histori.
+                    </p>
+                  </div>
+
+                  <div className="inline-flex rounded-lg bg-slate-100 p-1 text-xs font-semibold shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setWaliPromotionMode('MASSAL')}
+                      className={`rounded-md px-3 py-1.5 transition-colors ${
+                        waliPromotionMode === 'MASSAL'
+                          ? 'bg-sky-600 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      1. Naikkan Semua (Massal)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setWaliPromotionMode('INDIVIDUAL')}
+                      className={`rounded-md px-3 py-1.5 transition-colors ${
+                        waliPromotionMode === 'INDIVIDUAL'
+                          ? 'bg-indigo-600 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      2. Naikkan Satu per Satu (Individual)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setWaliPromotionMode('AMBIL_SISWA')}
+                      className={`rounded-md px-3 py-1.5 transition-colors ${
+                        waliPromotionMode === 'AMBIL_SISWA'
+                          ? 'bg-emerald-600 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      3. Belum Ada Kelas ({unassignedClassList.length})
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-5">
+                  {waliPromotionMode === 'MASSAL' ? (
+                    <div className="rounded-xl border border-sky-200 bg-sky-50/40 p-4 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 flex-1">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            Kelas Asal (Dikunci &amp; Diarsipkan)
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={`${activeClassName} (${activeWaliRows.length} Siswa)`}
+                            className="h-9 w-full rounded-lg border border-slate-300 bg-slate-100 px-3 text-xs font-bold text-slate-800"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            Kelas Tujuan Tingkat Berikutnya *
+                          </label>
+                          <input
+                            type="text"
+                            list="target-class-suggestions"
+                            value={bulkTargetClass}
+                            onChange={(e) => setBulkTargetClass(e.target.value)}
+                            placeholder="Contoh: 11 IPA 1 / Daftar Tunggu Kelas 11"
+                            className="h-9 w-full rounded-lg border border-sky-300 bg-white px-3 text-xs font-bold text-slate-900"
+                          />
+                          <datalist id="target-class-suggestions">
+                            <option value={suggestNextGradeClass(activeClassName, 'Naik Kelas')} />
+                            <option value="11 IPA 1" />
+                            <option value="11 ABU BAKAR AS-SHIDDIQ" />
+                            <option value="12 IPA 1" />
+                            <option value="12 ABU BAKAR AS-SHIDDIQ" />
+                            <option value="DAFTAR TUNGGU KELAS 11" />
+                            <option value="DAFTAR TUNGGU KELAS 12" />
+                            <option value="ALUMNI / LULUS" />
+                          </datalist>
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            Tahun Ajaran Tujuan
+                          </label>
+                          <select
+                            value={bulkTahunAjaranBaru}
+                            onChange={(e) => setBulkTahunAjaranBaru(e.target.value)}
+                            className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold"
+                          >
+                            <option value="2027/2028">TA 2027/2028 (Semester Ganjil)</option>
+                            <option value="2026/2027 - Semester Genap">TA 2026/2027 (Semester Genap)</option>
+                          </select>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={promotingStudents || activeWaliRows.length === 0}
+                        onClick={handleBulkPromoteClass}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-sky-600 px-4 py-2.5 text-xs font-extrabold text-white hover:bg-sky-700 disabled:opacity-50 shadow-xs shrink-0"
+                      >
+                        <TrendingUp className="h-4 w-4" />
+                        {promotingStudents
+                          ? 'Memproses & Mengarsipkan...'
+                          : `Naikkan Semua (${activeWaliRows.length} Siswa) ke ${bulkTargetClass || 'Kelas Berikutnya'}`}
+                      </button>
+                    </div>
+                  ) : waliPromotionMode === 'INDIVIDUAL' ? (
+                    <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="text-xs text-slate-700">
+                        <b>Mode Naikkan Satu per Satu (Individual) Aktif:</b> Gunakan *dropdown* <b>Status Kenaikan</b> (*Naik Kelas / Tinggal Kelas / Lulus / Pindah*) dan kolom <b>Kelas Tujuan</b> pada setiap baris siswa di tabel bawah, lalu klik tombol <b>Proses Individual</b>.
+                      </div>
+                      <button
+                        type="button"
+                        disabled={promotingStudents || activeWaliRows.length === 0}
+                        onClick={() => handleSingleOrBatchIndividualPromote(activeWaliRows)}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-extrabold text-white hover:bg-indigo-700 disabled:opacity-50 shrink-0"
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                        {promotingStudents
+                          ? 'Menyimpan...'
+                          : `Simpan & Terapkan Kenaikan Individual (${activeWaliRows.length} Siswa)`}
+                      </button>
+                    </div>
+                  ) : (
+                    /* Daftar Siswa "Belum Ada Kelas" (Hasil Soft Detach / Siswa Baru) */
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/30 p-4 space-y-3">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="text-xs font-bold text-slate-900">
+                            Daftar Siswa &quot;Belum Ada Kelas&quot; ({unassignedClassList.length} Siswa)
+                          </div>
+                          <div className="text-[11px] text-slate-600">
+                            Siswa yang dikeluarkan dari kelas (*Soft Detach*) masuk ke daftar ini tanpa kehilangan riwayat nilai/kehadiran. Centang untuk memasukkan ke <b>{activeClassName}</b>.
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={claimingClassStudents || selectedUnassignedClassIds.length === 0}
+                          onClick={handleClaimUnassignedToClass}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50 shrink-0"
+                        >
+                          <UserPlus className="h-3.5 w-3.5" />
+                          {claimingClassStudents
+                            ? 'Memasukkan...'
+                            : `Masukkan ke ${activeClassName} (${selectedUnassignedClassIds.length} Dipilih)`}
+                        </button>
+                      </div>
+
+                      {unassignedClassList.length === 0 ? (
+                        <div className="rounded-lg border border-slate-200 bg-white p-4 text-center text-xs text-slate-500">
+                          Saat ini seluruh siswa sudah memiliki rombel kelas aktif (tidak ada siswa di daftar &quot;Belum Ada Kelas&quot;).
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 max-h-56 overflow-y-auto">
+                          {unassignedClassList.map((u) => {
+                            const checked = selectedUnassignedClassIds.includes(u.id);
+                            return (
+                              <label
+                                key={u.id}
+                                className={`flex items-center justify-between rounded-lg border px-3 py-2 text-xs cursor-pointer ${
+                                  checked
+                                    ? 'border-emerald-500 bg-emerald-50/90 font-semibold'
+                                    : 'border-slate-200 bg-white hover:bg-slate-50'
+                                }`}
+                              >
+                                <div className="min-w-0 pr-2">
+                                  <div className="font-bold text-slate-900 truncate">{u.nama}</div>
+                                  <div className="text-[10px] text-slate-500 font-mono-num">
+                                    NIS: {u.nis} · Kamar {u.kamar} · {u.gender}
+                                  </div>
+                                </div>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedUnassignedClassIds((prev) => [...prev, u.id]);
+                                    } else {
+                                      setSelectedUnassignedClassIds((prev) => prev.filter((id) => id !== u.id));
+                                    }
+                                  }}
+                                  className="h-4 w-4 rounded border-slate-300 text-emerald-600"
+                                />
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* C. TABEL DAFTAR SISWA WALI KELAS (NIS, NAMA, RINGKASAN NILAI/KEHADIRAN, STATUS KENAIKAN, EDIT & KELUARKAN DARI KELAS) */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-xs">
                 <div className="flex flex-col gap-2 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <h3 className="text-sm font-semibold text-slate-900">
-                      Rekap Terpadu Siswa Per Kelas ({activeClassLabel} · Wilayah {recap.teacher.genderScope})
+                    <h3 className="text-sm font-bold text-slate-900">
+                      Tabel Daftar Siswa Rombel ({activeClassLabel} · {activeWaliRows.length} Siswa)
                     </h3>
                     <p className="text-xs text-slate-500">
-                      Menghubungkan data kehadiran Akademik, Asrama, Al-Qur&apos;an dengan Pembinaan Klasikal Pekanan &amp; Khusus Individu.
+                      Menampilkan NIS, Nama, Ringkasan Nilai Rapor &amp; Kehadiran 3 Komponen, Status Kenaikan, serta tombol aksi <b>Edit</b> dan <b>Keluarkan dari Kelas (*Soft Detach*)</b>.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -3753,34 +4940,30 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                       type="button"
                       onClick={() => {
                         downloadTableReportPdf({
-                          title: `LAPORAN WALI KELAS — ${activeClassLabel.toUpperCase()} (${recap.teacher.nama})`,
-                          subtitle: `Total Siswa: ${activeWaliRows.length} | Kehadiran Akademik, Asrama, Al-Qur'an & Pembinaan Klasikal/Khusus`,
+                          title: `LAPORAN WALI KELAS & KENAIKAN KELAS — ${activeClassLabel.toUpperCase()} (${recap.teacher.nama})`,
+                          subtitle: `Total Siswa: ${activeWaliRows.length} | Kelengkapan Rapor: ${raporCompletedPct}% | Kehadiran 3 Komponen & Status Kenaikan`,
                           filename: `Laporan_Wali_Kelas_${activeClassLabel.replace(/\s+/g, '_')}.pdf`,
                           orientation: 'landscape',
-                          headers: ['Nama Santri', 'Kelas & Kamar', 'Wali Asrama & GW', 'Akd %', 'Asr %', 'Qur %', 'S/I/A', 'Klasikal/Khusus', 'Wajib %', 'Net Poin', 'Status'],
+                          headers: ['NIS', 'Nama Siswa', 'Kelas & Kamar', 'Ringkasan Nilai & Kehadiran (Akd/Asr/Qur)', 'S/I/A', 'Status Kenaikan & Tujuan', 'Pembinaan'],
                           rows:
                             activeWaliRows.length > 0
-                              ? activeWaliRows.map((st) => [
+                              ? activeWaliRows.map((st, idx) => [
+                                  st.nis || String(1001 + idx),
                                   st.nama,
                                   `${st.kelas} (${st.kamar})`,
-                                  `Asr: ${st.musyrif || '-'} | GW: ${st.guruWali || '-'}`,
-                                  `${st.akademikPct ?? 100}%`,
-                                  `${st.asramaPct ?? 100}%`,
-                                  `${st.alquranPct ?? 100}%`,
+                                  `${st.ringkasanNilaiRapor || 'Rapor Lengkap'} | Akd ${st.akademikPct ?? 100}% · Asr ${st.asramaPct ?? 100}% · Qur ${st.alquranPct ?? 100}%`,
                                   `${st.absenSakit}/${st.absenIzin}/${st.absenAlfa}`,
-                                  `${st.klasikalCount ?? 0}K / ${st.khususCount ?? st.totalPembinaan}I`,
-                                  `${st.wajibPct}%`,
-                                  String(st.netPoin),
-                                  st.statusTerakhir,
+                                  `${st.statusKenaikan || 'Naik Kelas'} -> ${st.kelasTujuanKenaikan || suggestNextGradeClass(st.kelas)}`,
+                                  `${st.klasikalCount ?? 0}K / ${st.khususCount ?? st.totalPembinaan}I (${st.statusTerakhir})`,
                                 ])
-                              : [['-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-']],
+                              : [['-', '-', '-', '-', '-', '-', '-']],
                         });
                         notify(`PDF Laporan Wali Kelas (${activeClassLabel}) berhasil diunduh.`, 'success');
                       }}
                       className="inline-flex items-center gap-1.5 rounded-lg bg-sky-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-sky-800"
                     >
                       <FileText className="h-3.5 w-3.5" />
-                      Unduh PDF Laporan Wali Kelas
+                      Unduh PDF Rapor Kelas
                     </button>
                     <button
                       type="button"
@@ -3791,73 +4974,216 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                     </button>
                   </div>
                 </div>
+
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
-                    <thead className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                    <thead className="border-b border-slate-200 bg-slate-50 text-slate-700">
                       <tr>
-                        <th className="px-4 py-3 font-semibold">Nama Santri</th>
-                        <th className="px-3 py-3 font-semibold">Kelas &amp; Kamar</th>
-                        <th className="px-3 py-3 font-semibold">Wali Asrama &amp; Guru Wali</th>
-                        <th className="px-3 py-3 text-right font-semibold">Akademik</th>
-                        <th className="px-3 py-3 text-right font-semibold">Asrama</th>
-                        <th className="px-3 py-3 text-right font-semibold">Al-Qur&apos;an</th>
-                        <th className="px-3 py-3 text-right font-semibold">S/I/A</th>
-                        <th className="px-3 py-3 text-right font-semibold">Klasikal / Khusus</th>
-                        <th className="px-3 py-3 text-right font-semibold">Wajib %</th>
-                        <th className="px-3 py-3 text-right font-semibold">Net Poin</th>
-                        <th className="px-4 py-3 font-semibold">Status</th>
+                        <th className="px-4 py-3 font-bold">NIS</th>
+                        <th className="px-3 py-3 font-bold">Nama Siswa &amp; Kamar</th>
+                        <th className="px-3 py-3 font-bold">Ringkasan Nilai Rapor &amp; Kehadiran 3 Komponen</th>
+                        <th className="px-3 py-3 text-right font-bold">S / I / A</th>
+                        <th className="px-3 py-3 font-bold">Status Kenaikan &amp; Kelas Tujuan (Akhir Tahun)</th>
+                        <th className="px-4 py-3 text-right font-bold">Aksi (Edit &amp; Keluarkan)</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {activeWaliRows.length === 0 ? (
                         <tr>
-                          <td colSpan={11} className="px-4 py-8 text-center text-slate-500">
-                            Belum ada santri pada filter kelas ini ({activeClassLabel}). Pilih kelas di bagian kanan atas atau atur Kelas Binaan pada tab Upload &amp; Input.
+                          <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                            Belum ada siswa pada filter kelas ini ({activeClassLabel}). Anda dapat mengambil siswa dari tab <b>3. Belum Ada Kelas</b> di atas.
                           </td>
                         </tr>
                       ) : (
-                        activeWaliRows.map((st) => (
-                          <tr key={st.nama} className="hover:bg-slate-50">
-                            <td className="px-4 py-3 font-semibold text-slate-900">{st.nama}</td>
-                            <td className="px-3 py-3">
-                              <div className="font-semibold text-slate-800">{st.kelas}</div>
-                              <div className="text-[11px] text-slate-500">Kamar {st.kamar}</div>
+                        activeWaliRows.map((st, idx) => {
+                          const currentDraft = individualPromotionDraft[st.nama] || {
+                            statusKenaikan: st.statusKenaikan || ('Naik Kelas' as StatusKenaikanKelas),
+                            kelasTujuan:
+                              st.kelasTujuanKenaikan ||
+                              suggestNextGradeClass(st.kelas, st.statusKenaikan || 'Naik Kelas'),
+                          };
+                          return (
+                            <tr key={st.nama} className="hover:bg-sky-50/30">
+                              <td className="px-4 py-3 font-mono-num font-bold text-slate-700 whitespace-nowrap">
+                                {st.nis || `10${String(idx + 1).padStart(2, '0')}`}
+                              </td>
+                              <td className="px-3 py-3">
+                                <div className="font-bold text-slate-900">{st.nama}</div>
+                                <div className="text-[11px] text-slate-500">
+                                  Kelas <strong className="text-sky-800">{st.kelas}</strong> · Kamar {st.kamar} ({st.gender || 'Putra'})
+                                </div>
+                              </td>
+                              <td className="px-3 py-3">
+                                <div className="font-semibold text-slate-900">
+                                  {st.ringkasanNilaiRapor || 'Rapor Lengkap (Tuntas KKM)'}
+                                </div>
+                                <div className="text-[11px] font-mono-num text-slate-600 mt-0.5">
+                                  Akd <strong className="text-sky-700">{st.akademikPct ?? 100}%</strong> · Asr{' '}
+                                  <strong className="text-emerald-700">{st.asramaPct ?? 100}%</strong> · Qur{' '}
+                                  <strong className="text-amber-700">{st.alquranPct ?? 100}%</strong> · Ibadah{' '}
+                                  <strong className="text-teal-700">{st.wajibPct}%</strong>
+                                </div>
+                              </td>
+                              <td className="px-3 py-3 text-right font-mono-num font-semibold text-slate-700 whitespace-nowrap">
+                                {st.absenSakit}/{st.absenIzin}/{st.absenAlfa}
+                              </td>
+                              <td className="px-3 py-3">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <select
+                                    value={currentDraft.statusKenaikan}
+                                    onChange={(e) => {
+                                      const newStatus = e.target.value as StatusKenaikanKelas;
+                                      setIndividualPromotionDraft((prev) => ({
+                                        ...prev,
+                                        [st.nama]: {
+                                          statusKenaikan: newStatus,
+                                          kelasTujuan: suggestNextGradeClass(st.kelas, newStatus),
+                                        },
+                                      }));
+                                    }}
+                                    className={`h-8 rounded-lg border px-2 text-[11px] font-bold ${
+                                      currentDraft.statusKenaikan === 'Naik Kelas'
+                                        ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                                        : currentDraft.statusKenaikan === 'Tinggal Kelas'
+                                        ? 'border-amber-300 bg-amber-50 text-amber-900'
+                                        : currentDraft.statusKenaikan === 'Lulus'
+                                        ? 'border-sky-300 bg-sky-50 text-sky-900'
+                                        : 'border-rose-300 bg-rose-50 text-rose-900'
+                                    }`}
+                                  >
+                                    <option value="Naik Kelas">Naik Kelas</option>
+                                    <option value="Tinggal Kelas">Tinggal Kelas</option>
+                                    <option value="Lulus">Lulus</option>
+                                    <option value="Pindah">Pindah</option>
+                                  </select>
+                                  <input
+                                    type="text"
+                                    value={currentDraft.kelasTujuan}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setIndividualPromotionDraft((prev) => ({
+                                        ...prev,
+                                        [st.nama]: {
+                                          ...currentDraft,
+                                          kelasTujuan: val,
+                                        },
+                                      }));
+                                    }}
+                                    placeholder="Kelas Tujuan..."
+                                    className="h-8 w-36 rounded-lg border border-slate-300 bg-white px-2 text-[11px] font-semibold text-slate-800"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={promotingStudents}
+                                    onClick={() => handleSingleOrBatchIndividualPromote([st])}
+                                    className="rounded-md bg-sky-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-sky-700"
+                                    title="Proses kenaikan & kunci arsip untuk siswa ini"
+                                  >
+                                    Proses
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-right whitespace-nowrap">
+                                <div className="inline-flex items-center justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setEditingWaliStudentModal({
+                                        nama: st.nama,
+                                        nis: st.nis || `10${String(idx + 1).padStart(2, '0')}`,
+                                        kelas: st.kelas,
+                                        ringkasanNilaiRapor:
+                                          st.ringkasanNilaiRapor ||
+                                          `Rapor Tuntas · Rata-rata 88 (Akd ${st.akademikPct ?? 100}%)`,
+                                        statusKenaikan: currentDraft.statusKenaikan,
+                                        kelasTujuanKenaikan: currentDraft.kelasTujuan,
+                                      })
+                                    }
+                                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                                  >
+                                    <Edit3 className="h-3 w-3 text-sky-600" />
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSoftDetachFromClass(st)}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50/70 px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                                    title="Soft Detach: Lepaskan siswa dari kelas ini ke daftar 'Belum Ada Kelas' tanpa menghapus data siswa dari sistem"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                    Keluarkan
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* D. TABEL ARSIP RIWAYAT KELAS TERKUNCI (HISTORI SEMESTER/TAHUN SEBELUMNYA) */}
+              <div className="rounded-xl border border-indigo-200 bg-white overflow-hidden shadow-xs">
+                <div className="border-b border-indigo-100 bg-gradient-to-r from-indigo-50/80 via-white to-sky-50/50 px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-xs font-extrabold text-slate-900">
+                      Arsip Riwayat Kelas Terkunci (*Locked Academic History*) — {classArchives.length} Rekaman Arsip
+                    </h4>
+                    <p className="text-[11px] text-slate-600">
+                      Setiap siswa yang mengalami kenaikan kelas / kelulusan otomatis diarsipkan nilai rapor dan kehadirannya di kelas lama dengan status <b>Terkunci (LOCKED)</b>.
+                    </p>
+                  </div>
+                  <span className="rounded-md bg-indigo-100 px-2.5 py-1 font-mono-num text-[11px] font-bold text-indigo-900">
+                    Aman dari Perubahan Semester Baru
+                  </span>
+                </div>
+                <div className="max-h-60 overflow-y-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-slate-200 bg-slate-50 text-slate-600 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-2.5 font-semibold">Tahun Ajaran &amp; Waktu Arsip</th>
+                        <th className="px-3 py-2.5 font-semibold">NIS &amp; Nama Siswa</th>
+                        <th className="px-3 py-2.5 font-semibold">Transisi Kelas</th>
+                        <th className="px-3 py-2.5 font-semibold">Arsip Nilai &amp; Kehadiran Kelas Lama</th>
+                        <th className="px-4 py-2.5 text-right font-semibold">Status Arsip</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {classArchives.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-6 text-center text-slate-500">
+                            Belum ada arsip kenaikan kelas yang dikunci pada sesi ini. Saat Anda menekan tombol <b>Naikkan Semua</b> atau <b>Proses Individual</b> di atas, arsip kelas lama otomatis tercatat di sini.
+                          </td>
+                        </tr>
+                      ) : (
+                        classArchives.slice(0, 40).map((arc) => (
+                          <tr key={arc.id} className="hover:bg-slate-50">
+                            <td className="px-4 py-2.5 font-mono-num text-[11px] text-slate-600 whitespace-nowrap">
+                              <div className="font-bold text-slate-900">TA {arc.tahunAjaranLama} &rarr; {arc.tahunAjaranBaru}</div>
+                              <div>{arc.semester}</div>
                             </td>
-                            <td className="px-3 py-3 text-[11px]">
-                              <div className="text-slate-700">Asr: {st.musyrif || '-'}</div>
-                              <div className="text-violet-700 font-medium">GW: {st.guruWali || '-'}</div>
+                            <td className="px-3 py-2.5">
+                              <div className="font-bold text-slate-900">{arc.namaSantri}</div>
+                              <div className="font-mono-num text-[10px] text-slate-500">NIS: {arc.nis}</div>
                             </td>
-                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-sky-700">
-                              {st.akademikPct ?? 100}%
+                            <td className="px-3 py-2.5">
+                              <span className="font-semibold text-slate-700">{arc.kelasLama}</span>
+                              <span className="mx-1.5 text-slate-400">&rarr;</span>
+                              <span className="font-bold text-emerald-800">{arc.kelasBaru}</span>
+                              <div className="text-[10px] font-semibold text-indigo-700">{arc.statusKenaikan}</div>
                             </td>
-                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-emerald-700">
-                              {st.asramaPct ?? 100}%
+                            <td className="px-3 py-2.5">
+                              <div className="font-medium text-slate-800">{arc.ringkasanNilai}</div>
+                              <div className="text-[10px] font-mono-num text-slate-500">
+                                Rata-rata Kehadiran: {arc.persenHadirAkademik}% · {arc.totalCatatanPembinaan} Catatan ({arc.netPoinKarakter} Poin)
+                              </div>
                             </td>
-                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-amber-700">
-                              {st.alquranPct ?? 100}%
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono-num text-slate-700">
-                              {st.absenSakit}/{st.absenIzin}/{st.absenAlfa}
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono-num">
-                              <span className="font-semibold text-violet-700">{st.klasikalCount ?? 0}K</span> ·{' '}
-                              <span className="font-semibold text-slate-800">{st.khususCount ?? st.totalPembinaan}I</span>
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono-num font-semibold text-teal-700">
-                              {st.wajibPct}%
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono-num font-semibold">{st.netPoin}</td>
-                            <td className="px-4 py-3">
-                              <span
-                                className={`font-semibold ${
-                                  st.statusTerakhir === 'Eskalasi'
-                                    ? 'text-rose-700'
-                                    : st.statusTerakhir === 'Proses'
-                                    ? 'text-amber-700'
-                                    : 'text-emerald-700'
-                                }`}
-                              >
-                                {st.statusTerakhir}
+                            <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                              <span className="inline-flex items-center gap-1 rounded-md bg-slate-900 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+                                <ShieldCheck className="h-3 w-3" />
+                                TERKUNCI
                               </span>
                             </td>
                           </tr>
@@ -3867,6 +5193,134 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                   </table>
                 </div>
               </div>
+
+              {/* Modal Edit Ringkasan Rapor & Status Siswa Wali Kelas */}
+              {editingWaliStudentModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+                  <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden">
+                    <div className="bg-gradient-to-r from-sky-600 to-indigo-600 px-5 py-3.5 text-white flex items-center justify-between">
+                      <div>
+                        <div className="text-[10px] font-semibold text-sky-100 uppercase">
+                          Edit Data Rapor &amp; Status Kenaikan Siswa
+                        </div>
+                        <h4 className="text-sm font-bold text-white">
+                          {editingWaliStudentModal.nama} (NIS: {editingWaliStudentModal.nis})
+                        </h4>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setEditingWaliStudentModal(null)}
+                        className="rounded-lg bg-white/15 p-1 text-white hover:bg-white/25"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <div className="p-5 space-y-3 text-xs">
+                      <div>
+                        <label className="block font-bold text-slate-700 mb-1">
+                          Ringkasan Nilai Rapor / Catatan Akademik
+                        </label>
+                        <input
+                          type="text"
+                          value={editingWaliStudentModal.ringkasanNilaiRapor}
+                          onChange={(e) =>
+                            setEditingWaliStudentModal({
+                              ...editingWaliStudentModal,
+                              ringkasanNilaiRapor: e.target.value,
+                            })
+                          }
+                          className="h-9 w-full rounded-lg border border-slate-300 px-3 text-xs"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block font-bold text-slate-700 mb-1">Status Kenaikan</label>
+                          <select
+                            value={editingWaliStudentModal.statusKenaikan}
+                            onChange={(e) => {
+                              const st = e.target.value as StatusKenaikanKelas;
+                              setEditingWaliStudentModal({
+                                ...editingWaliStudentModal,
+                                statusKenaikan: st,
+                                kelasTujuanKenaikan: suggestNextGradeClass(
+                                  editingWaliStudentModal.kelas,
+                                  st,
+                                ),
+                              });
+                            }}
+                            className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold"
+                          >
+                            <option value="Naik Kelas">Naik Kelas</option>
+                            <option value="Tinggal Kelas">Tinggal Kelas</option>
+                            <option value="Lulus">Lulus</option>
+                            <option value="Pindah">Pindah</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block font-bold text-slate-700 mb-1">Kelas Tujuan</label>
+                          <input
+                            type="text"
+                            value={editingWaliStudentModal.kelasTujuanKenaikan}
+                            onChange={(e) =>
+                              setEditingWaliStudentModal({
+                                ...editingWaliStudentModal,
+                                kelasTujuanKenaikan: e.target.value,
+                              })
+                            }
+                            className="h-9 w-full rounded-lg border border-slate-300 px-2.5 text-xs font-semibold"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => setEditingWaliStudentModal(null)}
+                          className="rounded-lg border border-slate-200 px-3.5 py-2 text-xs font-semibold text-slate-700"
+                        >
+                          Batal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const modal = editingWaliStudentModal;
+                            setIndividualPromotionDraft((prev) => ({
+                              ...prev,
+                              [modal.nama]: {
+                                statusKenaikan: modal.statusKenaikan,
+                                kelasTujuan: modal.kelasTujuanKenaikan,
+                              },
+                            }));
+                            await fetch('/api/guru/import-personal', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                teacherName: unlockedTeacher.nama,
+                                santriRows: [
+                                  {
+                                    nis: modal.nis,
+                                    nama: modal.nama,
+                                    kelas: modal.kelas,
+                                    kamar:
+                                      activeWaliRows.find((r) => r.nama === modal.nama)?.kamar || '10.1 Putra',
+                                    gender:
+                                      activeWaliRows.find((r) => r.nama === modal.nama)?.gender || defaultGender,
+                                  },
+                                ],
+                              }),
+                            });
+                            setEditingWaliStudentModal(null);
+                            fetchRecap(unlockedTeacher.nama);
+                            notify(`Data rapor & status kenaikan ${modal.nama} berhasil diperbarui.`, 'success');
+                          }}
+                          className="rounded-lg bg-sky-600 px-4 py-2 text-xs font-bold text-white hover:bg-sky-700"
+                        >
+                          Simpan Perubahan
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })()
@@ -4800,6 +6254,17 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
               ? allAsramaRows
               : allAsramaRows.filter((s) => s.kamar.toUpperCase() === selectedAsramaRoom.toUpperCase());
 
+          const activeRoomForAction =
+            selectedAsramaRoom !== 'SEMUA'
+              ? selectedAsramaRoom
+              : recap.musyrifProgress.kamarList[0] || 'KAMAR 1';
+
+          const roomCapacityPerRoom = 16;
+          const totalCapacityScoped =
+            selectedAsramaRoom === 'SEMUA'
+              ? Math.max(1, recap.musyrifProgress.totalKamar) * roomCapacityPerRoom
+              : roomCapacityPerRoom;
+
           const avgPct = (vals: Array<number | undefined>) => {
             const valid = vals.filter((v): v is number => typeof v === 'number');
             return valid.length === 0 ? 100 : Math.round(valid.reduce((a, b) => a + b, 0) / valid.length);
@@ -4830,7 +6295,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
           const asrAlfaToday = roomScopedRows.filter((s) => s.statusAsramaHariIni === 'A').length;
 
           const perhatianKhususMusyrif = roomScopedRows.filter(
-            (s) => evaluateMusyrifStatus(s) === 'Perlu Pendampingan',
+            (s) => evaluateMusyrifStatus(s) === 'Perlu Pendampingan' || s.statusAsramaHariIni === 'S',
           );
 
           const filteredAsramaRows = roomScopedRows.filter((st) => {
@@ -4856,10 +6321,121 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
           const avgWajibRoom = avgPct(roomScopedRows.map((s) => s.wajibPct));
           const avgSunnahRoom = avgPct(roomScopedRows.map((s) => s.sunnahPct));
           const avgAsramaRoom = avgPct(roomScopedRows.map((s) => s.asramaPct));
+          const avgSkorDisiplinKamar = Math.round((avgWajibRoom + avgAsramaRoom) / 2);
 
           const positivePointStudents = roomScopedRows.filter((s) => (s.netPoin ?? 0) > 0).length;
           const negativePointStudents = roomScopedRows.filter((s) => (s.netPoin ?? 0) < 0).length;
           const totalNetPoinRoom = roomScopedRows.reduce((acc, s) => acc + (s.netPoin ?? 0), 0);
+
+          const unassignedPool = recap.unassignedAsramaStudents || [];
+          const lockedOtherRooms = recap.lockedOtherRoomStudents || [];
+
+          const handleDetachFromRoom = async (studentId: string, namaSiswa: string) => {
+            setSavingRoomMember(true);
+            try {
+              const res = await fetch('/api/asrama/detach-student', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ studentId }),
+              });
+              const json = await res.json();
+              if (!res.ok) throw new Error(json.error || 'Gagal mengeluarkan siswa dari kamar');
+              notify(
+                json.message ||
+                  `Siswa ${namaSiswa} dikeluarkan dari kamar (Soft Detach) ke daftar Belum Dapat Kamar. Riwayat mutabaah tetap aman.`,
+                'success',
+              );
+              fetchRecap(unlockedTeacher.nama);
+              onDataUpdated?.();
+            } catch (e: any) {
+              notify(e?.message || 'Gagal mengeluarkan siswa dari kamar', 'error');
+            } finally {
+              setSavingRoomMember(false);
+            }
+          };
+
+          const handleSaveRoomMemberEdit = async () => {
+            if (!editingRoomMember) return;
+            setSavingRoomMember(true);
+            try {
+              const res = await fetch('/api/asrama/member', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  studentId: editingRoomMember.studentId || editingRoomMember.nama,
+                  posisiRanjang: editingRoomMember.posisiRanjang,
+                  catatanKamar: editingRoomMember.catatanKamar,
+                }),
+              });
+              const json = await res.json();
+              if (!res.ok) throw new Error(json.error || 'Gagal menyimpan perubahan anggota kamar');
+              notify(`Data anggota kamar (${editingRoomMember.nama}) berhasil diperbarui.`, 'success');
+              setEditingRoomMember(null);
+              fetchRecap(unlockedTeacher.nama);
+              onDataUpdated?.();
+            } catch (e: any) {
+              notify(e?.message || 'Gagal menyimpan data anggota kamar', 'error');
+            } finally {
+              setSavingRoomMember(false);
+            }
+          };
+
+          const handleClaimStudentsToRoom = async () => {
+            if (selectedUnassignedAsramaIds.length === 0) {
+              notify('Pilih minimal 1 siswa dari daftar Belum Dapat Kamar untuk diambil ke kamar.', 'error');
+              return;
+            }
+            setSavingRoomMember(true);
+            try {
+              const res = await fetch('/api/asrama/claim-students', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  studentIds: selectedUnassignedAsramaIds,
+                  kamar: activeRoomForAction,
+                  musyrif: unlockedTeacher.nama,
+                }),
+              });
+              const json = await res.json();
+              if (!res.ok) throw new Error(json.error || 'Gagal mengambil siswa ke kamar');
+              notify(
+                json.message ||
+                  `${selectedUnassignedAsramaIds.length} siswa berhasil diambil ke Kamar ${activeRoomForAction} & terkunci dari Musyrif lain.`,
+                'success',
+              );
+              setSelectedUnassignedAsramaIds([]);
+              fetchRecap(unlockedTeacher.nama);
+              onDataUpdated?.();
+            } catch (e: any) {
+              notify(e?.message || 'Gagal mengambil siswa ke kamar', 'error');
+            } finally {
+              setSavingRoomMember(false);
+            }
+          };
+
+          const handleRoomSemesterTransition = async (mode: 'TEMPLATE_ADMIN' | 'RESET_TO_POOL') => {
+            setSavingRoomMember(true);
+            try {
+              const res = await fetch('/api/asrama/semester-transition', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  kamar: activeRoomForAction,
+                  musyrif: unlockedTeacher.nama,
+                  mode,
+                }),
+              });
+              const json = await res.json();
+              if (!res.ok) throw new Error(json.error || 'Gagal memproses transisi semester kamar');
+              notify(json.message || 'Transisi semester kamar asrama berhasil diproses.', 'success');
+              fetchRecap(unlockedTeacher.nama);
+              onDataUpdated?.();
+            } catch (e: any) {
+              notify(e?.message || 'Gagal memproses transisi semester kamar', 'error');
+            } finally {
+              setSavingRoomMember(false);
+            }
+          };
 
           return (
             <div className="space-y-6">
@@ -4868,13 +6444,24 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="text-xs font-bold text-slate-900">
-                      1. Tampilan Akun Guru Musyrif / Wali Asrama · Fokus Pembinaan Individu &amp; Kamar Binaan
+                      1. Tampilan Akun Guru Musyrif / Wali Asrama · Fokus Pembinaan Individu, Manajemen Kamar &amp; Transisi Semester
                     </div>
                     <div className="text-[11px] text-slate-600">
-                      Pilih <b>Semua Kamar Binaan</b> atau filter <b>Per Kamar</b> untuk memantau Mutabaah Yaumiyah, Karakter &amp; Kedisiplinan, serta Kehadiran 3 Komponen.
+                      Pilih <b>Semua Kamar Binaan</b> atau filter <b>Per Kamar</b> untuk memantau Mutabaah Yaumiyah, Karakter, Kapasitas Kamar, serta Manajemen Transisi Semester Baru.
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShowRoomManagerPanel((prev) => !prev)}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors shadow-2xs ${
+                        showRoomManagerPanel
+                          ? 'bg-amber-600 text-white hover:bg-amber-700'
+                          : 'border border-emerald-300 bg-white text-emerald-900 hover:bg-emerald-50'
+                      }`}
+                    >
+                      {showRoomManagerPanel ? 'Tutup Manajemen Kamar' : 'Manajemen Kamar & Transisi Semester'}
+                    </button>
                     <button
                       type="button"
                       onClick={() => onOpenQuickPresensi(unlockedTeacher.nama)}
@@ -4903,7 +6490,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                         : 'border border-emerald-200 bg-white text-slate-700 hover:bg-emerald-50'
                     }`}
                   >
-                    Semua Kamar ({allAsramaRows.length} Siswa)
+                    Semua Kamar ({allAsramaRows.length}/{Math.max(1, recap.musyrifProgress.totalKamar) * 16} Siswa)
                   </button>
                   {recap.musyrifProgress.kamarList.map((km) => {
                     const countInRoom = allAsramaRows.filter(
@@ -4921,42 +6508,43 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                             : 'border border-slate-200 bg-white text-slate-700 hover:bg-emerald-50'
                         }`}
                       >
-                        Kamar {km} ({countInRoom})
+                        Kamar {km} ({countInRoom}/16 Siswa)
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              {/* A. RINGKASAN CEPAT GURU MUSYRIF (4 SUMMARY CARDS) */}
+              {/* A. KARTU STATISTIK KAMAR & RINGKASAN CEPAT GURU MUSYRIF (4 SUMMARY CARDS) */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-xl border border-emerald-200/80 border-t-4 border-t-emerald-500 bg-gradient-to-b from-emerald-50/60 via-white to-white p-4 shadow-xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-emerald-950">Total Siswa Binaan</span>
+                    <span className="text-xs font-bold text-emerald-950">Kamar &amp; Kapasitas Terisi</span>
                     <span className="rounded-md bg-emerald-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-emerald-800">
-                      {recap.musyrifProgress.totalKamar} Kamar
+                      {selectedAsramaRoom === 'SEMUA' ? `${recap.musyrifProgress.totalKamar} Kamar` : `Kamar ${selectedAsramaRoom}`}
                     </span>
                   </div>
                   <div className="mt-2 font-mono-num text-3xl font-bold text-slate-900">
-                    {roomScopedRows.length} <span className="text-sm font-semibold text-slate-500">Santri</span>
+                    {roomScopedRows.length}/{totalCapacityScoped}{' '}
+                    <span className="text-sm font-semibold text-slate-500">Siswa</span>
                   </div>
                   <div className="mt-1.5 text-[11px] text-slate-600 truncate">
-                    {roomLabel} · Terbina: {roomScopedRows.filter((s) => s.totalPembinaan > 0).length} anak
+                    {roomLabel} · Sisa Kuota: {Math.max(0, totalCapacityScoped - roomScopedRows.length)} Ranjang
                   </div>
                 </div>
 
                 <div className="rounded-xl border border-teal-200/80 border-t-4 border-t-teal-500 bg-gradient-to-b from-teal-50/60 via-white to-white p-4 shadow-xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-teal-950">Rata-rata Capaian Target</span>
+                    <span className="text-xs font-bold text-teal-950">Rata-rata Skor Kedisiplinan</span>
                     <span className="rounded-md bg-teal-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-teal-800">
-                      Ibadah &amp; Disiplin
+                      Target: {capaianTargetMusyrifPct}%
                     </span>
                   </div>
                   <div className="mt-2 font-mono-num text-3xl font-bold text-teal-700">
-                    {capaianTargetMusyrifPct}%
+                    {avgSkorDisiplinKamar}%
                   </div>
                   <div className="mt-1.5 text-[11px] text-slate-600">
-                    {tercapaiMusyrifCount} dari {roomScopedRows.length} santri mencapai target bulanan
+                    Ibadah Wajib {avgWajibRoom}% · Apel Asrama {avgAsramaRoom}% ({tercapaiMusyrifCount}/{roomScopedRows.length} Tercapai)
                   </div>
                 </div>
 
@@ -4985,9 +6573,9 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
 
                 <div className="rounded-xl border border-rose-200/80 border-t-4 border-t-rose-500 bg-gradient-to-b from-rose-50/60 via-white to-white p-4 shadow-xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-rose-950">Notifikasi Perhatian Khusus</span>
+                    <span className="text-xs font-bold text-rose-950">Siswa Bermasalah / Sakit</span>
                     <span className="rounded-md bg-rose-100 px-2 py-0.5 font-mono-num text-[11px] font-bold text-rose-800">
-                      {perhatianKhususMusyrif.length} Santri
+                      Sakit: {asrSakitToday} · Pembinaan: {perhatianKhususMusyrif.length}
                     </span>
                   </div>
                   <div className="mt-2 font-mono-num text-2xl font-bold text-rose-700">
@@ -4996,10 +6584,255 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                   <div className="mt-1.5 text-[11px] text-rose-900 truncate">
                     {perhatianKhususMusyrif.length > 0
                       ? perhatianKhususMusyrif.slice(0, 2).map((s) => s.nama).join(', ')
-                      : 'Seluruh penghuni kamar tertib & disiplin'}
+                      : 'Seluruh penghuni kamar sehat, tertib & disiplin'}
                   </div>
                 </div>
               </div>
+
+              {/* MENU MANAJEMEN KAMAR & TRANSISI SEMESTER BARU (2 MODE PENGISIAN + ANTI-DUPLIKASI) */}
+              {showRoomManagerPanel && (
+                <div className="rounded-xl border-2 border-emerald-300 bg-gradient-to-br from-emerald-50/80 via-white to-teal-50/50 p-5 shadow-xs space-y-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between border-b border-emerald-200/80 pb-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-md bg-emerald-600 px-2 py-0.5 text-[10px] font-extrabold text-white uppercase">
+                          Manajemen Kamar &amp; Transisi Semester
+                        </span>
+                        <h3 className="text-sm font-bold text-slate-900">
+                          Pengaturan Anggota Kamar ({activeRoomForAction}) · Dua Mode Pengisian Semester Baru
+                        </h3>
+                      </div>
+                      <p className="text-xs text-slate-600 mt-0.5">
+                        Tombol <b>Keluarkan (Buang)</b> pada tabel anggota hanya melepas siswa ke daftar <i>&quot;Siswa Belum Dapat Kamar&quot;</i> (<b>Soft Detach</b>) tanpa menghapus data siswa maupun riwayat mutabaah semester sebelumnya.
+                      </p>
+                    </div>
+                    <div className="inline-flex rounded-lg bg-slate-100 p-1 text-xs font-bold shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setMusyrifTransitionMode('TEMPLATE_ADMIN')}
+                        className={`rounded-md px-3 py-1.5 transition-colors ${
+                          musyrifTransitionMode === 'TEMPLATE_ADMIN'
+                            ? 'bg-emerald-600 text-white shadow-2xs'
+                            : 'text-slate-700 hover:text-slate-900'
+                        }`}
+                      >
+                        1. Mode Template Admin
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMusyrifTransitionMode('AMBIL_MANDIRI')}
+                        className={`rounded-md px-3 py-1.5 transition-colors ${
+                          musyrifTransitionMode === 'AMBIL_MANDIRI'
+                            ? 'bg-teal-600 text-white shadow-2xs'
+                            : 'text-slate-700 hover:text-slate-900'
+                        }`}
+                      >
+                        2. Mode Ambil Mandiri ({unassignedPool.length} Tersedia)
+                      </button>
+                    </div>
+                  </div>
+
+                  {musyrifTransitionMode === 'TEMPLATE_ADMIN' ? (
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 items-center">
+                      <div className="lg:col-span-8 rounded-xl border border-emerald-200 bg-white p-4 space-y-2">
+                        <div className="text-xs font-bold text-emerald-950">
+                          Mode 1: Template Penempatan Admin (Sinkronisasi Awal Semester)
+                        </div>
+                        <p className="text-xs text-slate-600 leading-relaxed">
+                          Pada mode ini, Admin Kesantrian telah memetakan penempatan kamar di awal semester. Wali Asrama (Musyrif) tinggal menerima daftar anggota <b>Kamar {activeRoomForAction}</b> yang sudah jadi ({roomScopedRows.length}/16 siswa) dan melakukan penyesuaian kecil (edit posisi ranjang atau mengeluarkan siswa yang pindah kamar).
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-slate-500">
+                          <span className="rounded-md bg-emerald-50 border border-emerald-200 px-2 py-0.5 font-semibold text-emerald-800">
+                            ✓ Riwayat Mutabaah Semester Lalu Aman
+                          </span>
+                          <span className="rounded-md bg-sky-50 border border-sky-200 px-2 py-0.5 font-semibold text-sky-800">
+                            ✓ Posisi Ranjang 1–16 Otomatis Terurut
+                          </span>
+                        </div>
+                      </div>
+                      <div className="lg:col-span-4 flex flex-col gap-2">
+                        <button
+                          type="button"
+                          disabled={savingRoomMember}
+                          onClick={() => handleRoomSemesterTransition('TEMPLATE_ADMIN')}
+                          className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50 shadow-xs"
+                        >
+                          Terapkan &amp; Rapikan Template Admin ({activeRoomForAction})
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingRoomMember}
+                          onClick={() => handleRoomSemesterTransition('RESET_TO_POOL')}
+                          className="w-full rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-xs font-bold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                        >
+                          Kosongkan Kamar ke Pool Semester Baru (Soft Reset)
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+                      {/* Daftar Siswa Belum Dapat Kamar (Bisa Diambil) */}
+                      <div className="lg:col-span-7 rounded-xl border border-teal-200 bg-white p-4 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <div className="text-xs font-bold text-slate-900">
+                              Daftar &quot;Siswa Belum Dapat Kamar&quot; ({unassignedPool.length} Siswa Tersedia)
+                            </div>
+                            <div className="text-[11px] text-slate-500">
+                              Centang siswa di bawah ini untuk diambil masuk ke <b>Kamar {activeRoomForAction}</b> ({unlockedTeacher.nama}).
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={savingRoomMember || selectedUnassignedAsramaIds.length === 0}
+                            onClick={handleClaimStudentsToRoom}
+                            className="rounded-lg bg-teal-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-teal-700 disabled:opacity-50 shadow-2xs"
+                          >
+                            Ambil ke Kamar {activeRoomForAction} ({selectedUnassignedAsramaIds.length})
+                          </button>
+                        </div>
+
+                        {unassignedPool.length === 0 ? (
+                          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-xs text-slate-500">
+                            Saat ini seluruh siswa sudah memiliki kamar. Jika Anda menekan tombol <b>Keluarkan (Buang)</b> pada tabel di bawah, siswa akan muncul di daftar ini.
+                          </div>
+                        ) : (
+                          <div className="max-h-48 overflow-y-auto divide-y divide-slate-100 rounded-lg border border-slate-200">
+                            {unassignedPool.map((u) => {
+                              const checked = selectedUnassignedAsramaIds.includes(u.id);
+                              return (
+                                <label
+                                  key={u.id}
+                                  className={`flex items-center justify-between px-3 py-2 text-xs cursor-pointer transition-colors ${
+                                    checked ? 'bg-teal-50/80' : 'hover:bg-slate-50'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2.5">
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setSelectedUnassignedAsramaIds((prev) => [...prev, u.id]);
+                                        } else {
+                                          setSelectedUnassignedAsramaIds((prev) => prev.filter((id) => id !== u.id));
+                                        }
+                                      }}
+                                      className="h-3.5 w-3.5 rounded border-slate-300 text-teal-600"
+                                    />
+                                    <div>
+                                      <div className="font-bold text-slate-900">{u.nama}</div>
+                                      <div className="text-[10px] text-slate-500">
+                                        NIS: {u.nis} · Kelas {u.kelas} · {u.gender}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                                    Belum Dapat Kamar
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Logika Anti-Duplikasi (Siswa Terkunci di Kamar Musyrif Lain) */}
+                      <div className="lg:col-span-5 rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-slate-800">
+                            Logika Anti-Duplikasi Kamar (Terkunci Otomatis)
+                          </span>
+                          <span className="rounded-md bg-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-700">
+                            {lockedOtherRooms.length} Terkunci
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-600">
+                          Siswa yang sudah masuk ke kamar Musyrif lain otomatis terkunci &amp; tidak bisa diambil ganda (kecuali dilepas dulu oleh Musyrif terkait atau dipindah Admin).
+                        </p>
+                        <div className="max-h-36 overflow-y-auto divide-y divide-slate-200/70 rounded-lg border border-slate-200 bg-white">
+                          {lockedOtherRooms.slice(0, 12).map((lk) => (
+                            <div key={lk.id} className="flex items-center justify-between px-3 py-1.5 text-[11px]">
+                              <div>
+                                <span className="font-semibold text-slate-700">{lk.nama}</span>
+                                <span className="text-slate-400"> · {lk.kelas}</span>
+                              </div>
+                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                                🔒 Kamar {lk.kamar} ({lk.musyrif})
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* MODAL / PANEL INLINE EDIT ANGGOTA KAMAR */}
+              {editingRoomMember && (
+                <div className="rounded-xl border-2 border-teal-400 bg-teal-50/70 p-4 shadow-xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-bold text-teal-950">
+                      Edit Anggota Kamar: {editingRoomMember.nama} (Kamar {editingRoomMember.kamar})
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setEditingRoomMember(null)}
+                      className="text-xs font-semibold text-slate-500 hover:text-slate-800"
+                    >
+                      Batal ✕
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        Posisi Ranjang / Lemari
+                      </label>
+                      <input
+                        type="text"
+                        value={editingRoomMember.posisiRanjang}
+                        onChange={(e) =>
+                          setEditingRoomMember({ ...editingRoomMember, posisiRanjang: e.target.value })
+                        }
+                        placeholder="Misal: Ranjang Bawah A1"
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-xs"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        Catatan Kamar / Kondisi Kesehatan &amp; Karakter
+                      </label>
+                      <input
+                        type="text"
+                        value={editingRoomMember.catatanKamar}
+                        onChange={(e) =>
+                          setEditingRoomMember({ ...editingRoomMember, catatanKamar: e.target.value })
+                        }
+                        placeholder="Catatan khusus wali asrama untuk siswa ini..."
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditingRoomMember(null)}
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="button"
+                      disabled={savingRoomMember}
+                      onClick={handleSaveRoomMemberEdit}
+                      className="rounded-lg bg-teal-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-teal-700 disabled:opacity-50"
+                    >
+                      Simpan Perubahan Anggota Kamar
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* B. HASIL PEMBELAJARAN & PEMBINAAN (KHUSUS GURU MUSYRIF) */}
               <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
@@ -5159,7 +6992,9 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-slate-900">Kamar {rs.kamar}</span>
+                        <span className="text-xs font-bold text-slate-900">
+                          Kamar {rs.kamar} ({rs.totalSantri}/16 Siswa)
+                        </span>
                         <span
                           className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
                             rs.filledToday
@@ -5185,22 +7020,22 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                         </div>
                       </div>
                       <div className="mt-2 text-[11px] text-slate-600">
-                        {rs.totalSantri} siswa · {rs.santriDibina} terbina · Sholat Wajib {rs.rataWajibPct}%
+                        {rs.totalSantri}/16 siswa · {rs.santriDibina} terbina · Sholat Wajib {rs.rataWajibPct}%
                       </div>
                     </button>
                   ))}
                 </div>
               )}
 
-              {/* C. REKAP SISWA DI BAWAH PEMBINAAN MUSYRIF (TABEL INTERAKTIF) */}
+              {/* C. TABEL ANGGOTA KAMAR & REKAP SISWA DI BAWAH PEMBINAAN MUSYRIF */}
               <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-xs">
                 <div className="border-b border-slate-200 bg-gradient-to-r from-emerald-50/60 via-white to-sky-50/40 px-5 py-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div>
                     <h3 className="text-sm font-bold text-slate-900">
-                      C. Rekap Siswa di Bawah Pembinaan Kamar Asrama ({roomLabel} · {filteredAsramaRows.length} Siswa)
+                      C. Tabel Anggota Kamar &amp; Rekap Pembinaan ({roomLabel} · {filteredAsramaRows.length}/{totalCapacityScoped} Siswa)
                     </h3>
                     <p className="text-xs text-slate-500">
-                      Menampilkan Capaian Terakhir (Skor Ibadah, Kehadiran 3 Komponen &amp; Karakter), Status Target, serta tombol <b>Detail</b> &amp; <b>Input Cepat</b>.
+                      Dilengkapi tombol <b>Edit</b> (posisi ranjang/catatan), <b>Keluarkan / Buang (Soft Detach)</b> ke daftar Belum Dapat Kamar, <b>Detail</b>, dan <b>Input Cepat</b>.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -5244,12 +7079,12 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                           subtitle: `Total Siswa: ${filteredAsramaRows.length} | Mutabaah Yaumiyah, Karakter & Kehadiran 3 Komponen`,
                           filename: `Rapor_Karakter_Asrama_${selectedAsramaRoom.replace(/\s+/g, '_')}.pdf`,
                           orientation: 'landscape',
-                          headers: ['Nama Siswa', 'Kamar & Kelas', 'Capaian Terakhir (Ibadah & 3 Komponen)', 'Hari Ini', 'Klasikal/Khusus', 'Status Target'],
+                          headers: ['Nama Siswa', 'Kamar & Ranjang', 'Capaian Terakhir (Ibadah & 3 Komponen)', 'Hari Ini', 'Klasikal/Khusus', 'Status Target'],
                           rows:
                             filteredAsramaRows.length > 0
-                              ? filteredAsramaRows.map((st) => [
+                              ? filteredAsramaRows.map((st, idx) => [
                                   st.nama,
-                                  `${st.kamar} (${st.kelas})`,
+                                  `${st.kamar} (${st.posisiRanjang || `Ranjang #${idx + 1}`}) · ${st.kelas}`,
                                   `Skor Ibadah: ${st.wajibPct}% (Sunnah ${st.sunnahPct}%) | Asr ${st.asramaPct ?? 100}% · Qur ${st.alquranPct ?? 100}% · Akd ${st.akademikPct ?? 100}%`,
                                   st.statusAsramaHariIni,
                                   `${st.klasikalCount ?? 0}K / ${st.khususCount ?? st.totalPembinaan}I`,
@@ -5270,30 +7105,37 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                   <table className="w-full text-left text-xs">
                     <thead className="border-b border-slate-200 bg-slate-50 text-slate-700">
                       <tr>
-                        <th className="px-4 py-3 font-bold">Nama Siswa &amp; Kelas / Kamar</th>
+                        <th className="px-4 py-3 font-bold">Nama Siswa, Kamar &amp; Posisi Ranjang</th>
                         <th className="px-3 py-3 font-bold">Capaian Terakhir (Mutabaah &amp; Karakter)</th>
                         <th className="px-3 py-3 text-right font-bold">Kehadiran 3 Komponen</th>
                         <th className="px-3 py-3 font-bold">Asrama Hari Ini</th>
                         <th className="px-3 py-3 font-bold">Status Target</th>
-                        <th className="px-4 py-3 text-right font-bold">Aksi (Detail &amp; Input Cepat)</th>
+                        <th className="px-4 py-3 text-right font-bold">Aksi Anggota Kamar (Edit, Keluarkan, Detail)</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {filteredAsramaRows.length === 0 ? (
                         <tr>
                           <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
-                            Belum ada santri kamar binaan yang tercatat pada filter ini ({roomLabel}).
+                            Belum ada santri kamar binaan yang tercatat pada filter ini ({roomLabel}). Gunakan menu <b>Manajemen Kamar &amp; Transisi Semester</b> untuk mengambil siswa.
                           </td>
                         </tr>
                       ) : (
-                        filteredAsramaRows.map((st) => {
+                        filteredAsramaRows.map((st, idx) => {
                           const statusTarget = evaluateMusyrifStatus(st);
+                          const studentId = st.id || st.nama;
+                          const bedLabel = st.posisiRanjang || `Ranjang #${idx + 1}`;
                           return (
                             <tr key={st.nama} className="hover:bg-emerald-50/30">
                               <td className="px-4 py-3">
                                 <div className="font-bold text-slate-900">{st.nama}</div>
-                                <div className="text-[11px] text-slate-500">
-                                  Kamar <strong className="text-emerald-800">{st.kamar}</strong> · Kelas {st.kelas}
+                                <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-1 mt-0.5">
+                                  <span>
+                                    Kamar <strong className="text-emerald-800">{st.kamar}</strong> · Kelas {st.kelas}
+                                  </span>
+                                  <span className="rounded bg-teal-50 border border-teal-200 px-1.5 py-0.2 text-[10px] font-semibold text-teal-800">
+                                    {bedLabel}
+                                  </span>
                                 </div>
                               </td>
                               <td className="px-3 py-3">
@@ -5303,7 +7145,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                                 <div className="text-[11px] text-slate-600">
                                   Poin: <strong>{(st.netPoin ?? 0) > 0 ? `+${st.netPoin}` : st.netPoin ?? 0}</strong> ·{' '}
                                   {st.klasikalCount ?? 0} Klasikal / {st.khususCount ?? st.totalPembinaan} Khusus
-                                  {st.lastSetoran && st.lastSetoran !== '-' ? ` · Setoran: ${st.lastSetoran}` : ''}
+                                  {st.catatanTerakhir ? ` · ${st.catatanTerakhir}` : ''}
                                 </div>
                               </td>
                               <td className="px-3 py-3 text-right font-mono-num">
@@ -5345,7 +7187,34 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                                 )}
                               </td>
                               <td className="px-4 py-3 text-right">
-                                <div className="inline-flex items-center justify-end gap-1.5">
+                                <div className="inline-flex flex-wrap items-center justify-end gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setEditingRoomMember({
+                                        studentId,
+                                        nama: st.nama,
+                                        kamar: st.kamar,
+                                        posisiRanjang: bedLabel,
+                                        catatanKamar: st.catatanTerakhir || '',
+                                      })
+                                    }
+                                    className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+                                    title="Edit Posisi Ranjang / Catatan Kamar"
+                                  >
+                                    <Edit3 className="h-3 w-3" />
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={savingRoomMember}
+                                    onClick={() => handleDetachFromRoom(studentId, st.nama)}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-800 hover:bg-rose-100 disabled:opacity-50"
+                                    title="Soft Detach: Keluarkan siswa dari kamar ke daftar Belum Dapat Kamar tanpa menghapus riwayat mutabaah"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                    Keluarkan
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={() =>
@@ -5353,7 +7222,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                                         roleType: 'MUSYRIF',
                                         nama: st.nama,
                                         kelas: st.kelas,
-                                        kamarOrHalaqah: `Kamar ${st.kamar}`,
+                                        kamarOrHalaqah: `Kamar ${st.kamar} (${bedLabel})`,
                                         capaianUtama: `Skor Ibadah Wajib: ${st.wajibPct}% · Sunnah: ${st.sunnahPct}%`,
                                         statusTarget,
                                         persenHadir: st.asramaPct ?? 100,
@@ -5383,7 +7252,7 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                                         ],
                                       })
                                     }
-                                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
                                   >
                                     <Eye className="h-3 w-3 text-emerald-600" />
                                     Detail
@@ -5391,10 +7260,10 @@ export const AkunGuruModule: React.FC<AkunGuruModuleProps> = ({
                                   <button
                                     type="button"
                                     onClick={onOpenWaliKelas}
-                                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 shadow-2xs"
+                                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 shadow-2xs"
                                   >
                                     <Plus className="h-3 w-3" />
-                                    Input Cepat
+                                    Input
                                   </button>
                                 </div>
                               </td>

@@ -43,9 +43,13 @@ import {
   printHtmlDocument,
 } from '../utils/exportHelpers';
 import {
+  cleanGuruDisplayName,
   emitDataMutated,
   ensureServerHydratedFromMirror,
+  isAdminSuperName,
   loadSubTab,
+  matchGroupClient,
+  matchTeacherClient,
   saveSubTab,
 } from '../utils/sessionPersistence';
 
@@ -174,16 +178,20 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
   const [loadingPortfolio, setLoadingPortfolio] = useState(false);
 
   const isRealPembinaUser = (u?: TeacherPublic | null): boolean =>
-    Boolean(u?.nama && u.peran !== 'Admin Super' && u.peran !== 'Admin SIM' && !u.nama.toUpperCase().includes('ADMIN SUPER'));
+    Boolean(u?.nama && !isAdminSuperName(u.nama));
 
   // Input mode & Pembina identity
   const [inputMode, setInputMode] = useState<'single' | 'batch'>('single');
   const [metaMinimized, setMetaMinimized] = useState<boolean>(false);
   const [pembinaNama, setPembinaNama] = useState<string>(
-    isRealPembinaUser(unlockedTeacher) ? unlockedTeacher!.nama : ''
+    isRealPembinaUser(unlockedTeacher) ? cleanGuruDisplayName(unlockedTeacher!.nama) : ''
   );
   const [pembinaPeran, setPembinaPeran] = useState<string>(
-    isRealPembinaUser(unlockedTeacher) ? unlockedTeacher!.peran : 'Wali Kelas'
+    isRealPembinaUser(unlockedTeacher)
+      ? unlockedTeacher!.peran === 'Admin Super'
+        ? 'Wali Kelas'
+        : unlockedTeacher!.peran
+      : 'Wali Kelas'
   );
   const [formJalur, setFormJalur] = useState<PembinaanJalur>(() =>
     initialJalur ||
@@ -314,8 +322,8 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
 
   useEffect(() => {
     if (isRealPembinaUser(unlockedTeacher) && unlockedTeacher) {
-      setPembinaNama(unlockedTeacher.nama);
-      setPembinaPeran(unlockedTeacher.peran);
+      setPembinaNama(cleanGuruDisplayName(unlockedTeacher.nama));
+      setPembinaPeran(unlockedTeacher.peran === 'Admin Super' ? 'Wali Kelas' : unlockedTeacher.peran);
       if (
         unlockedTeacher.peran === 'Musyrif' ||
         unlockedTeacher.peran === 'Musyrifah' ||
@@ -456,23 +464,34 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
     [scopedStudents]
   );
   const activePembinaTeacher = useMemo(() => {
-    const clean = pembinaNama.trim().toUpperCase();
+    const clean = cleanGuruDisplayName(pembinaNama);
     if (clean) {
-      const exact = teachers.find((t) => t.nama.trim().toUpperCase() === clean);
+      const exact =
+        teachers.find((t) => cleanGuruDisplayName(t.nama).toUpperCase() === clean.toUpperCase()) ||
+        teachers.find((t) => t.peran !== 'Admin Super' && matchTeacherClient(t.nama, clean));
       if (exact) return exact;
     }
-    return unlockedTeacher || null;
+    if (unlockedTeacher) {
+      const fromUnlocked = teachers.find(
+        (t) => t.peran !== 'Admin Super' && matchTeacherClient(t.nama, unlockedTeacher.nama),
+      );
+      return fromUnlocked || unlockedTeacher;
+    }
+    return null;
   }, [teachers, pembinaNama, unlockedTeacher]);
 
   const activePembinaClasses = useMemo(() => {
     const set = new Set<string>();
-    const clean = (pembinaNama || activePembinaTeacher?.nama || '').trim().toUpperCase();
+    const clean = cleanGuruDisplayName(pembinaNama || activePembinaTeacher?.nama || '');
     if (activePembinaTeacher?.waliKelasOf && activePembinaTeacher.waliKelasOf !== '-') {
-      set.add(activePembinaTeacher.waliKelasOf.trim());
+      for (const wk of activePembinaTeacher.waliKelasOf.split(/[;,]/).map((x) => x.trim()).filter(Boolean)) {
+        const matchedStudentClass = scopedStudents.find((s) => matchGroupClient(s.kelas, wk))?.kelas;
+        set.add(matchedStudentClass || wk);
+      }
     }
     if (clean) {
       for (const s of scopedStudents) {
-        if ((s.waliKelas || '').trim().toUpperCase() === clean && s.kelas && s.kelas !== '-') {
+        if (s.waliKelas && matchTeacherClient(s.waliKelas, clean) && s.kelas && s.kelas !== '-') {
           set.add(s.kelas);
         }
       }
@@ -482,13 +501,16 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
 
   const activePembinaRooms = useMemo(() => {
     const set = new Set<string>();
-    const clean = (pembinaNama || activePembinaTeacher?.nama || '').trim().toUpperCase();
+    const clean = cleanGuruDisplayName(pembinaNama || activePembinaTeacher?.nama || '');
     for (const k of activePembinaTeacher?.kamarBinaan || []) {
-      if (k && k !== '-') set.add(k.trim());
+      if (k && k !== '-') {
+        const matchedStudentRoom = scopedStudents.find((s) => matchGroupClient(s.kamar, k))?.kamar;
+        set.add(matchedStudentRoom || k.trim());
+      }
     }
     if (clean) {
       for (const s of scopedStudents) {
-        if ((s.musyrif || '').trim().toUpperCase() === clean && s.kamar && s.kamar !== '-') {
+        if (s.musyrif && matchTeacherClient(s.musyrif, clean) && s.kamar && s.kamar !== '-') {
           set.add(s.kamar);
         }
       }
@@ -579,24 +601,23 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
       setBatchRows([]);
       return;
     }
-    const activePembinaUp = (pembinaNama || activePembinaTeacher?.nama || '').trim().toUpperCase();
-    const myRoomsUp = activePembinaRooms.map((k) => k.toUpperCase());
+    const activePembinaUp = cleanGuruDisplayName(pembinaNama || activePembinaTeacher?.nama || '');
     const groupStudents = scopedStudents.filter((s) => {
-      if (batchGroupType === 'kelas') return s.kelas === batchGroupValue;
+      if (batchGroupType === 'kelas') return matchGroupClient(s.kelas, batchGroupValue);
       if (batchGroupType === 'kamar') {
         if (batchGroupValue === 'SEMUA_KAMAR_BINAAN') {
           return (
-            myRoomsUp.includes((s.kamar || '').toUpperCase()) ||
-            (Boolean(activePembinaUp) && (s.musyrif || '').toUpperCase() === activePembinaUp)
+            activePembinaRooms.some((rm) => matchGroupClient(s.kamar, rm)) ||
+            (Boolean(activePembinaUp) && matchTeacherClient(s.musyrif, activePembinaUp))
           );
         }
-        return s.kamar === batchGroupValue;
+        return matchGroupClient(s.kamar, batchGroupValue);
       }
       if (batchGroupType === 'guruWali') {
-        if (uniqueGuruWali.length === 0) return s.kelas === batchGroupValue;
-        return (s.guruWali || '').toUpperCase() === batchGroupValue.toUpperCase();
+        if (uniqueGuruWali.length === 0) return matchGroupClient(s.kelas, batchGroupValue);
+        return matchTeacherClient(s.guruWali, batchGroupValue) || matchGroupClient(s.kelas, batchGroupValue);
       }
-      return s.kelompokQuran === batchGroupValue;
+      return matchGroupClient(s.kelompokQuran, batchGroupValue);
     });
     const defaultNote =
       batchTemaKlasikal.trim() ||
@@ -634,19 +655,18 @@ export const WaliKelasModule: React.FC<WaliKelasModuleProps> = ({
   // Filtered student options for single input (Pembinaan Khusus Satu per Satu)
   const filteredSingleStudents = useMemo(() => {
     const q = studentSearch.trim().toLowerCase();
-    const activePembinaUp = (pembinaNama || activePembinaTeacher?.nama || '').trim().toUpperCase();
-    const myKamarUp = activePembinaRooms.map((k) => k.toUpperCase());
+    const activePembinaUp = cleanGuruDisplayName(pembinaNama || activePembinaTeacher?.nama || '');
     return scopedStudents.filter((s) => {
       if (studentFilterGroup === 'BINAAN_GURU_WALI') {
-        if (!activePembinaUp || (s.guruWali || '').toUpperCase() !== activePembinaUp) return false;
+        if (!activePembinaUp || !matchTeacherClient(s.guruWali, activePembinaUp)) return false;
       } else if (studentFilterGroup === 'KAMAR_BINAAN') {
-        const matchKamar = myKamarUp.includes((s.kamar || '').toUpperCase());
-        const matchMusyrif = activePembinaUp && (s.musyrif || '').toUpperCase() === activePembinaUp;
+        const matchKamar = activePembinaRooms.some((rm) => matchGroupClient(s.kamar, rm));
+        const matchMusyrif = Boolean(activePembinaUp) && matchTeacherClient(s.musyrif, activePembinaUp);
         if (!matchKamar && !matchMusyrif) return false;
       } else if (
         studentFilterGroup !== 'SEMUA' &&
-        s.kelas !== studentFilterGroup &&
-        s.kamar !== studentFilterGroup
+        !matchGroupClient(s.kelas, studentFilterGroup) &&
+        !matchGroupClient(s.kamar, studentFilterGroup)
       ) {
         return false;
       }

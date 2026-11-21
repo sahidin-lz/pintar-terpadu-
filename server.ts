@@ -55,16 +55,21 @@ function registerApiRoutes() {
     res.json(result);
   });
 
+  app.post('/api/guru/sync-roles-template', (_req, res) => {
+    const result = store.syncAllTeacherRolesWithTemplate();
+    res.json({ ok: true, ...result, counts: store.getSystemCounts() });
+  });
+
   app.put('/api/guru/:id', (req, res) => {
     const updated = store.updateTeacherAccount(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: 'Akun tidak ditemukan.' });
-    res.json({ teacher: updated });
+    res.json({ teacher: updated, teachers: store.getPublicTeachers(), counts: store.getSystemCounts() });
   });
 
   app.delete('/api/guru/:id', (req, res) => {
     const result = store.deleteTeacherAccount(req.params.id);
     if (!result.deleted) return res.status(400).json({ error: result.error || 'Gagal menghapus akun.' });
-    res.json({ deleted: true, counts: store.getSystemCounts() });
+    res.json({ deleted: true, teachers: store.getPublicTeachers(), counts: store.getSystemCounts() });
   });
 
   app.get('/api/guru/rekap', (req, res) => {
@@ -170,6 +175,17 @@ function registerApiRoutes() {
     res.json({ schedule: updated });
   });
 
+  app.post('/api/jadwal/approval-mode', (req, res) => {
+    const result = store.setScheduleApprovalMode(Boolean(req.body?.required));
+    res.json({ ok: true, ...result });
+  });
+
+  app.post('/api/jadwal/:id/approve', (req, res) => {
+    const approved = store.approveSchedule(req.params.id);
+    if (!approved) return res.status(404).json({ error: 'Jadwal tidak ditemukan.' });
+    res.json({ ok: true, schedule: approved });
+  });
+
   app.delete('/api/jadwal/:id', (req, res) => {
     const ok = store.deleteSchedule(req.params.id);
     if (!ok) return res.status(404).json({ error: 'Jadwal tidak ditemukan.' });
@@ -214,17 +230,17 @@ function registerApiRoutes() {
     res.json({ ...result, counts: store.getSystemCounts() });
   });
 
-  // KAMAR & MUSYRIF/MUSYRIFAH MAPPING
+  // KAMAR & MUSYRIF/MUSYRIFAH MAPPING + TRANSISI SEMESTER KAMAR
   app.get('/api/rooms', (_req, res) => {
     res.json(store.getAllRooms());
   });
 
   app.post('/api/rooms', (req, res) => {
-    const { kamar, musyrif, gender } = req.body;
+    const { kamar, musyrif, gender, kapasitas } = req.body;
     if (!kamar || !musyrif || !gender) {
       return res.status(400).json({ error: 'Nama kamar, nama musyrif/ah, dan gender wajib diisi.' });
     }
-    const room = store.assignRoomMusyrif({ kamar, musyrif, gender });
+    const room = store.assignRoomMusyrif({ kamar, musyrif, gender, kapasitas: kapasitas ? Number(kapasitas) : undefined });
     res.json({ room, counts: store.getSystemCounts() });
   });
 
@@ -233,6 +249,105 @@ function registerApiRoutes() {
     const ok = store.deleteRoomMapping(kamar);
     if (!ok) return res.status(404).json({ error: 'Kamar tidak ditemukan.' });
     res.json({ deleted: true });
+  });
+
+  app.post('/api/asrama/detach-student', (req, res) => {
+    const { studentIdOrName, musyrif, alasan } = req.body || {};
+    if (!studentIdOrName) {
+      return res.status(400).json({ error: 'Pilih siswa yang akan dikeluarkan dari kamar.' });
+    }
+    const result = store.detachStudentFromRoom({
+      studentIdOrName: String(studentIdOrName),
+      musyrif: musyrif ? String(musyrif) : undefined,
+      alasan: alasan ? String(alasan) : undefined,
+    });
+    if (!result.ok) return res.status(404).json(result);
+    res.json({ ...result, counts: store.getSystemCounts() });
+  });
+
+  app.put('/api/asrama/member', (req, res) => {
+    const { studentIdOrName, posisiRanjang, catatanKamar, prioritas, kamar, musyrif } = req.body || {};
+    if (!studentIdOrName) {
+      return res.status(400).json({ error: 'Identitas siswa diperlukan.' });
+    }
+    const result = store.updateRoomMemberDetails({
+      studentIdOrName: String(studentIdOrName),
+      posisiRanjang,
+      catatanKamar,
+      prioritas,
+      kamar,
+      musyrif,
+    });
+    if (!result.ok) return res.status(404).json(result);
+    res.json({ ...result, counts: store.getSystemCounts() });
+  });
+
+  app.post('/api/asrama/claim-students', (req, res) => {
+    const { musyrif, targetKamar, gender, studentIdsOrNames, allowAdminOverride } = req.body || {};
+    if (!musyrif || !targetKamar || !Array.isArray(studentIdsOrNames) || studentIdsOrNames.length === 0) {
+      return res.status(400).json({ error: 'Pilih kamar tujuan dan minimal 1 siswa yang akan diambil.' });
+    }
+    const result = store.claimStudentsToRoom({
+      musyrif: String(musyrif),
+      targetKamar: String(targetKamar),
+      gender: gender as Gender | undefined,
+      studentIdsOrNames: studentIdsOrNames.map(String),
+      allowAdminOverride: Boolean(allowAdminOverride),
+    });
+    res.json({ ...result, counts: store.getSystemCounts() });
+  });
+
+  app.post('/api/asrama/semester-transition', (req, res) => {
+    const { musyrif, targetKamar, mode } = req.body || {};
+    if (!musyrif) {
+      return res.status(400).json({ error: 'Nama Musyrif/Wali Asrama wajib diisi.' });
+    }
+    const result = store.applyRoomSemesterTransition({
+      musyrif: String(musyrif),
+      targetKamar: String(targetKamar || 'SEMUA'),
+      mode: mode === 'RELEASE_ROOM_TO_POOL' ? 'RELEASE_ROOM_TO_POOL' : 'TEMPLATE_ADMIN',
+    });
+    res.json({ ...result, counts: store.getSystemCounts() });
+  });
+
+  // WALI KELAS: SOFT DETACH KELAS, AMBIL SISWA & PROSES KENAIKAN KELAS + ARSIP
+  app.post('/api/walikelas/detach-student', (req, res) => {
+    const { studentIdOrName, alasan } = req.body || {};
+    if (!studentIdOrName) {
+      return res.status(400).json({ error: 'Pilih siswa yang akan dikeluarkan dari kelas.' });
+    }
+    const result = store.detachStudentFromClass({
+      studentIdOrName: String(studentIdOrName),
+      alasan: alasan ? String(alasan) : undefined,
+    });
+    if (!result.ok) return res.status(404).json(result);
+    res.json({ ...result, counts: store.getSystemCounts() });
+  });
+
+  app.post('/api/walikelas/claim-students', (req, res) => {
+    const { waliKelas, targetKelas, studentIdsOrNames } = req.body || {};
+    if (!targetKelas || !Array.isArray(studentIdsOrNames) || studentIdsOrNames.length === 0) {
+      return res.status(400).json({ error: 'Pilih kelas tujuan dan minimal 1 siswa.' });
+    }
+    const result = store.claimStudentsToClass({
+      waliKelas: String(waliKelas || ''),
+      targetKelas: String(targetKelas),
+      studentIdsOrNames: studentIdsOrNames.map(String),
+    });
+    res.json({ ...result, counts: store.getSystemCounts() });
+  });
+
+  app.post('/api/walikelas/promote-students', (req, res) => {
+    const { waliKelas, tahunAjaranLama, tahunAjaranBaru, semester, promotions } = req.body || {};
+    const result = store.promoteStudentsWithArchive({
+      waliKelas: String(waliKelas || ''),
+      tahunAjaranLama: tahunAjaranLama ? String(tahunAjaranLama) : undefined,
+      tahunAjaranBaru: tahunAjaranBaru ? String(tahunAjaranBaru) : undefined,
+      semester: semester ? String(semester) : undefined,
+      promotions: Array.isArray(promotions) ? promotions : [],
+    });
+    if (!result.ok) return res.status(400).json(result);
+    res.json({ ...result, counts: store.getSystemCounts() });
   });
 
   // IMPORT & FORMAT SIM (CSV / EXCEL PASTE)
