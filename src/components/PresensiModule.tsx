@@ -177,10 +177,11 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
     };
   }, []);
 
-  // Load filtered teacher list whenever jenis, gender, hari (for Belajar), or targetRefreshTick changes
+  // Load filtered teacher list whenever jenis, gender, hari (for Belajar & Al-Quran), or targetRefreshTick changes
   useEffect(() => {
     let active = true;
-    const hariQuery = jenis === 'Belajar' && hari ? `&hari=${encodeURIComponent(hari)}` : '';
+    const hariQuery =
+      (jenis === 'Belajar' || jenis === 'Al-Quran') && hari ? `&hari=${encodeURIComponent(hari)}` : '';
 
     const loadTeachersForPresensi = async () => {
       try {
@@ -234,7 +235,7 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
             }
             return list[0].nama;
           });
-        } else if (jenis === 'Belajar') {
+        } else if (jenis === 'Belajar' || jenis === 'Al-Quran') {
           setNamaGuru('');
         } else {
           setNamaGuru((prev) => (isAdminSuperName(prev) ? '' : cleanGuruDisplayName(prev)));
@@ -704,6 +705,8 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
               <option value="">
                 {jenis === 'Belajar' && teachers.length === 0
                   ? `-- Tidak ada guru akademik terjadwal hari ${hari} --`
+                  : jenis === 'Al-Quran' && teachers.length === 0
+                  ? `-- Tidak ada guru Al-Qur'an terjadwal hari ${hari} --`
                   : `-- Pilih ${roleLabel} --`}
               </option>
               {teachers.map((t) => {
@@ -789,6 +792,8 @@ export const PresensiModule: React.FC<PresensiModuleProps> = ({
                   : targetOptions.length === 0
                   ? jenis === 'Belajar'
                     ? `Tidak ada jadwal akademik hari ${hari}`
+                    : jenis === 'Al-Quran'
+                    ? `Tidak ada jadwal Al-Qur'an hari ${hari}`
                     : 'Tidak ada jadwal / kamar'
                   : '-- Pilih Target --'}
               </option>

@@ -12,6 +12,8 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardCheck,
+  Cloud,
+  CloudUpload,
   Database,
   Info,
   LayoutDashboard,
@@ -27,6 +29,15 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import {
+  auth,
+  googleProvider,
+  onAuthStateChanged,
+  pullSnapshotFromFirestore,
+  pushSnapshotToFirestore,
+  signInWithPopup,
+  type User as FirebaseUser,
+} from './firebase';
 import { AkunGuruModule } from './components/AkunGuruModule';
 import { DasborTerpaduModule } from './components/DasborTerpaduModule';
 import { ImportSimModule } from './components/ImportSimModule';
@@ -272,7 +283,13 @@ export default function App() {
     wilayah?: WilayahFilter;
   }>({ key: 0 });
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [fbUser, setFbUser] = useState<FirebaseUser | null>(() => auth.currentUser);
+  const [cloudSyncing, setCloudSyncing] = useState(false);
   const restoredOnceRef = useRef<boolean>(false);
+  const firebaseRestoredUidRef = useRef<string | null>(null);
+  const cloudPushInFlightRef = useRef<boolean>(false);
+  const cloudPushPendingRef = useRef<boolean>(false);
+  const suppressCloudPushUntilRef = useRef<number>(0);
 
   const persistSessionUser = useCallback((teacher: TeacherPublic | null) => {
     savePersistedUser(teacher);
@@ -421,16 +438,159 @@ export default function App() {
     loadBootstrap();
   }, [loadBootstrap]);
 
-  // Sync browser mirror whenever any module emits pintar:data-mutated or when tab is backgrounded/refreshed
+  const pushCurrentDataToFirebase = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      if (!auth.currentUser) return;
+      if (cloudPushInFlightRef.current) {
+        cloudPushPendingRef.current = true;
+        return;
+      }
+      cloudPushInFlightRef.current = true;
+      setCloudSyncing(true);
+      try {
+        const snapRes = await fetch('/api/firebase/snapshot');
+        if (!snapRes.ok) return;
+        const snapshot = await snapRes.json();
+        const totalLocal =
+          (Array.isArray(snapshot.students) ? snapshot.students.length : 0) +
+          (Array.isArray(snapshot.teachers) ? snapshot.teachers.length : 0) +
+          (Array.isArray(snapshot.rooms) ? snapshot.rooms.length : 0) +
+          (Array.isArray(snapshot.schedules) ? snapshot.schedules.length : 0) +
+          (Array.isArray(snapshot.attendanceLogs) ? snapshot.attendanceLogs.length : 0) +
+          (Array.isArray(snapshot.pembinaanRecords) ? snapshot.pembinaanRecords.length : 0);
+        if (totalLocal === 0) return;
+        const summary = await pushSnapshotToFirestore(snapshot);
+        await fetch('/api/firebase/mark-synced', { method: 'POST' }).catch(() => {});
+        if (!opts?.silent) {
+          notify(
+            `Tersimpan ke Firebase: ${summary.studentsSynced} santri, ${summary.staffSynced} pegawai, ${summary.schedulesSynced} jadwal, ${summary.attendanceSynced} presensi.`,
+            'success'
+          );
+        }
+      } catch (err) {
+        if (!opts?.silent) {
+          notify(`Gagal menyimpan ke Firebase: ${(err as Error).message}`, 'error');
+        }
+      } finally {
+        cloudPushInFlightRef.current = false;
+        setCloudSyncing(false);
+        if (cloudPushPendingRef.current) {
+          cloudPushPendingRef.current = false;
+          window.setTimeout(() => {
+            pushCurrentDataToFirebase({ silent: true });
+          }, 1200);
+        }
+      }
+    },
+    [notify]
+  );
+
+  const reconcileWithFirebaseOnConnect = useCallback(
+    async (user: FirebaseUser) => {
+      if (firebaseRestoredUidRef.current === user.uid) return;
+      firebaseRestoredUidRef.current = user.uid;
+      setCloudSyncing(true);
+      try {
+        const [bootRes, cloudData] = await Promise.all([
+          fetch('/api/bootstrap').then((r) => (r.ok ? (r.json() as Promise<BootstrapPayload>) : null)),
+          pullSnapshotFromFirestore(),
+        ]);
+        const cloudTotal =
+          cloudData.students.length +
+          cloudData.teachers.length +
+          cloudData.rooms.length +
+          cloudData.schedules.length +
+          cloudData.attendanceLogs.length +
+          cloudData.pembinaanRecords.length;
+
+        const serverCounts = bootRes?.counts;
+        const serverHasData = scoreCounts(serverCounts) > 0;
+        const cloudHasMoreData =
+          cloudData.students.length > (serverCounts?.students || 0) ||
+          cloudData.schedules.length > (serverCounts?.schedules || 0) ||
+          cloudData.rooms.length > (serverCounts?.rooms || 0) ||
+          cloudData.attendanceLogs.length > (serverCounts?.attendanceLogs || 0) ||
+          cloudData.pembinaanRecords.length > (serverCounts?.pembinaanRecords || 0);
+
+        const serverHasMoreData =
+          (serverCounts?.students || 0) > cloudData.students.length ||
+          (serverCounts?.schedules || 0) > cloudData.schedules.length ||
+          (serverCounts?.rooms || 0) > cloudData.rooms.length ||
+          (serverCounts?.attendanceLogs || 0) > cloudData.attendanceLogs.length ||
+          (serverCounts?.pembinaanRecords || 0) > cloudData.pembinaanRecords.length;
+
+        if (cloudTotal > 0 && (!serverHasData || cloudHasMoreData)) {
+          suppressCloudPushUntilRef.current = Date.now() + 4000;
+          const restoreRes = await fetch('/api/system/restore-snapshot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ snapshot: cloudData, mode: 'merge' }),
+          });
+          if (restoreRes.ok) {
+            await loadBootstrap({ skipRestoreCheck: true });
+            notify(
+              `Data dipulihkan otomatis dari Firebase (${cloudData.students.length} santri, ${cloudData.schedules.length} jadwal, ${cloudData.attendanceLogs.length} presensi).`,
+              'success'
+            );
+          }
+        }
+        if (serverHasData && (cloudTotal === 0 || serverHasMoreData)) {
+          await pushCurrentDataToFirebase({ silent: true });
+        }
+      } catch {
+        // Non-blocking: local data & manual sync in QuotaBridge remain available
+      } finally {
+        setCloudSyncing(false);
+      }
+    },
+    [loadBootstrap, notify, pushCurrentDataToFirebase]
+  );
+
+  // Track Firebase Google Auth session and automatically reconcile cloud data across updates
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setFbUser(user);
+      if (user) {
+        reconcileWithFirebaseOnConnect(user);
+      } else {
+        firebaseRestoredUidRef.current = null;
+      }
+    });
+    return () => unsub();
+  }, [reconcileWithFirebaseOnConnect]);
+
+  const handleQuickFirebaseAction = async () => {
+    if (!fbUser) {
+      try {
+        const res = await signInWithPopup(auth, googleProvider);
+        setFbUser(res.user);
+        notify(`Terhubung ke Firebase (${res.user.email}). Sinkronisasi otomatis aktif.`, 'success');
+      } catch (err) {
+        notify(`Gagal menghubungkan Google Firebase: ${(err as Error).message}`, 'error');
+      }
+      return;
+    }
+    await pushCurrentDataToFirebase({ silent: false });
+  };
+
+  // Sync browser mirror & Firebase Firestore whenever any module emits pintar:data-mutated
   useEffect(() => {
     if (typeof window === 'undefined') return;
     let syncTimer: number | null = null;
+    let cloudTimer: number | null = null;
 
     const scheduleMirrorSync = () => {
       if (syncTimer) window.clearTimeout(syncTimer);
       syncTimer = window.setTimeout(() => {
         syncBrowserMirror();
       }, 30);
+
+      if (auth.currentUser && Date.now() > suppressCloudPushUntilRef.current) {
+        if (cloudTimer) window.clearTimeout(cloudTimer);
+        cloudTimer = window.setTimeout(() => {
+          pushCurrentDataToFirebase({ silent: true });
+        }, 1800);
+      }
     };
 
     const onVisibilityOrHide = () => {
@@ -440,7 +600,8 @@ export default function App() {
     };
 
     const onDataRestored = () => {
-      loadBootstrap({ skipMirrorWrite: true, skipRestoreCheck: true });
+      suppressCloudPushUntilRef.current = Date.now() + 3000;
+      loadBootstrap({ skipRestoreCheck: true });
     };
 
     window.addEventListener('pintar:data-mutated', scheduleMirrorSync);
@@ -453,8 +614,9 @@ export default function App() {
       window.removeEventListener('pagehide', syncBrowserMirror);
       document.removeEventListener('visibilitychange', onVisibilityOrHide);
       if (syncTimer) window.clearTimeout(syncTimer);
+      if (cloudTimer) window.clearTimeout(cloudTimer);
     };
-  }, [loadBootstrap, syncBrowserMirror]);
+  }, [loadBootstrap, pushCurrentDataToFirebase, syncBrowserMirror]);
 
   const navGroups: Array<{
     group: string;
@@ -867,6 +1029,34 @@ export default function App() {
           <div className="flex items-center gap-2 shrink-0">
             {unlockedTeacher ? (
               <>
+                <button
+                  type="button"
+                  disabled={cloudSyncing}
+                  onClick={handleQuickFirebaseAction}
+                  title={
+                    fbUser
+                      ? `Firebase terhubung (${fbUser.email}) — Klik untuk simpan sekarang`
+                      : 'Hubungkan Google Firebase agar semua data tersimpan permanen di Cloud'
+                  }
+                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-semibold whitespace-nowrap transition-colors ${
+                    fbUser
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                      : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                  }`}
+                >
+                  {fbUser ? (
+                    <CloudUpload className="h-3.5 w-3.5 text-emerald-700" />
+                  ) : (
+                    <Cloud className="h-3.5 w-3.5 text-amber-700" />
+                  )}
+                  <span className="hidden lg:inline">
+                    {cloudSyncing
+                      ? 'Menyimpan...'
+                      : fbUser
+                      ? 'Simpan Firebase'
+                      : 'Hubungkan Firebase'}
+                  </span>
+                </button>
                 <button
                   type="button"
                   onClick={() =>

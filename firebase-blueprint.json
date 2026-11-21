@@ -83,6 +83,12 @@
           "minLength": 0,
           "maxLength": 120
         },
+        "guruWali": {
+          "type": "string",
+          "description": "Assigned academic mentor (Guru Wali) name.",
+          "minLength": 0,
+          "maxLength": 120
+        },
         "musyrif": {
           "type": "string",
           "description": "Assigned dormitory supervisor name.",
@@ -127,6 +133,7 @@
         "kelas",
         "kamar",
         "waliKelas",
+        "guruWali",
         "musyrif",
         "kelompokQuran",
         "pengampuQuran",
@@ -168,7 +175,18 @@
         "peran": {
           "type": "string",
           "description": "Primary role assignment.",
-          "enum": ["Guru", "Wali Kelas", "Musyrif", "Musyrifah", "Admin SIM", "Admin Super"],
+          "enum": [
+            "Guru",
+            "Guru Wali",
+            "Wali Kelas",
+            "Wali Asrama",
+            "Musyrif",
+            "Musyrifah",
+            "Pengampu Al-Quran",
+            "Pimpinan",
+            "Admin SIM",
+            "Admin Super"
+          ],
           "minLength": 4,
           "maxLength": 32
         },
@@ -193,6 +211,11 @@
         "kamarBinaan": {
           "type": "array",
           "description": "Bounded list of dormitory rooms supervised (max 10).",
+          "maxLength": 10
+        },
+        "kelompokQuranBinaan": {
+          "type": "array",
+          "description": "Bounded list of Al-Quran study groups supervised (max 10).",
           "maxLength": 10
         },
         "authorId": {
@@ -223,6 +246,7 @@
         "genderScope",
         "waliKelasOf",
         "kamarBinaan",
+        "kelompokQuranBinaan",
         "authorId",
         "createdAt",
         "updatedAt"
@@ -423,6 +447,18 @@
           "minLength": 0,
           "maxLength": 250
         },
+        "mapel": {
+          "type": "string",
+          "description": "Subject or activity label for the attendance session.",
+          "minLength": 0,
+          "maxLength": 120
+        },
+        "materi": {
+          "type": "string",
+          "description": "Optional lesson material or agenda note.",
+          "minLength": 0,
+          "maxLength": 250
+        },
         "petugas": {
           "type": "string",
           "description": "Name of recording teacher/musyrif.",
@@ -458,6 +494,8 @@
         "studentName",
         "status",
         "catatan",
+        "mapel",
+        "materi",
         "petugas",
         "authorId",
         "createdAt",
@@ -585,6 +623,65 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "RoomDoc": {
+      "title": "RoomDoc",
+      "description": "Dormitory room to Musyrif/Wali Asrama mapping.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique dormitory room mapping ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "kamar": {
+          "type": "string",
+          "description": "Dormitory room name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "musyrif": {
+          "type": "string",
+          "description": "Assigned Wali Asrama / Musyrif name.",
+          "minLength": 0,
+          "maxLength": 120
+        },
+        "gender": {
+          "type": "string",
+          "description": "Territory (Putra or Putri).",
+          "enum": ["Putra", "Putri"],
+          "minLength": 5,
+          "maxLength": 16
+        },
+        "authorId": {
+          "type": "string",
+          "description": "UID of the admin who synced the room mapping.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "kamar",
+        "musyrif",
+        "gender",
+        "authorId",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -603,6 +700,10 @@
     "/staff_profiles/{staffId}/private/{privateId}": {
       "schema": { "$ref": "#/entities/StaffPrivateDoc" },
       "description": "Isolated PII contact information for staff members."
+    },
+    "/rooms/{roomId}": {
+      "schema": { "$ref": "#/entities/RoomDoc" },
+      "description": "Dormitory room mappings and Wali Asrama assignments."
     },
     "/schedules/{scheduleId}": {
       "schema": { "$ref": "#/entities/ScheduleDoc" },

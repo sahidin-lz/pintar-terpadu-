@@ -528,7 +528,7 @@ function registerApiRoutes() {
         ruanganUjian: defaultRuangUjian,
         replaceExisting: false,
         autoCreateAccounts: autoCreateAccounts ?? true,
-        autoCreateQuranSchedules: autoCreateQuranSchedules ?? true,
+        autoCreateQuranSchedules: Boolean(autoCreateQuranSchedules),
         defaultPin: String(defaultPin || '1234'),
       });
 

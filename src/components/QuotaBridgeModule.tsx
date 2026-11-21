@@ -123,7 +123,7 @@ export const QuotaBridgeModule: React.FC<QuotaBridgeModuleProps> = ({ notify }) 
         setMetrics(nextMetrics);
       }
       notify(
-        `Berhasil sinkron ke Firebase (${firebaseConfig.projectId}): ${summary.studentsSynced} santri, ${summary.staffSynced} pegawai, ${summary.schedulesSynced} jadwal.`,
+        `Berhasil sinkron ke Firebase (${firebaseConfig.projectId}): ${summary.studentsSynced} santri, ${summary.staffSynced} pegawai, ${summary.roomsSynced} kamar, ${summary.schedulesSynced} jadwal, ${summary.attendanceSynced} presensi, ${summary.pembinaanSynced} pembinaan.`,
         'success'
       );
     } catch (err) {
@@ -142,28 +142,32 @@ export const QuotaBridgeModule: React.FC<QuotaBridgeModuleProps> = ({ notify }) 
     try {
       const cloudData = await pullSnapshotFromFirestore();
       const totalPulled =
-        cloudData.students.length + cloudData.teachers.length + cloudData.schedules.length;
+        cloudData.students.length +
+        cloudData.teachers.length +
+        cloudData.rooms.length +
+        cloudData.schedules.length +
+        cloudData.attendanceLogs.length +
+        cloudData.pembinaanRecords.length;
       if (totalPulled === 0) {
-        notify('Belum ada dokumen santri/pegawai/jadwal di Firestore untuk akun ini.', 'info');
+        notify('Belum ada dokumen data di Firestore untuk akun ini.', 'info');
         return;
       }
-      const importRes = await fetch('/api/import/all-in-one', {
+      const restoreRes = await fetch('/api/system/restore-snapshot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          santriRows: cloudData.students,
-          teacherRows: cloudData.teachers,
-          scheduleRows: cloudData.schedules,
+          snapshot: cloudData,
+          mode: 'merge',
         }),
       });
-      if (!importRes.ok) {
-        const errData = await importRes.json();
-        throw new Error(errData.error || 'Gagal menyimpan data dari Firebase ke server.');
+      if (!restoreRes.ok) {
+        const errData = await restoreRes.json().catch(() => ({}));
+        throw new Error(errData.error || 'Gagal memulihkan data dari Firebase ke server.');
       }
       loadMetrics();
-      emitDataMutated();
+      window.dispatchEvent(new CustomEvent('pintar:data-restored'));
       notify(
-        `Berhasil menarik ${cloudData.students.length} santri, ${cloudData.teachers.length} pegawai, dan ${cloudData.schedules.length} jadwal dari Firebase.`,
+        `Berhasil memulihkan dari Firebase: ${cloudData.students.length} santri, ${cloudData.teachers.length} pegawai, ${cloudData.rooms.length} kamar, ${cloudData.schedules.length} jadwal, ${cloudData.attendanceLogs.length} presensi, ${cloudData.pembinaanRecords.length} pembinaan.`,
         'success'
       );
     } catch (err) {
@@ -334,6 +338,7 @@ export const QuotaBridgeModule: React.FC<QuotaBridgeModuleProps> = ({ notify }) 
               Tersinkron ke Firestore (<b>{firebaseConfig.projectId}</b>):{' '}
               <b>{lastCloudSummary.studentsSynced}</b> santri,{' '}
               <b>{lastCloudSummary.staffSynced}</b> pegawai,{' '}
+              <b>{lastCloudSummary.roomsSynced}</b> kamar,{' '}
               <b>{lastCloudSummary.schedulesSynced}</b> jadwal,{' '}
               <b>{lastCloudSummary.attendanceSynced}</b> log presensi,{' '}
               <b>{lastCloudSummary.pembinaanSynced}</b> pembinaan.

@@ -64,12 +64,12 @@ service cloud.firestore {
     function isValidStudentDoc(data, studentId) {
       return data.keys().hasAll([
           'id', 'nis', 'nama', 'gender', 'kelas', 'kamar',
-          'waliKelas', 'musyrif', 'kelompokQuran', 'pengampuQuran',
+          'waliKelas', 'guruWali', 'musyrif', 'kelompokQuran', 'pengampuQuran',
           'authorId', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'id', 'nis', 'nama', 'gender', 'kelas', 'kamar',
-          'waliKelas', 'musyrif', 'kelompokQuran', 'pengampuQuran',
+          'waliKelas', 'guruWali', 'musyrif', 'kelompokQuran', 'pengampuQuran',
           'authorId', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) && data.id == studentId &&
@@ -80,6 +80,7 @@ service cloud.firestore {
         data.kelas is string && data.kelas.size() >= 1 && data.kelas.size() <= 80 &&
         data.kamar is string && data.kamar.size() >= 1 && data.kamar.size() <= 80 &&
         data.waliKelas is string && data.waliKelas.size() <= 120 &&
+        data.guruWali is string && data.guruWali.size() <= 120 &&
         data.musyrif is string && data.musyrif.size() <= 120 &&
         data.kelompokQuran is string && data.kelompokQuran.size() <= 120 &&
         data.pengampuQuran is string && data.pengampuQuran.size() <= 120 &&
@@ -91,11 +92,13 @@ service cloud.firestore {
     function isValidStaffPublicDoc(data, staffId) {
       return data.keys().hasAll([
           'id', 'username', 'nama', 'jabatan', 'peran', 'peranTambahan',
-          'genderScope', 'waliKelasOf', 'kamarBinaan', 'authorId', 'createdAt', 'updatedAt'
+          'genderScope', 'waliKelasOf', 'kamarBinaan', 'kelompokQuranBinaan',
+          'authorId', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'id', 'username', 'nama', 'jabatan', 'peran', 'peranTambahan',
-          'genderScope', 'waliKelasOf', 'kamarBinaan', 'authorId', 'createdAt', 'updatedAt'
+          'genderScope', 'waliKelasOf', 'kamarBinaan', 'kelompokQuranBinaan',
+          'authorId', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) && data.id == staffId &&
         data.username is string && data.username.size() >= 1 && data.username.size() <= 100 &&
@@ -104,9 +107,13 @@ service cloud.firestore {
         data.peran is string && data.peran.size() >= 4 && data.peran.size() <= 32 &&
         (
           data.peran == 'Guru' ||
+          data.peran == 'Guru Wali' ||
           data.peran == 'Wali Kelas' ||
+          data.peran == 'Wali Asrama' ||
           data.peran == 'Musyrif' ||
           data.peran == 'Musyrifah' ||
+          data.peran == 'Pengampu Al-Quran' ||
+          data.peran == 'Pimpinan' ||
           data.peran == 'Admin SIM' ||
           data.peran == 'Admin Super'
         ) &&
@@ -117,6 +124,8 @@ service cloud.firestore {
         data.waliKelasOf is string && data.waliKelasOf.size() <= 80 &&
         data.kamarBinaan is list && data.kamarBinaan.size() <= 10 &&
         (data.kamarBinaan.size() == 0 || (data.kamarBinaan[0] is string && data.kamarBinaan[0].size() <= 80)) &&
+        data.kelompokQuranBinaan is list && data.kelompokQuranBinaan.size() <= 10 &&
+        (data.kelompokQuranBinaan.size() == 0 || (data.kelompokQuranBinaan[0] is string && data.kelompokQuranBinaan[0].size() <= 80)) &&
         isValidId(data.authorId) && data.authorId == request.auth.uid &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -128,6 +137,23 @@ service cloud.firestore {
         isValidId(data.staffId) && data.staffId == staffId &&
         data.whatsapp is string && data.whatsapp.size() <= 40 &&
         isValidId(data.ownerId) && data.ownerId == request.auth.uid &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidRoomDoc(data, roomId) {
+      return data.keys().hasAll([
+          'id', 'kamar', 'musyrif', 'gender', 'authorId', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'kamar', 'musyrif', 'gender', 'authorId', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) && data.id == roomId &&
+        data.kamar is string && data.kamar.size() >= 1 && data.kamar.size() <= 80 &&
+        data.musyrif is string && data.musyrif.size() <= 120 &&
+        data.gender is string && data.gender.size() >= 5 && data.gender.size() <= 16 &&
+        (data.gender == 'Putra' || data.gender == 'Putri') &&
+        isValidId(data.authorId) && data.authorId == request.auth.uid &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -159,12 +185,12 @@ service cloud.firestore {
     function isValidAttendanceDoc(data, logId) {
       return data.keys().hasAll([
           'id', 'tanggal', 'tipe', 'gender', 'kelas', 'kamar',
-          'studentId', 'studentName', 'status', 'catatan', 'petugas',
+          'studentId', 'studentName', 'status', 'catatan', 'mapel', 'materi', 'petugas',
           'authorId', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'id', 'tanggal', 'tipe', 'gender', 'kelas', 'kamar',
-          'studentId', 'studentName', 'status', 'catatan', 'petugas',
+          'studentId', 'studentName', 'status', 'catatan', 'mapel', 'materi', 'petugas',
           'authorId', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) && data.id == logId &&
@@ -179,6 +205,8 @@ service cloud.firestore {
         data.status is string && data.status.size() >= 1 && data.status.size() <= 8 &&
         (data.status == 'H' || data.status == 'S' || data.status == 'I' || data.status == 'A' || data.status == 'T') &&
         data.catatan is string && data.catatan.size() <= 250 &&
+        data.mapel is string && data.mapel.size() <= 120 &&
+        data.materi is string && data.materi.size() <= 250 &&
         data.petugas is string && data.petugas.size() >= 1 && data.petugas.size() <= 120 &&
         isValidId(data.authorId) && data.authorId == request.auth.uid &&
         data.createdAt is timestamp &&
@@ -260,7 +288,7 @@ service cloud.firestore {
           (
             existing().authorId == request.auth.uid &&
             incoming().diff(existing()).affectedKeys().hasOnly([
-              'kelas', 'kamar', 'waliKelas', 'musyrif', 'kelompokQuran', 'pengampuQuran', 'updatedAt'
+              'kelas', 'kamar', 'waliKelas', 'guruWali', 'musyrif', 'kelompokQuran', 'pengampuQuran', 'updatedAt'
             ])
           )
         );
@@ -288,7 +316,7 @@ service cloud.firestore {
             existing().authorId == request.auth.uid &&
             incoming().peran == existing().peran &&
             incoming().diff(existing()).affectedKeys().hasOnly([
-              'nama', 'jabatan', 'peranTambahan', 'genderScope', 'waliKelasOf', 'kamarBinaan', 'updatedAt'
+              'nama', 'jabatan', 'peranTambahan', 'genderScope', 'waliKelasOf', 'kamarBinaan', 'kelompokQuranBinaan', 'updatedAt'
             ])
           )
         );
@@ -331,7 +359,31 @@ service cloud.firestore {
       }
     }
 
-    // 5. /schedules/{scheduleId}
+    // 5. /rooms/{roomId}
+    match /rooms/{roomId} {
+      allow get: if isVerifiedUser() && isValidId(roomId) && (existing().authorId == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.authorId == request.auth.uid || isBootstrappedAdmin());
+      allow create: if isVerifiedUser() && isValidId(roomId) &&
+        isValidRoomDoc(incoming(), roomId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isAdmin();
+      allow update: if isVerifiedUser() && isValidId(roomId) &&
+        isValidRoomDoc(incoming(), roomId) &&
+        incoming().id == existing().id &&
+        incoming().authorId == existing().authorId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (
+            existing().authorId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['kamar', 'musyrif', 'gender', 'updatedAt'])
+          )
+        );
+      allow delete: if isVerifiedUser() && isValidId(roomId) && isAdmin();
+    }
+
+    // 6. /schedules/{scheduleId}
     match /schedules/{scheduleId} {
       allow get: if isVerifiedUser() && isValidId(scheduleId) && (existing().authorId == request.auth.uid || isAdmin());
       allow list: if isVerifiedUser() && (resource.data.authorId == request.auth.uid || isBootstrappedAdmin());
@@ -356,7 +408,7 @@ service cloud.firestore {
       allow delete: if isVerifiedUser() && isValidId(scheduleId) && (existing().authorId == request.auth.uid || isAdmin());
     }
 
-    // 6. /attendance_logs/{logId}
+    // 7. /attendance_logs/{logId}
     match /attendance_logs/{logId} {
       allow get: if isVerifiedUser() && isValidId(logId) && (existing().authorId == request.auth.uid || isAdmin());
       allow list: if isVerifiedUser() && (resource.data.authorId == request.auth.uid || isBootstrappedAdmin());
@@ -375,13 +427,13 @@ service cloud.firestore {
           isAdmin() ||
           (
             existing().authorId == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'catatan', 'petugas', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'catatan', 'mapel', 'materi', 'petugas', 'updatedAt'])
           )
         );
       allow delete: if isVerifiedUser() && isValidId(logId) && isAdmin();
     }
 
-    // 7. /pembinaan_records/{recordId}
+    // 8. /pembinaan_records/{recordId}
     match /pembinaan_records/{recordId} {
       allow get: if isVerifiedUser() && isValidId(recordId) && (existing().authorId == request.auth.uid || isAdmin());
       allow list: if isVerifiedUser() && (resource.data.authorId == request.auth.uid || isBootstrappedAdmin());

@@ -151,7 +151,7 @@ export const ImportSimModule: React.FC<ImportSimModuleProps> = ({
   // Upload options
   const [replaceExisting, setReplaceExisting] = useState<boolean>(false);
   const [autoCreateAccounts, setAutoCreateAccounts] = useState<boolean>(true);
-  const [autoCreateQuranSchedules, setAutoCreateQuranSchedules] = useState<boolean>(true);
+  const [autoCreateQuranSchedules, setAutoCreateQuranSchedules] = useState<boolean>(false);
   const [defaultPin, setDefaultPin] = useState<string>('1234');
 
   // Master Pegawai Click-to-Assign Workbench state
